@@ -33,7 +33,7 @@ export function useSwipeTabs<T extends string>(items: readonly T[], active: T, o
   return {
     onPointerDown(event: ReactPointerEvent<HTMLElement>) {
       if (event.isPrimary) suppressClickUntil.current = 0;
-      if (!swipeEnabled() || !event.isPrimary || swipeBlocked(event.target)) {
+      if (!swipeEnabled() || !event.isPrimary || event.pointerType === 'mouse' || swipeBlocked(event.target)) {
         start.current = null;
         return;
       }

@@ -32,5 +32,9 @@ export function MorePage({ role, onNavigate, initialSection = '' }: { role: 'own
         { id: 'settings', label: 'Settings', detail: 'Security, company, appearance, and sign out' }
       ] }]
       : groups.map(group => ({ ...group, items: group.items.filter(item => !['payments', 'accounting', 'systems', 'applications'].includes(item.id)) })).filter(group => group.items.length);
-  return <main className="menu-workspace"><header className="page-heading"><div><span>WheelsonAuto staff</span><h1>{role === 'owner' ? 'Owner admin' : 'More'}</h1><p>{role === 'owner' ? 'Sensitive platform controls and dispatch stay in one owner-only workspace.' : 'Deeper tools stay organized without crowding daily navigation.'}</p></div></header>{visibleGroups.map(group => <section className="menu-group" key={group.title}><h2>{group.title}</h2>{group.items.map(item => <button className="menu-row" key={item.id} onClick={() => onNavigate(item.id)}><span><strong>{item.label}</strong><small>{item.detail}</small></span><b aria-hidden="true">›</b></button>)}</section>)}</main>;
+  const openItem = (item: MoreLink) => {
+    if (role === 'owner' && (item.id === 'dispatch' || item.id === 'systems')) return onNavigate('more', item.id);
+    onNavigate(item.id);
+  };
+  return <main className="menu-workspace"><header className="page-heading"><div><span>WheelsonAuto staff</span><h1>{role === 'owner' ? 'Owner admin' : 'More'}</h1><p>{role === 'owner' ? 'Sensitive platform controls and dispatch stay in one owner-only workspace.' : 'Deeper tools stay organized without crowding daily navigation.'}</p></div></header>{visibleGroups.map(group => <section className="menu-group" key={group.title}><h2>{group.title}</h2>{group.items.map(item => <button className="menu-row" key={item.id} onClick={() => openItem(item)}><span><strong>{item.label}</strong><small>{item.detail}</small></span><b aria-hidden="true">›</b></button>)}</section>)}</main>;
 }

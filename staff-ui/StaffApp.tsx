@@ -9,7 +9,6 @@ import {
   LayoutDashboard,
   MessageSquareText,
   Settings,
-  ShieldCheck,
   UsersRound,
   Wrench,
   type LucideIcon
@@ -41,7 +40,6 @@ const DispatchPage = lazy(() => loadDispatchModule().then(module => ({ default: 
 const MaintenancePage = lazy(() => loadMaintenanceModule().then(module => ({ default: module.MaintenancePage })));
 const AccountingPage = lazy(() => loadAccountingModule().then(module => ({ default: module.AccountingPage })));
 const ManagerReportsPage = lazy(() => loadManagerReportsModule().then(module => ({ default: module.ManagerReportsPage })));
-const SystemsPage = lazy(() => import('./systems/SystemsPage').then(module => ({ default: module.SystemsPage })));
 const MorePage = lazy(() => loadMoreModule().then(module => ({ default: module.MorePage })));
 const SettingsPage = lazy(() => loadSettingsModule().then(module => ({ default: module.SettingsPage })));
 const RentalFilePage = lazy(() => loadRentalModule().then(module => ({ default: module.RentalFilePage })));
@@ -85,8 +83,7 @@ const ownerNavGroups: Array<{ label: string; items: NavItem[] }> = [
   ] },
   { label: 'Operations', items: [
     { id: 'maintenance', label: 'Maintenance', icon: Wrench },
-    { id: 'accounting', label: 'Accounting', icon: Calculator },
-    { id: 'more', label: 'Owner admin', icon: ShieldCheck }
+    { id: 'accounting', label: 'Accounting', icon: Calculator }
   ] }
 ];
 
@@ -313,6 +310,7 @@ export function StaffApp() {
   const navigationWorkspace = workspace === 'rental' ? returnWorkspace : workspace;
   const mobileContextBack = workspace !== 'rental' && !mobileItems.some(item => item.id === workspace);
   const initials = useMemo(() => String(user.name || user.username || 'Staff').split(/\s+/).map(part => part[0]).join('').slice(0, 2).toUpperCase(), [user.name, user.username]);
+  const profileWorkspace: Workspace = role === 'owner' ? 'more' : 'settings';
 
   const roleLabel = role === 'owner' ? 'Operations' : role === 'manager' ? 'Management' : 'Service';
 
@@ -320,7 +318,7 @@ export function StaffApp() {
     <aside className="staff-rail">
       <button className="staff-brand" onClick={() => open('dashboard')} aria-label="Open dashboard"><strong>Wheels<span>On</span>Auto</strong><small>{roleLabel}</small></button>
       <DesktopNavigation active={navigationWorkspace} groups={navGroups} unreadByWorkspace={unreadByWorkspace} onChange={open} />
-      <footer><button className="staff-profile" onClick={() => open('settings')}><i>{initials}</i><span><strong>{user.name || user.username || 'Staff'}</strong><small>{user.role || 'Staff'}</small></span><b aria-hidden="true">›</b></button></footer>
+      <footer><button className="staff-profile" onClick={() => open(profileWorkspace)} aria-label={role === 'owner' ? 'Open owner admin' : 'Open settings'}><i>{initials}</i><span><strong>{user.name || user.username || 'Staff'}</strong><small>{user.role || 'Staff'}</small></span><b aria-hidden="true">›</b></button></footer>
     </aside>
     <section className="staff-stage">
       <header className="staff-topbar"><div>{mobileContextBack ? <button type="button" className="mobile-context-back" onClick={() => open('more')} aria-label="Back to More">‹</button> : null}<span>WheelsonAuto</span><strong>{heading}</strong></div><div className="notification-center" ref={notificationCenterRef}><button type="button" className={`notification-command${notificationsOpen ? ' active' : ''}`} onClick={toggleNotifications} aria-label={`${unread} unread notifications`} aria-expanded={notificationsOpen} aria-controls="staff-notification-panel"><span aria-hidden="true"><Bell size={17} strokeWidth={1.8} /></span>{unread ? <b>{unread > 99 ? '99+' : unread}</b> : null}</button>{notificationsOpen ? <section className="notification-panel" id="staff-notification-panel" aria-label="Notifications"><header><div><strong>Notifications</strong><span>{unread ? `${unread} unread` : 'All caught up'}</span></div>{unread ? <button type="button" onClick={markAllNotificationsRead}>Mark all read</button> : null}</header><div className="notification-list">{notificationsLoading && !notifications.length ? <div className="notification-empty"><strong>Loading updates</strong></div> : notifications.length ? notifications.map(row => <button type="button" key={row.id} className={row.read ? 'read' : ''} onClick={() => openNotification(row)}><i className={`tone-${row.tone || 'blue'}`} aria-hidden="true" /><span><strong>{row.title || 'WheelsonAuto update'}</strong><small>{row.body || row.message || 'Open for details.'}</small>{notificationTime(row) ? <time>{notificationTime(row)}</time> : null}</span>{!row.read ? <b aria-label="Unread" /> : null}</button>) : <div className="notification-empty"><strong>No notifications</strong><span>New activity will appear here automatically.</span></div>}</div></section> : null}</div></header>
@@ -335,7 +333,6 @@ export function StaffApp() {
         {workspace === 'maintenance' ? <MaintenancePage /> : null}
         {workspace === 'accounting' ? <AccountingPage /> : null}
         {workspace === 'reports' ? <ManagerReportsPage onNavigate={open} /> : null}
-        {workspace === 'systems' ? <SystemsPage /> : null}
         {workspace === 'more' ? <MorePage role={role} onNavigate={open} initialSection={recordId} /> : null}
         {workspace === 'settings' ? <SettingsPage role={role} theme={theme} onThemeChange={setTheme} onNavigate={open} /> : null}
         {workspace === 'rental' ? <RentalFilePage rentalId={recordId} onBack={() => open(returnWorkspace === 'rental' ? 'customers' : returnWorkspace)} /> : null}
