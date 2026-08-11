@@ -255,6 +255,7 @@ export type ApplicationItem = {
   vehicle?: string;
   status?: string;
   paid?: boolean;
+  pickedUp?: boolean;
   scheduledPickup?: boolean;
   pickupDate?: string;
   pickupTime?: string;

@@ -325,7 +325,7 @@ export function StaffApp() {
       <section className="staff-app-workspace" aria-live="polite"><Suspense fallback={<div className="workspace-loading"><span /><strong>Opening {heading}</strong></div>}>
         {workspace === 'dashboard' ? role === 'mechanic' ? <ServiceDashboardPage onNavigate={open} /> : role === 'manager' ? <ManagerDashboardPage onNavigate={open} onOpenRental={openRental} section={recordId === 'applications' ? 'applications' : 'overview'} onSectionChange={section => open('dashboard', section === 'overview' ? '' : section)} /> : <DashboardPage onNavigate={open} onOpenRental={openRental} section={recordId === 'applications' ? 'applications' : 'overview'} onSectionChange={section => open('dashboard', section === 'overview' ? '' : section)} /> : null}
         {workspace === 'fleet' ? <FleetPage role={role} onNavigate={open} onOpenRental={openRental} /> : null}
-        {workspace === 'customers' ? <CustomersPage onNavigate={open} onOpenRental={openRental} initialView={recordId === 'payments' ? 'payments' : 'customers'} /> : null}
+        {workspace === 'customers' ? <CustomersPage onNavigate={open} onOpenRental={openRental} /> : null}
         {workspace === 'payments' ? <PaymentsPage onOpenRental={openRental} /> : null}
         {workspace === 'applications' ? <ApplicationsPage onOpenRental={openRental} /> : null}
         {workspace === 'messages' ? <MessagesPage /> : null}
@@ -333,7 +333,7 @@ export function StaffApp() {
         {workspace === 'maintenance' ? <MaintenancePage /> : null}
         {workspace === 'accounting' ? <AccountingPage /> : null}
         {workspace === 'reports' ? <ManagerReportsPage onNavigate={open} /> : null}
-        {workspace === 'more' ? <MorePage role={role} onNavigate={open} initialSection={recordId} /> : null}
+        {workspace === 'more' ? <MorePage role={role} theme={theme} onThemeChange={setTheme} onNavigate={open} initialSection={recordId} /> : null}
         {workspace === 'settings' ? <SettingsPage role={role} theme={theme} onThemeChange={setTheme} onNavigate={open} /> : null}
         {workspace === 'rental' ? <RentalFilePage rentalId={recordId} onBack={() => open(returnWorkspace === 'rental' ? 'customers' : returnWorkspace)} /> : null}
       </Suspense></section>

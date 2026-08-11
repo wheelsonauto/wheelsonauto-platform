@@ -1,4 +1,6 @@
+import { ChevronLeft } from 'lucide-react';
 import { DispatchPage } from '../dispatch/DispatchPage';
+import { SettingsPage } from '../settings/SettingsPage';
 import { SystemsPage } from '../systems/SystemsPage';
 
 type MoreLink = { id: string; label: string; detail: string };
@@ -20,9 +22,11 @@ const groups: Array<{ title: string; items: MoreLink[] }> = [
   ] }
 ];
 
-export function MorePage({ role, onNavigate, initialSection = '' }: { role: 'owner' | 'manager' | 'mechanic'; onNavigate: (workspace: string, recordId?: string) => void; initialSection?: string }) {
-  if (role === 'owner' && initialSection === 'dispatch') return <section className="owner-admin-subview"><header className="subview-header"><button type="button" className="back-button" onClick={() => onNavigate('more')}>Back</button><div><span>Owner admin</span><strong>Dispatch</strong></div></header><DispatchPage /></section>;
-  if (role === 'owner' && initialSection === 'systems') return <section className="owner-admin-subview"><header className="subview-header"><button type="button" className="back-button" onClick={() => onNavigate('more')}>Back</button><div><span>Owner admin</span><strong>Systems</strong></div></header><SystemsPage /></section>;
+export function MorePage({ role, theme, onThemeChange, onNavigate, initialSection = '' }: { role: 'owner' | 'manager' | 'mechanic'; theme: 'dark' | 'light'; onThemeChange: (theme: 'dark' | 'light') => void; onNavigate: (workspace: string, recordId?: string) => void; initialSection?: string }) {
+  const ownerBack = <button type="button" className="owner-admin-back" onClick={() => onNavigate('more')} aria-label="Back to Owner admin"><ChevronLeft size={20} strokeWidth={1.8} /></button>;
+  if (role === 'owner' && initialSection === 'dispatch') return <section className="owner-admin-subview"><header className="subview-header">{ownerBack}<div><span>Owner admin</span><strong>Dispatch</strong></div></header><DispatchPage /></section>;
+  if (role === 'owner' && initialSection === 'systems') return <section className="owner-admin-subview"><header className="subview-header">{ownerBack}<div><span>Owner admin</span><strong>Systems</strong></div></header><SystemsPage /></section>;
+  if (role === 'owner' && initialSection === 'settings') return <section className="owner-admin-subview"><header className="subview-header">{ownerBack}<div><span>Owner admin</span><strong>Settings</strong></div></header><SettingsPage role={role} theme={theme} onThemeChange={onThemeChange} onNavigate={workspace => onNavigate(workspace === 'systems' ? 'more' : workspace, workspace === 'systems' ? 'systems' : undefined)} embedded /></section>;
   const visibleGroups = role === 'mechanic'
     ? [{ title: 'Account', items: [{ id: 'settings', label: 'Settings', detail: 'Profile, security, and sign out' }] }]
     : role === 'owner'
@@ -33,7 +37,7 @@ export function MorePage({ role, onNavigate, initialSection = '' }: { role: 'own
       ] }]
       : groups.map(group => ({ ...group, items: group.items.filter(item => !['payments', 'accounting', 'systems', 'applications'].includes(item.id)) })).filter(group => group.items.length);
   const openItem = (item: MoreLink) => {
-    if (role === 'owner' && (item.id === 'dispatch' || item.id === 'systems')) return onNavigate('more', item.id);
+    if (role === 'owner' && (item.id === 'dispatch' || item.id === 'systems' || item.id === 'settings')) return onNavigate('more', item.id);
     onNavigate(item.id);
   };
   return <main className="menu-workspace"><header className="page-heading"><div><span>WheelsonAuto staff</span><h1>{role === 'owner' ? 'Owner admin' : 'More'}</h1><p>{role === 'owner' ? 'Sensitive platform controls and dispatch stay in one owner-only workspace.' : 'Deeper tools stay organized without crowding daily navigation.'}</p></div></header>{visibleGroups.map(group => <section className="menu-group" key={group.title}><h2>{group.title}</h2>{group.items.map(item => <button className="menu-row" key={item.id} onClick={() => openItem(item)}><span><strong>{item.label}</strong><small>{item.detail}</small></span><b aria-hidden="true">›</b></button>)}</section>)}</main>;

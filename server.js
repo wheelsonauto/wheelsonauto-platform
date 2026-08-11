@@ -11647,12 +11647,14 @@ function staffApplicationFeed(data = {}, user = {}) {
     const pickup = (data.pickupAppointments || []).find(row => row.applicationId === application.id && !/cancel/i.test(String(row.status || ''))) || null;
     const rentalFile = (data.rentalFiles || []).find(row => String(row.applicationId || '') === String(application.id || '') || pickup && String(row.pickupAppointmentId || '') === String(pickup.id || '')) || null;
     const paid = applicationHasVerifiedPayment(data, application.id);
+    const pickedUp = !!(pickup && /picked up|completed/i.test(String(pickup.status || ''))) || /picked up|completed|active customer/i.test(String([session && session.status, application.status, application.stage].filter(Boolean).join(' ')));
     return {
       id: application.id,
       name: application.name || application.customer || 'Applicant',
       vehicle: application.vehicle || '',
       status: String(session && session.status || application.status || application.stage || 'New'),
       paid,
+      pickedUp,
       scheduledPickup: !!pickup,
       pickupDate: pickup && pickup.date || '',
       pickupTime: pickup && pickup.time || '',
@@ -11660,13 +11662,14 @@ function staffApplicationFeed(data = {}, user = {}) {
       lastActivityAt: applicationLatestActivityAt(data, application)
     };
   }).sort((a, b) => Number(b.paid) - Number(a.paid) || String(b.lastActivityAt || '').localeCompare(String(a.lastActivityAt || '')));
+  const inHistory = row => row.pickedUp || /denied|removed|cancelled|completed|picked up|pickup confirmed/i.test(row.status);
   return {
     revision: crypto.createHash('sha256').update(JSON.stringify(items)).digest('hex').slice(0, 24),
     items,
     counts: {
-      review: items.filter(row => !row.paid && !/denied|removed|cancelled|completed|pickup confirmed/i.test(row.status)).length,
-      scheduledPickup: items.filter(row => row.paid && !/denied|removed|cancelled/i.test(row.status)).length,
-      history: items.filter(row => /denied|removed|cancelled|completed|pickup confirmed/i.test(row.status)).length
+      review: items.filter(row => !row.paid && !inHistory(row)).length,
+      scheduledPickup: items.filter(row => row.paid && !inHistory(row)).length,
+      history: items.filter(inHistory).length
     }
   };
 }
