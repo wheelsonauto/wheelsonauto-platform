@@ -6,6 +6,7 @@ const path = require('path');
 process.env.WOA_MESSAGING_PROVIDER = 'telnyx';
 delete process.env.WOA_OPTIONAL_CARRIER_SMS_ENABLED;
 const server = require('../server');
+const stateRepository = require('../state-repository');
 
 const root = path.resolve(__dirname, '..');
 const source = fs.readFileSync(path.join(root, 'server.js'), 'utf8');
@@ -24,6 +25,7 @@ const staffShell = fs.readFileSync(path.join(root, 'staff-ui', 'StaffApp.tsx'), 
 const staffMessages = fs.readFileSync(path.join(root, 'staff-ui', 'messages', 'MessagesPage.tsx'), 'utf8');
 const staffApi = fs.readFileSync(path.join(root, 'staff-ui', 'api.ts'), 'utf8');
 const staffStyles = fs.readFileSync(path.join(root, 'staff-ui', 'staff-next.css'), 'utf8');
+const repositorySource = fs.readFileSync(path.join(root, 'state-repository.js'), 'utf8');
 
 const account = {
   id: 'customer-account-1',
@@ -67,6 +69,12 @@ assert.deepStrictEqual(server.launchRelevantJobErrors([
   { source: 'twilio-inbound-sync' },
   { source: 'clover-auto-sync' }
 ]).map(row => row.source), ['clover-auto-sync'], 'Disabled optional carrier errors must leave the launch queue without hiding operational payment failures.');
+
+const fastMessageBefore = { messages: [{ id: 'message-1', body: 'Before' }], auditLogs: [], integrations: {}, vehicles: [{ id: 'vehicle-1', status: 'Ready' }] };
+const fastMessageAfter = { ...fastMessageBefore, messages: [{ id: 'message-1', body: 'After' }], auditLogs: [{ id: 'audit-1' }] };
+assert.deepStrictEqual(stateRepository.assertFastMessagingStateChange(fastMessageBefore, fastMessageAfter), ['auditLogs', 'messages'], 'The fast write must accept only messaging and audit changes.');
+assert.throws(() => stateRepository.assertFastMessagingStateChange(fastMessageBefore, { ...fastMessageAfter, vehicles: [{ id: 'vehicle-1', status: 'Rented' }] }), error => error && error.code === 'woa_fast_messaging_scope_violation', 'The fast write must reject customer, vehicle, payment, or other operational changes.');
+assert.deepStrictEqual(stateRepository.normalizedResourceRows({ messages: [{ id: 'message-1', body: 'Fast' }], vehicles: [{}] }, ['message']).map(row => row.resourceType), ['message'], 'A message-only projection must not scan or validate unrelated resource collections.');
 
 const portal = server.customerPortalState(data, account);
 assert.strictEqual(portal.messages.length, 1, 'Customer portal state must exclude another customer\'s conversation.');
@@ -126,7 +134,7 @@ async function run() {
   assert(worker.includes("url.pathname.startsWith('/api/')"), 'Service worker must never cache private API responses.');
   assert(customerApi.includes("fetch('/customer/message'") && customerApi.includes("fetch('/api/customer/portal-state'"), 'Customer replies and refreshes must use scoped first-party endpoints without a full-page reload.');
   assert(customerShell.includes("new EventSource('/api/customer/events')") && customerShell.includes("events.addEventListener('platform'"), 'Customer account updates must arrive through its authenticated live event stream.');
-  assert(customerShell.includes('setBody(\'\'); onPortal(result.portal)') && customerShell.includes('Message could not be sent.'), 'Customer replies must update the open conversation from the send response and retain a clear failure state.');
+  assert(customerShell.includes("status: 'Sending'") && customerShell.includes('onPortal({ ...portal, messages: [optimistic, ...portal.messages] })') && customerShell.includes('setBody(current => current || text)'), 'Customer replies must appear optimistically, reconcile from the server response, and restore the draft on failure.');
   assert(customerShell.includes('customer-message-page') && customerShell.includes('customer-message-back') && customerShell.includes('settings-open'), 'Customer Messages and Settings must use focused native-app screens with Back controls.');
   const customerConversation = customerShell.slice(customerShell.indexOf('function MessagesPage('), customerShell.indexOf('function PaymentsPage('));
   assert(!/VIN|Tracker|Payment amount|Pending pickup/.test(customerConversation), 'The customer conversation must show the conversation, not repeated vehicle and payment metadata.');
@@ -135,12 +143,15 @@ async function run() {
   assert(staffMessages.includes("new EventSource('/api/events')") && staffMessages.includes("includes('messages')"), 'The staff inbox must react to authenticated message events instead of polling the full platform.');
   assert(staffApi.includes("loadCachedJson<MessageFeed>('/api/messages/feed?limit=800'") && staffApi.includes("fetch('/api/messages/send'"), 'The staff inbox must use its cached lightweight feed and dedicated send endpoint.');
   assert(staffMessages.includes("availableChannels(selected)") && staffMessages.includes("channels.push('Customer portal')"), 'Staff replies must prefer the secure customer app whenever that account exists.');
-  assert(staffMessages.includes('const keys = contactKeys(message)') && staffMessages.includes('else union(index, owner)') && staffMessages.includes("setMessages(current => current.some(message => message.id === result.message.id)") && staffMessages.includes('void refresh(undefined, true);'), 'Staff messages must merge account, customer, phone, email, and name aliases into one thread, show successful sends immediately, and force-refresh its cached feed in the background.');
+  assert(staffMessages.includes('const keys = contactKeys(message)') && staffMessages.includes('else union(index, owner)') && staffMessages.includes("status: 'Sending'") && staffMessages.includes('message.id === optimisticId ? result.message : message') && staffMessages.includes('scheduleLiveRefresh()'), 'Staff messages must merge aliases into one thread, render sends immediately, reconcile the saved message, and coalesce live refreshes.');
   assert(staffMessages.includes('Star sent the safe reply automatically.') && staffMessages.includes('Star held this for review. Nothing sensitive was sent or changed.') && staffMessages.includes('draftStarReply(source)'), 'Star must auto-send safe replies while routing flagged or sensitive work into the review queue.');
   assert(staffMessages.includes('setSelectedKey(\'\')') && staffMessages.includes('Back to conversations'), 'Opening and closing a phone conversation must use one focused list-to-thread flow.');
   assert(!/VIN|Tracker|Payment amount|Pending pickup/.test(staffMessages), 'The open staff conversation must not repeat vehicle, tracker, payment, or pickup metadata.');
   assert(source.includes("url.pathname === '/api/messages/feed'"), 'Staff conversations need a small authenticated feed instead of repeatedly downloading the full platform state.');
   assert(source.includes('scheduleCustomerPortalMessageFollowUp(message.id)'), 'Customer message AI and owner-email follow-up must run after the inbound message is safely saved.');
+  assert(source.includes("writeMessagingData(data, 'customer portal message received'") && source.includes("writeMessagingData(data, 'customer message sent'") && source.includes('fastMessagingWrite: meta.fastMessagingWrite === true'), 'Customer and staff in-app sends must use the guarded fast messaging transaction.');
+  assert(source.includes('row.providerIdempotencyKey === deliveryId') && source.includes('providerIdempotencyKey: deliveryId'), 'Customer retries must reuse the first accepted in-app message instead of creating duplicate conversations.');
+  assert(repositorySource.includes("FAST_MESSAGING_STATE_KEYS = Object.freeze(['messages', 'auditLogs', 'integrations'])") && repositorySource.includes("syncNormalizedResources(client, next, nextVersion, ['message'])"), 'Fast message commits must enforce their state scope and update only the message resource projection.');
   assert(source.includes("id: 'msg-ai-queued-'") && source.includes('portalQueuedStarDraftId'), 'A saved customer message must expose an immediate internal Star placeholder while the full draft is prepared.');
   assert(source.includes('customerAccountId: message.customerAccountId') && source.includes('customerAccountId: payload.customerAccountId || (sourceMessage && sourceMessage.customerAccountId)'), 'Automatic and staff-requested Star replies must carry the exact portal account identity from the source message.');
   assert(source.includes("record.notificationEmailStatus = 'Queued'"), 'Customer-app delivery must not wait for its optional email notification.');

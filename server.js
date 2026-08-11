@@ -1227,6 +1227,7 @@ async function writeDataNow(data) {
     written = await STATE_REPOSITORY.write(data, {
       reason: meta.reason || 'platform state mutation',
       actor: meta.actor || '',
+      fastMessagingWrite: meta.fastMessagingWrite === true,
       transactionEffects: meta.transactionEffects || {},
       mergeState: latest => mergeConcurrentState(data, repairDataIds(latest || emptyPlatformState()), options)
     });
@@ -1248,12 +1249,24 @@ async function writeData(data) {
   writeDataQueue = job.catch(() => {});
   return job;
 }
-async function mutateLatestData(reason, mutator) {
+function stageFastMessagingWrite(data, reason, organizationId = MAIN_ORG_ID) {
+  const currentMeta = data && data[STATE_WRITE_META] || {};
+  Object.defineProperty(data, STATE_WRITE_META, {
+    value: { ...currentMeta, fastMessagingWrite: true, reason: reason || currentMeta.reason || 'messaging state mutation', organizationId: organizationId || currentMeta.organizationId || MAIN_ORG_ID },
+    configurable: true
+  });
+  return data;
+}
+async function writeMessagingData(data, reason, organizationId = MAIN_ORG_ID) {
+  stageFastMessagingWrite(data, reason, organizationId);
+  return writeData(data);
+}
+async function mutateLatestData(reason, mutator, options = {}) {
   const job = writeDataQueue.then(async () => {
     const latest = await readData();
     await mutator(latest);
     const currentMeta = latest && latest[STATE_WRITE_META] || {};
-    Object.defineProperty(latest, STATE_WRITE_META, { value: { ...currentMeta, reason: reason || currentMeta.reason || 'serialized state mutation' }, configurable: true });
+    Object.defineProperty(latest, STATE_WRITE_META, { value: { ...currentMeta, fastMessagingWrite: options.fastMessagingWrite === true || currentMeta.fastMessagingWrite === true, reason: reason || currentMeta.reason || 'serialized state mutation', organizationId: options.organizationId || currentMeta.organizationId || MAIN_ORG_ID }, configurable: true });
     return writeDataNow(latest);
   });
   writeDataQueue = job.catch(() => {});
@@ -4279,7 +4292,7 @@ function scheduleCustomerPortalMessageFollowUp(messageId) {
           latestMessage.portalFollowUpStartedAt = startedAt;
           latestMessage.portalFollowUpStage = 'Preparing Star reply';
         }
-      });
+      }, { fastMessagingWrite: true, organizationId: message.organizationId });
       const existingMessageIds = new Set((data.messages || []).map(row => String(row.id || '')));
       const baseState = data && data[STATE_READ_META] && data[STATE_READ_META].baseState || {};
       const settings = messageSettings(data);
@@ -4331,7 +4344,7 @@ function scheduleCustomerPortalMessageFollowUp(messageId) {
         }
         latest.integrations = latest.integrations || {};
         latest.integrations.messaging = mergeConcurrentValue(baseState.integrations && baseState.integrations.messaging || {}, messagingUpdate, latest.integrations.messaging || {}, false);
-      });
+      }, { fastMessagingWrite: true, organizationId: message.organizationId });
       await queueOwnerEmailNotification(data, 'customer_message', {
         customer: message.customer,
         subject: (message.subject || 'Customer message') + ' - ' + message.customer,
@@ -4365,7 +4378,7 @@ function scheduleCustomerPortalMessageFollowUp(messageId) {
         }
         latest.integrations = latest.integrations || {};
         latest.integrations.notifications = mergeConcurrentValue(baseState.integrations && baseState.integrations.notifications || {}, notificationUpdate, latest.integrations.notifications || {}, false);
-      });
+      }, { fastMessagingWrite: true, organizationId: message.organizationId });
     })().catch(error => reportBackgroundTaskFailure('customer-portal-message-follow-up', error, { route: '/customer/message', eventId: messageId }, 'Customer portal message follow-up'));
   });
 }
@@ -4409,7 +4422,7 @@ function scheduleCustomerPortalEmailNotification(recordId) {
       await mutateLatestData('customer portal outbound email notification', latest => {
         const latestRecord = (latest.messages || []).find(row => String(row.id || '') === String(recordId || ''));
         if (latestRecord) Object.assign(latestRecord, notificationPatch);
-      });
+      }, { fastMessagingWrite: true, organizationId: record.organizationId });
     })().catch(error => reportBackgroundTaskFailure('customer-portal-email-notification', error, { route: '/api/messages/send', eventId: recordId, provider: WOA_EMAIL_PROVIDER }, 'Customer portal email notification'));
   });
 }
@@ -5947,8 +5960,8 @@ function aiSystemHealthForContext(data, user = { role: 'Owner' }) {
     }))
   };
 }
-function aiFindCustomerContext(data, payload = {}, user = { role: 'Owner' }) {
-  enrichLinkedProfiles(data);
+function aiFindCustomerContext(data, payload = {}, user = { role: 'Owner' }, options = {}) {
+  if (options.skipEnrich !== true) enrichLinkedProfiles(data);
   const contact = findMessageContact(data, payload);
   const phone = phoneKey(payload.phone || payload.from || contact.phone || '');
   const email = emailKey(payload.email || contact.email || '');
@@ -6041,6 +6054,7 @@ function aiFindCustomerContext(data, payload = {}, user = { role: 'Owner' }) {
     if (phone && phoneKey(row.phone || row.from || row.to) === phone) return true;
     return customerName && softNameMatch(row.customer, customerName);
   }).slice(0, 8);
+  const platformHealth = options.includeSystemHealth === false ? {} : { systemHealth: aiSystemHealthForContext(data, user) };
   return {
     contact,
     customerName,
@@ -6077,7 +6091,7 @@ function aiFindCustomerContext(data, payload = {}, user = { role: 'Owner' }) {
       emailReady: messageSettings(data).emailEnabled && !!(((data.integrations || {}).email || {}).connected),
       emailProvider: (((data.integrations || {}).email || {}).provider) || WOA_EMAIL_PROVIDER
     },
-    systemHealth: aiSystemHealthForContext(data, user)
+    ...platformHealth
   };
 }
 function aiContextSummary(context) {
@@ -24639,7 +24653,17 @@ const server = http.createServer(async (req, res) => {
       if (!account) return wantsJson
         ? json(res, 401, { ok: false, error: 'Customer account is not active.' })
         : send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: '/customer/login' });
-      const portal = customerPortalState(data, account);
+      const portalData = cloneConcurrentValue(data);
+      const portalAccount = (portalData.customerAccounts || []).find(row => row.id === account.id) || cloneConcurrentValue(account);
+      const portal = customerPortalState(portalData, portalAccount);
+      const deliveryId = String(payload.deliveryId || '').trim().slice(0, 180);
+      const existingDelivery = deliveryId ? (data.messages || []).find(row => row.customerAccountId === account.id && row.providerIdempotencyKey === deliveryId) : null;
+      if (existingDelivery) {
+        const customerMessage = stripCustomerPortalMessage(existingDelivery);
+        return wantsJson
+          ? json(res, 200, { ok: true, duplicate: true, message: customerMessage, portal: { ...portal, messages: [customerMessage, ...(portal.messages || []).filter(row => String(row.id || '') !== String(existingDelivery.id || ''))] } })
+          : send(res, 302, '', 'text/plain', { Location: '/customer#messages' });
+      }
       const summary = portal.summary || {};
       const recurring = portal.recurring || {};
       const vehicle = portal.vehicle || {};
@@ -24663,6 +24687,7 @@ const server = http.createServer(async (req, res) => {
         approvalRequired: triage.requiresAdminApproval,
         body,
         source: 'Customer portal',
+        providerIdempotencyKey: deliveryId,
         customerAccountId: account.id,
         recurringPaymentId: recurring.id || account.recurringPaymentId || '',
         vehicleId: vehicle.id || account.vehicleId || '',
@@ -24706,9 +24731,16 @@ const server = http.createServer(async (req, res) => {
 	      }
 	      data.messages.unshift(message);
 	      appendCustomerPortalAudit(data, account, 'Customer portal message received', [message.customer, triage.intent, triage.status, message.vehicle || message.vin || 'No vehicle linked', message.plate ? 'Tag ' + message.plate : '']);
-	      await writeData(data);
+	      await writeMessagingData(data, 'customer portal message received', account.organizationId || MAIN_ORG_ID);
 	      scheduleCustomerPortalMessageFollowUp(message.id);
-	      if (wantsJson) return json(res, 201, { ok: true, message: stripCustomerPortalMessage(message), portal: customerPortalState(data, account) });
+	      if (wantsJson) {
+	        const customerMessage = stripCustomerPortalMessage(message);
+	        return json(res, 201, {
+	          ok: true,
+	          message: customerMessage,
+	          portal: { ...portal, messages: [customerMessage, ...(portal.messages || []).filter(row => String(row.id || '') !== String(message.id))] }
+	        });
+	      }
 	      return send(res, 302, '', 'text/plain', { Location: '/customer#messages' });
 	    }
 	    if (url.pathname === '/customer/receipt-request' && req.method === 'POST') {
@@ -28231,7 +28263,7 @@ const server = http.createServer(async (req, res) => {
       const data = await readData();
       data.messages = Array.isArray(data.messages) ? data.messages : [];
       data.integrations = data.integrations || {};
-      const context = aiFindCustomerContext(data, payload, user);
+      const context = aiFindCustomerContext(data, payload, user, { skipEnrich: true, includeSystemHealth: false });
       const contact = context.contact || findMessageContact(data, payload);
       const requestedChannel = String(payload.channel || payload.deliveryChannel || 'SMS').trim().toLowerCase();
       const channel = requestedChannel === 'email'
@@ -28339,7 +28371,7 @@ const server = http.createServer(async (req, res) => {
         }
         data.integrations.messaging = { ...(data.integrations.messaging || {}), ...publicMessagingStatus(data), lastOutboundAt: new Date().toISOString(), lastOutboundTo: channel === 'Customer portal' ? 'Customer app' : channel === 'Email' ? maskEmail(to) : maskPhone(to), lastError: ownerMirror && ownerMirror.error || '' };
         appendAuditLog(data, user, result.sent ? 'Customer message sent' : (result.inProgress ? 'Customer message confirmation pending' : 'Customer message drafted'), [customer, channel, record.status || 'Ready', record.vehicle || record.vin || 'No vehicle linked']);
-        await writeData(data);
+        await writeMessagingData(data, 'customer message sent', messageFields.organizationId || userOrganizationId(user));
         if (record.notificationEmailStatus === 'Queued') scheduleCustomerPortalEmailNotification(record.id);
         return json(res, result.sent ? 200 : 202, { ok: true, sent: !!result.sent, confirmationPending: !!result.inProgress, message: record, provider: result.provider, customerEmailNotification: customerEmailNotification ? { sent: !!customerEmailNotification.sent, status: customerEmailNotification.status || '', warning: customerEmailNotification.message || '' } : null, ownerMirror: ownerMirror ? { sent: !!ownerMirror.sent, status: ownerMirror.status, bridgeCode: ownerMirror.bridgeCode } : null, warning: result.message || '' });
       } catch (err) {
@@ -28385,7 +28417,7 @@ const server = http.createServer(async (req, res) => {
           ...(confirmationPending ? { lastConfirmationPendingAt: new Date().toISOString() } : { lastFailedAt: new Date().toISOString() })
         };
         appendAuditLog(data, user, confirmationPending ? 'Customer message confirmation pending' : 'Customer message failed', [customer, channel, record.vehicle || record.vin || 'No vehicle linked', record.error]);
-        await writeData(data);
+        await writeMessagingData(data, confirmationPending ? 'customer message confirmation pending' : 'customer message failed', messageFields.organizationId || userOrganizationId(user));
         return json(res, confirmationPending ? 503 : 502, { ok: false, confirmationPending, retry: !confirmationPending, error: confirmationPending ? 'The SMS provider response was interrupted. WheelsonAuto blocked an automatic retry so the customer is not texted twice; review carrier delivery before retrying.' : record.error, message: record });
       }
     }

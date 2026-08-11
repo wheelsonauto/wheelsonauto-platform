@@ -145,14 +145,28 @@ export function MessagesPage() {
     const controller = new AbortController();
     void refresh(controller.signal);
     const events = new EventSource('/api/events');
+    let refreshTimer = 0;
+    let refreshInFlight = false;
+    let refreshQueued = false;
+    const runLiveRefresh = async () => {
+      if (refreshInFlight) { refreshQueued = true; return; }
+      refreshInFlight = true;
+      await refresh(undefined, true);
+      refreshInFlight = false;
+      if (refreshQueued) { refreshQueued = false; scheduleLiveRefresh(); }
+    };
+    const scheduleLiveRefresh = () => {
+      window.clearTimeout(refreshTimer);
+      refreshTimer = window.setTimeout(() => { void runLiveRefresh(); }, 120);
+    };
     const onPlatform = (event: MessageEvent) => {
       try {
         const payload = JSON.parse(event.data || '{}');
-        if ((payload.topics || []).includes('messages')) void refresh(undefined, true);
+        if ((payload.topics || []).includes('messages')) scheduleLiveRefresh();
       } catch { /* Ignore malformed event frames; the connection will deliver the next valid frame. */ }
     };
     events.addEventListener('platform', onPlatform as EventListener);
-    return () => { controller.abort(); events.close(); };
+    return () => { controller.abort(); events.close(); window.clearTimeout(refreshTimer); };
   }, []);
 
   const threads = useMemo(() => buildThreads(messages), [messages]);
@@ -184,7 +198,23 @@ export function MessagesPage() {
     event.preventDefault();
     if (!selected || !body.trim() || sending) return;
     const text = body.trim();
-    setSending(true); setError(''); setNotice('');
+    const deliveryId = crypto.randomUUID();
+    const optimisticId = `sending-${deliveryId}`;
+    const optimistic: MessageRecord = {
+      id: optimisticId,
+      customer: selected.customer,
+      customerId: selected.latest.customerId,
+      customerAccountId: selected.customerAccountId,
+      phone: selected.phone,
+      email: selected.email,
+      direction: 'Outbound',
+      channel,
+      body: text,
+      status: 'Sending',
+      createdAt: new Date().toISOString()
+    };
+    setSending(true); setError(''); setNotice(''); setBody('');
+    setMessages(current => [...current, optimistic]);
     try {
       const result = await sendMessage({
         customer: selected.customer,
@@ -194,15 +224,13 @@ export function MessagesPage() {
         email: selected.email,
         channel,
         body: text,
-        deliveryId: crypto.randomUUID()
+        deliveryId
       });
-      setMessages(current => current.some(message => message.id === result.message.id)
-        ? current.map(message => message.id === result.message.id ? result.message : message)
-        : [...current, result.message]);
-      setBody('');
+      setMessages(current => current.map(message => message.id === optimisticId ? result.message : message));
       setNotice(result.sent ? 'Message sent' : result.warning || 'Message saved');
-      void refresh(undefined, true);
     } catch (requestError) {
+      setMessages(current => current.filter(message => message.id !== optimisticId));
+      setBody(current => current || text);
       setError((requestError as Error).message);
     } finally {
       setSending(false);

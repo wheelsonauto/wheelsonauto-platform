@@ -148,11 +148,23 @@ function MessagesPage({ portal, onPortal, onBack }: { portal: CustomerPortal; on
     event.preventDefault();
     const text = body.trim();
     if (!text || sending) return;
-    setSending(true); setError('');
+    const deliveryId = `customer-next-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const optimistic: PortalRecord = {
+      id: `sending-${deliveryId}`,
+      body: text,
+      direction: 'Inbound',
+      channel: 'Customer portal',
+      status: 'Sending',
+      createdAt: new Date().toISOString()
+    };
+    setSending(true); setError(''); setBody('');
+    onPortal({ ...portal, messages: [optimistic, ...portal.messages] });
     try {
-      const result = await sendCustomerMessage(text, `customer-next-${Date.now()}-${Math.random().toString(16).slice(2)}`);
-      setBody(''); onPortal(result.portal);
+      const result = await sendCustomerMessage(text, deliveryId);
+      onPortal(result.portal);
     } catch (reason) {
+      onPortal(portal);
+      setBody(current => current || text);
       setError(reason instanceof Error ? reason.message : 'Message could not be sent.');
     } finally { setSending(false); }
   };
@@ -279,8 +291,22 @@ export function CustomerApp() {
     const controller = new AbortController();
     void refresh(controller.signal); void refreshNotifications(controller.signal);
     const events = new EventSource('/api/customer/events');
-    events.addEventListener('platform', () => { void refresh(); void refreshNotifications(); });
-    return () => { controller.abort(); events.close(); };
+    let refreshTimer = 0;
+    let refreshInFlight = false;
+    let refreshQueued = false;
+    const runLiveRefresh = async () => {
+      if (refreshInFlight) { refreshQueued = true; return; }
+      refreshInFlight = true;
+      await Promise.all([refresh(), refreshNotifications()]);
+      refreshInFlight = false;
+      if (refreshQueued) { refreshQueued = false; scheduleLiveRefresh(); }
+    };
+    const scheduleLiveRefresh = () => {
+      window.clearTimeout(refreshTimer);
+      refreshTimer = window.setTimeout(() => { void runLiveRefresh(); }, 120);
+    };
+    events.addEventListener('platform', scheduleLiveRefresh);
+    return () => { controller.abort(); events.close(); window.clearTimeout(refreshTimer); };
   }, []);
   const markRead = async (rows: CustomerNotification[]) => {
     const ids = rows.map(row => row.id); if (!ids.length) return;

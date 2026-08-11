@@ -152,6 +152,27 @@ function stableJson(value) {
   return '{' + Object.keys(value).sort().map(key => JSON.stringify(key) + ':' + stableJson(value[key])).join(',') + '}';
 }
 
+const FAST_MESSAGING_STATE_KEYS = Object.freeze(['messages', 'auditLogs', 'integrations']);
+
+function fastMessagingChangedKeys(previous = {}, next = {}) {
+  const keys = new Set([...Object.keys(previous || {}), ...Object.keys(next || {})]);
+  return [...keys].filter(key => stableJson(previous && previous[key]) !== stableJson(next && next[key])).sort();
+}
+
+function assertFastMessagingStateChange(previous, next) {
+  const allowed = new Set(FAST_MESSAGING_STATE_KEYS);
+  const changedKeys = fastMessagingChangedKeys(previous, next);
+  const blockedKeys = changedKeys.filter(key => !allowed.has(key));
+  if (blockedKeys.length) {
+    const error = new Error('Fast messaging write attempted to change non-messaging state: ' + blockedKeys.join(', ') + '.');
+    error.code = 'woa_fast_messaging_scope_violation';
+    error.changedKeys = changedKeys;
+    error.blockedKeys = blockedKeys;
+    throw error;
+  }
+  return changedKeys;
+}
+
 function checksum(value) {
   return crypto.createHash('sha256').update(stableJson(value || {}), 'utf8').digest('hex');
 }
@@ -802,8 +823,9 @@ function collapseExactDuplicateCriticalResources(state = {}) {
 const INACTIVE_ASSIGNMENT_PATTERN = /(removed|history|returned|ended|closed|cancelled|canceled|inactive|stopped|pending application|pending approval|awaiting approval|awaiting pickup|pending pickup|\bdraft\b|\blead\b|\bprospect\b|\bnew\b)/i;
 const AVAILABLE_VEHICLE_PATTERN = /\b(ready|available|in lot|fleet ready|prep|in prep)\b/i;
 
-function criticalResourceIndexRows(state = {}) {
-  const holdConflicts = activeOnboardingVehicleHoldConflicts(state);
+function criticalResourceIndexRows(state = {}, resourceTypes = []) {
+  const selectedTypes = new Set((Array.isArray(resourceTypes) ? resourceTypes : []).map(value => String(value || '').trim()).filter(Boolean));
+  const holdConflicts = selectedTypes.size ? [] : activeOnboardingVehicleHoldConflicts(state);
   if (holdConflicts.length) {
     const conflict = holdConflicts[0];
     const error = new Error('Vehicle ' + conflict.vehicleId + ' has verified payment claims from more than one application. Refusing an ambiguous database write.');
@@ -816,6 +838,7 @@ function criticalResourceIndexRows(state = {}) {
   const rows = [];
   const seen = new Set();
   CRITICAL_RESOURCE_COLLECTIONS.forEach(([collection, resourceType]) => {
+    if (selectedTypes.size && !selectedTypes.has(resourceType)) return;
     const records = Array.isArray(state[collection]) ? state[collection] : [];
     records.forEach((record, index) => {
       const resourceId = rowId(record);
@@ -850,10 +873,12 @@ function criticalResourceIndexRows(state = {}) {
   return rows.sort((left, right) => left.resourceType.localeCompare(right.resourceType) || left.resourceId.localeCompare(right.resourceId));
 }
 
-function normalizedResourceRows(state = {}) {
-  const metadata = new Map(criticalResourceIndexRows(state).map(row => [row.resourceType + '\u0000' + row.resourceId, row]));
+function normalizedResourceRows(state = {}, resourceTypes = []) {
+  const selectedTypes = new Set((Array.isArray(resourceTypes) ? resourceTypes : []).map(value => String(value || '').trim()).filter(Boolean));
+  const metadata = new Map(criticalResourceIndexRows(state, resourceTypes).map(row => [row.resourceType + '\u0000' + row.resourceId, row]));
   const rows = [];
   CRITICAL_RESOURCE_COLLECTIONS.forEach(([collection, resourceType]) => {
+    if (selectedTypes.size && !selectedTypes.has(resourceType)) return;
     (Array.isArray(state[collection]) ? state[collection] : []).forEach(record => {
       const resourceId = rowId(record);
       const index = metadata.get(resourceType + '\u0000' + resourceId);
@@ -2406,9 +2431,14 @@ class PostgresStateRepository {
     }
   }
 
-  async syncCriticalResourceIndex(client, state) {
-    const rows = criticalResourceIndexRows(state);
-    await client.query('DELETE FROM woa_resource_index WHERE organization_id = $1', [this.organizationId]);
+  async syncCriticalResourceIndex(client, state, resourceTypes = []) {
+    const selectedTypes = [...new Set((Array.isArray(resourceTypes) ? resourceTypes : []).map(value => String(value || '').trim()).filter(Boolean))];
+    const rows = criticalResourceIndexRows(state, selectedTypes);
+    if (selectedTypes.length) {
+      await client.query('DELETE FROM woa_resource_index WHERE organization_id = $1 AND resource_type = ANY($2::text[])', [this.organizationId, selectedTypes]);
+    } else {
+      await client.query('DELETE FROM woa_resource_index WHERE organization_id = $1', [this.organizationId]);
+    }
     if (!rows.length) return;
     await client.query(`INSERT INTO woa_resource_index (
       organization_id, resource_type, resource_id, customer_key, vehicle_id, status, updated_at
@@ -2416,8 +2446,9 @@ class PostgresStateRepository {
       FROM jsonb_array_elements($2::jsonb) AS item`, [this.organizationId, JSON.stringify(rows)]);
   }
 
-  async syncNormalizedResources(client, state, stateVersion) {
-    const rows = normalizedResourceRows(state);
+  async syncNormalizedResources(client, state, stateVersion, resourceTypes = []) {
+    const selectedTypes = [...new Set((Array.isArray(resourceTypes) ? resourceTypes : []).map(value => String(value || '').trim()).filter(Boolean))];
+    const rows = normalizedResourceRows(state, selectedTypes);
     const version = Number(stateVersion);
     if (!Number.isSafeInteger(version) || version < 0) {
       const error = new Error('Normalized PostgreSQL resources require a non-negative authoritative state version.');
@@ -2425,7 +2456,8 @@ class PostgresStateRepository {
       throw error;
     }
     if (!rows.length) {
-      await client.query('DELETE FROM woa_resources WHERE organization_id = $1', [this.organizationId]);
+      if (selectedTypes.length) await client.query('DELETE FROM woa_resources WHERE organization_id = $1 AND resource_type = ANY($2::text[])', [this.organizationId, selectedTypes]);
+      else await client.query('DELETE FROM woa_resources WHERE organization_id = $1', [this.organizationId]);
       return;
     }
     const serializedRows = JSON.stringify(rows);
@@ -2449,11 +2481,12 @@ class PostgresStateRepository {
         OR woa_resources.payload_checksum IS DISTINCT FROM EXCLUDED.payload_checksum`, [this.organizationId, version, serializedRows]);
     await client.query(`DELETE FROM woa_resources AS resource
       WHERE resource.organization_id = $1
+        AND ($3::text[] IS NULL OR resource.resource_type = ANY($3::text[]))
         AND NOT EXISTS (
           SELECT 1 FROM jsonb_array_elements($2::jsonb) AS item
           WHERE item->>'resourceType' = resource.resource_type
             AND item->>'resourceId' = resource.resource_id
-        )`, [this.organizationId, serializedRows]);
+        )`, [this.organizationId, serializedRows, selectedTypes.length ? selectedTypes : null]);
   }
 
   async syncRentalRelations(client, state, stateVersion) {
@@ -2611,6 +2644,8 @@ class PostgresStateRepository {
       const previous = existing.rowCount ? this.repair(clone(existing.rows[0].state)) : this.repair(await this.seed());
       const merged = options.mergeState ? await options.mergeState(clone(previous)) : incomingState;
       const next = this.repair(clone(merged));
+      const fastMessagingWrite = options.fastMessagingWrite === true;
+      if (fastMessagingWrite) assertFastMessagingStateChange(previous, next);
       const nextVersion = (existing.rowCount ? Number(existing.rows[0].version || 0) : 0) + 1;
       const nextChecksum = checksum(next);
       await client.query(`INSERT INTO woa_state (organization_id, state, version, checksum, created_at, updated_at)
@@ -2618,12 +2653,17 @@ class PostgresStateRepository {
         ON CONFLICT (organization_id) DO UPDATE SET state = EXCLUDED.state, version = EXCLUDED.version, checksum = EXCLUDED.checksum, updated_at = now()`, [
         this.organizationId, JSON.stringify(next), nextVersion, nextChecksum
       ]);
-      await this.refreshIdentityIndex(client, next);
-      await this.syncDocumentMetadata(client, next);
-      await this.syncCriticalResourceIndex(client, next);
-      await this.syncNormalizedResources(client, next, nextVersion);
-      await this.syncRentalRelations(client, next, nextVersion);
-      await this.syncActiveAssignmentIndex(client, next);
+      if (fastMessagingWrite) {
+        await this.syncCriticalResourceIndex(client, next, ['message']);
+        await this.syncNormalizedResources(client, next, nextVersion, ['message']);
+      } else {
+        await this.refreshIdentityIndex(client, next);
+        await this.syncDocumentMetadata(client, next);
+        await this.syncCriticalResourceIndex(client, next);
+        await this.syncNormalizedResources(client, next, nextVersion);
+        await this.syncRentalRelations(client, next, nextVersion);
+        await this.syncActiveAssignmentIndex(client, next);
+      }
       await client.query(`INSERT INTO woa_state_snapshots (organization_id, version, checksum, reason, actor, state)
         VALUES ($1, $2, $3, $4, $5, $6::jsonb)
         ON CONFLICT (organization_id, version) DO NOTHING`, [
@@ -3777,6 +3817,9 @@ module.exports = {
   REQUIRED_SCHEMA_CONTRACT,
   clone,
   stableJson,
+  FAST_MESSAGING_STATE_KEYS,
+  fastMessagingChangedKeys,
+  assertFastMessagingStateChange,
   checksum,
   idempotencyRequestHash,
   checksumEvidence,
