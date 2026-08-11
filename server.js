@@ -437,7 +437,7 @@ const TELNYX_DELIVERY_PENDING_REVIEW_MS = Math.max(60000, Number(process.env.WOA
 const TELNYX_WEBHOOK_RECOVERY_MS = Math.max(30000, Number(process.env.WOA_TELNYX_WEBHOOK_RECOVERY_MS || 60000));
 const TELNYX_WEBHOOK_RECOVERY_LIMIT = Math.max(1, Math.min(50, Number(process.env.WOA_TELNYX_WEBHOOK_RECOVERY_LIMIT || 20)));
 const TELNYX_WEBHOOK_MAX_ATTEMPTS = Math.max(2, Math.min(25, Number(process.env.WOA_TELNYX_WEBHOOK_MAX_ATTEMPTS || 8)));
-const WOA_AUTOPAY_MS = Math.max(60000, Number(process.env.WOA_AUTOPAY_MS || 300000));
+const WOA_AUTOPAY_MS = Math.max(60000, Number(process.env.WOA_AUTOPAY_MS || 60000));
 const WEBHOOK_AUTO_SYNC_DELAY_MS = Math.max(1000, Number(process.env.WOA_WEBHOOK_AUTO_SYNC_DELAY_MS || 5000));
 const WOA_TIME_ZONE = process.env.WOA_TIME_ZONE || 'America/New_York';
 const autoSyncStatus = {
@@ -1557,6 +1557,66 @@ function messageSettings(data = {}) {
     aiDrafts: WOA_AI_REPLY_DRAFTS && saved.aiDrafts !== false,
     emailEnabled: WOA_EMAIL_ENABLED && saved.emailEnabled !== false
   };
+}
+function starCoachInstructions(data = {}) {
+  const saved = (((data.integrations || {}).messaging) || {});
+  return (Array.isArray(saved.starInstructions) ? saved.starInstructions : []).filter(row => row && row.id && row.instruction).slice(0, 20);
+}
+function starOwnerGuidance(data = {}) {
+  return starCoachInstructions(data).filter(row => row.kind === 'guidance').map(row => String(row.instruction || '').trim()).filter(Boolean).slice(0, 12);
+}
+function publicStarCoachState(data = {}) {
+  return {
+    autoSendEnabled: messageSettings(data).aiAutoSend === true,
+    instructions: starCoachInstructions(data).map(row => ({
+      id: row.id,
+      instruction: String(row.instruction || '').slice(0, 800),
+      response: String(row.response || '').slice(0, 500),
+      createdAt: row.createdAt || '',
+      createdBy: row.createdBy || ''
+    }))
+  };
+}
+function saveStarCoachInstruction(data = {}, user = {}, text = '') {
+  const instruction = String(text || '').trim().replace(/\s+/g, ' ').slice(0, 800);
+  if (!instruction) throw new Error('Tell Star what to change first.');
+  data.integrations = data.integrations || {};
+  data.integrations.messaging = data.integrations.messaging || {};
+  const messaging = data.integrations.messaging;
+  const lower = instruction.toLowerCase();
+  const pause = /\b(stop|pause|disable|turn off)\b.{0,35}\b(auto.?repl|reply|replies|respond|answer)/i.test(instruction);
+  const resume = /\b(start|resume|enable|turn on)\b.{0,35}\b(auto.?repl|reply|replies|respond|answer)/i.test(instruction);
+  const clear = /\b(clear|forget|remove|reset)\b.{0,35}\b(instruction|guidance|rule|wording)/i.test(instruction);
+  let kind = 'guidance';
+  let response = 'Saved. I will use this guidance in future customer replies. Sensitive money and account actions will still wait for approval.';
+  if (pause) {
+    kind = 'control';
+    messaging.aiAutoSend = false;
+    response = 'Automatic customer replies are paused. I can still prepare drafts for the Star review queue.';
+  } else if (resume) {
+    kind = 'control';
+    messaging.aiAutoSend = true;
+    response = messageSettings(data).aiAutoSend
+      ? 'Safe automatic replies are on again. Flagged money, identity, contract, dispute, and account work still requires review.'
+      : 'I saved the request, but the Render safety switch still has automatic replies disabled.';
+  } else if (clear) {
+    kind = 'control';
+    messaging.starInstructions = [];
+    response = 'Saved reply guidance was cleared. Core WheelsonAuto safety and approval rules remain active.';
+  } else if (/ignore|bypass|skip|remove|disable/i.test(lower) && /approval|safety|review|money|payment|identity|dispute|contract/i.test(lower)) {
+    throw new Error('Star cannot save an instruction that weakens payment, identity, dispute, contract, or account approval rules.');
+  }
+  const row = {
+    id: 'star-instruction-' + Date.now() + '-' + crypto.randomBytes(3).toString('hex'),
+    instruction,
+    response,
+    kind,
+    createdAt: new Date().toISOString(),
+    createdBy: user.name || user.username || 'Owner'
+  };
+  messaging.starInstructions = [row, ...(Array.isArray(messaging.starInstructions) ? messaging.starInstructions : [])].slice(0, 20);
+  messaging.updatedAt = row.createdAt;
+  return row;
 }
 function emailNotificationSettings(data = {}) {
   const saved = (((data.integrations || {}).notifications) || {});
@@ -4225,7 +4285,7 @@ function scheduleCustomerPortalMessageFollowUp(messageId) {
       const settings = messageSettings(data);
       if (settings.aiEnabled && settings.aiDrafts) {
         try {
-          await createAiMessageDraft(data, {
+          const aiResult = await createAiMessageDraft(data, {
             messageId: message.id,
             customer: message.customer,
             phone: message.phone,
@@ -4233,6 +4293,11 @@ function scheduleCustomerPortalMessageFollowUp(messageId) {
             channel: 'Customer portal',
             body: message.body
           }, { sourceMessageId: message.id, forceNew: true });
+          const plan = aiResult.plan || {};
+          if (settings.aiAutoSend && plan.canAutoSend && !plan.approvalRequired && !plan.needsHuman) {
+            const approved = await approveAiMessage(data, { draftId: aiResult.draft.id });
+            aiResult.sent = approved.sent;
+          }
         } catch (error) {
           const queued = (data.messages || []).find(row => String(row.id || '') === queuedStarDraftId);
           if (queued) {
@@ -6102,6 +6167,13 @@ function aiPlanRules(data, payload = {}, context = null) {
     confidence = 0.9;
     reply = 'Hi ' + first + ', this is WheelsonAuto. I understand. I am sending this to our team so a person can review your account and respond the right way.';
     reasons.push('Sensitive, dispute, cancellation, legal, or account-removal wording needs a human.');
+  } else if (aiMatches(lower, /can i (be charged|pay|make a payment)|how (can|do) i pay|where (can|do) i pay|pay (manually|myself)|make (a|my) payment (in|through) (the )?app/)) {
+    actionType = 'payment_self_service';
+    intent = 'manual_payment_help';
+    tone = 'good';
+    confidence = 0.92;
+    reply = 'Hi ' + first + ', yes. In your WheelsonAuto app, open Payments, choose Make a payment, enter the amount, and continue to secure payment. You can pay the current week, pay ahead, catch up a past-due balance, or pay tolls and fees there. If you need us to process a payment for you instead, reply here and the office will contact you.';
+    reasons.push('Customer asked how to pay; the customer app already provides secure self-service payment options.');
   } else if (aiMatches(lower, /charge (me|my card)|run (it|my card)|take (it|the payment)|pay it now|use my card|use (the )?card on file|charge (the )?card on file/)) {
     actionType = 'charge_saved_card';
     intent = 'charge_request';
@@ -6193,7 +6265,7 @@ function aiPlanRules(data, payload = {}, context = null) {
     reply = 'Hi ' + first + ', this is WheelsonAuto. Thanks for reaching out.' + dueText + ' We will take care of this and follow up if we need anything else.';
     reasons.push('General customer message can receive a normal human-sounding reply.');
   }
-  const canAutoSend = !approvalRequired && !needsHuman && ['reply', 'send_payment_link', 'send_card_setup', 'maintenance_schedule'].includes(actionType);
+  const canAutoSend = !approvalRequired && !needsHuman && ['reply', 'payment_self_service', 'send_payment_link', 'send_card_setup', 'maintenance_schedule'].includes(actionType);
   return {
     ok: true,
     mode: 'rules',
@@ -6291,15 +6363,16 @@ async function openAiReplyPlan(data, payload, context, fallback) {
   const input = [
     {
       role: 'developer',
-      content: 'You are Star AI, the built-in WheelsonAuto AI manager. Write concise, natural SMS replies that sound like a helpful human office assistant. Use the platform context only, including customer, vehicle, VIN/tag, tracker, payment state, portal, documents, applications, service, tolls/claims, tasks, recent messages, launch readiness gaps, and iFleet coverage gaps. If readiness or coverage says a workflow is blocked, say it needs office review instead of pretending it is complete. Never promise a charge, refund, autopay change, cancellation, removal, toll charge, saved-card action, password reset, receipt, payoff, or contract/e-sign send has happened unless an admin approved it. Return only JSON with fields: reply, intent, actionType, approvalRequired, needsHuman, canAutoSend, confidence, tone, reasons.'
+      content: 'You are Star AI, the built-in WheelsonAuto AI manager. Write concise, natural SMS replies that sound like a helpful human office assistant. Follow the ownerReplyGuidance unless it conflicts with a safety or approval rule. Use the platform context only, including customer, vehicle, VIN/tag, tracker, payment state, portal, documents, applications, service, tolls/claims, tasks, recent messages, launch readiness gaps, and iFleet coverage gaps. If readiness or coverage says a workflow is blocked, say it needs office review instead of pretending it is complete. For payment-how-to questions, direct customers to Payments > Make a payment in their WheelsonAuto app before offering office help. Never promise a charge, refund, autopay change, cancellation, removal, toll charge, saved-card action, password reset, receipt, payoff, or contract/e-sign send has happened unless an admin approved it. Return only JSON with fields: reply, intent, actionType, approvalRequired, needsHuman, canAutoSend, confidence, tone, reasons.'
     },
     {
       role: 'user',
       content: JSON.stringify({
         customerMessage: payload.body || payload.message || payload.text || '',
         platformContext: aiContextSummary(context),
+        ownerReplyGuidance: starOwnerGuidance(data),
         typedTools: starTools.promptCatalog(),
-        allowedWithoutApproval: ['general reply', 'payment link draft/send', 'card setup link draft/send', 'maintenance scheduling'],
+        allowedWithoutApproval: ['general reply', 'customer self-service payment directions', 'payment link draft/send', 'card setup link draft/send', 'maintenance scheduling'],
         futureChannels: ['SMS now', 'email when provider is connected', 'receipts after approved payments', 'EZPass/tolls after provider is connected'],
         requiresAdminApproval: ['saved-card charge', 'toll or claim charge', 'autopay date/time/frequency change', 'card removal', 'account removal', 'refund/dispute', 'paid outside app verification', 'receipt after charge confirmation', 'account statement or payoff letter', 'contract/e-sign send', 'password reset']
       })
@@ -6528,6 +6601,7 @@ function starPreparedAction(data, plan = {}, context = {}, payload = {}) {
     reply: 'Reply',
     send_payment_link: 'Send payment link',
     send_card_setup: 'Send card setup link',
+    payment_self_service: 'Explain self-service payment',
     charge_saved_card: 'Review saved-card charge',
     change_autopay_date: 'Review autopay schedule change',
     paid_outside_review: 'Verify paid outside app',
@@ -6587,6 +6661,13 @@ async function createAiMessageDraft(data, payload = {}, options = {}) {
   const existing = duplicateKey && data.messages.find(item => item.aiSourceMessageId === duplicateKey && /AI draft|AI action/i.test(String(item.direction || '')));
   if (existing && !options.forceNew) return { plan: existing.aiPlan || fallback, draft: existing, existing: true };
   let plan = await openAiReplyPlan(data, payload, context, fallback);
+  const ownerGuidance = starOwnerGuidance(data);
+  if (ownerGuidance.length && plan.provider !== 'openai') {
+    plan.needsHuman = true;
+    plan.canAutoSend = false;
+    plan.status = 'Human needed';
+    plan.reasons = [...(plan.reasons || []), 'Saved owner wording guidance could not be verified because Star used the rules fallback.'];
+  }
   plan = prepareAiSafeLink(data, plan, context);
   plan.preparedAction = starPreparedAction(data, plan, context, payload);
   const messageFields = messageContextFields(context, { ...payload, customer: plan.customer || context.customerName });
@@ -14114,6 +14195,7 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     route('POST', '/api/messages/ai-action', 'Approve or send Star AI drafts'),
     route('POST', '/api/messages/ai-health', 'Owner Star AI provider health test'),
     route('POST', '/api/messages/settings', 'Owner toggles for messaging and Star AI'),
+    route('POST', '/api/messages/star-instructions', 'Owner coaching and auto-reply controls for Star'),
     route('POST', '/api/integrations/stripe/readiness', 'Owner verifies Stripe account activation, charges, and payouts'),
     route('POST', '/api/integrations/twilio/configure', 'Owner connects Twilio inbound SMS webhook'),
     route('POST', '/api/integrations/telnyx/configure', 'Owner connects Telnyx signed inbound SMS webhook'),
@@ -16852,6 +16934,8 @@ async function runAutoSync(options = {}) {
 function cleanAutopayPayload(payload) {
   const amount = Number(payload.amount || 0);
   const paymentProvider = normalizedPaymentProvider(payload.paymentProvider || payload.provider || WOA_PAYMENT_PROVIDER);
+  const frequency = String(payload.frequency || 'Weekly').trim();
+  const rapidInterval = rapidAutopayIntervalMs(frequency) > 0;
   return {
     id: payload.id || ('rec-' + Date.now()),
     applicationId: String(payload.applicationId || '').trim(),
@@ -16869,9 +16953,9 @@ function cleanAutopayPayload(payload) {
     tempTag: String(payload.tempTag || '').trim(),
     tracker: String(payload.tracker || '').trim(),
     amount: Number.isFinite(amount) ? amount : 0,
-    frequency: payload.frequency || 'Weekly',
+    frequency,
     nextRun: payload.nextRun || payload.firstRun || 'After setup',
-    chargeTime: String(payload.chargeTime || payload.paymentTime || '18:00').trim(),
+    chargeTime: rapidInterval ? '' : String(payload.chargeTime || payload.paymentTime || '18:00').trim(),
     status: payload.status || 'Setup needed',
     tone: payload.tone || (payload.status === 'Active' ? 'good' : 'warn'),
     provider: paymentProviderLabel(paymentProvider),
@@ -18780,6 +18864,39 @@ function localDateKey(date = new Date()) {
   const day = (parts.find(part => part.type === 'day') || {}).value || String(date.getDate()).padStart(2, '0');
   return year + '-' + month + '-' + day;
 }
+function rapidAutopayIntervalMs(value) {
+  const frequency = String(value && value.frequency || value || '').trim().toLowerCase();
+  if (frequency === 'every minute') return 60 * 1000;
+  if (frequency === 'every hour') return 60 * 60 * 1000;
+  return 0;
+}
+function validRecurringInstant(value) {
+  const raw = String(value || '').trim();
+  if (!raw || !/T/.test(raw)) return '';
+  const date = new Date(raw);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : '';
+}
+function recurringOccurrenceKey(row) {
+  if (rapidAutopayIntervalMs(row)) return validRecurringInstant(row && row.nextRun);
+  return recurringDateKey(row);
+}
+function recurringBillingPeriodKey(row, occurrenceKey) {
+  const intervalKey = rapidAutopayIntervalMs(row) ? validRecurringInstant(occurrenceKey) : '';
+  return intervalKey ? 'interval:' + intervalKey : stripeMigration.billingPeriodKey(occurrenceKey);
+}
+function nextFutureRecurringRun(row, afterValue, startValue = recurringOccurrenceKey(row)) {
+  const intervalMs = rapidAutopayIntervalMs(row);
+  if (!intervalMs) return nextFutureRecurringDate(row, validCalendarDateKey(afterValue) || localDateKey(new Date(afterValue)), startValue);
+  const after = new Date(afterValue);
+  let next = new Date(startValue);
+  if (!Number.isFinite(after.getTime()) || !Number.isFinite(next.getTime())) return '';
+  let guard = 0;
+  while (next.getTime() <= after.getTime() && guard < 10080) {
+    next = new Date(next.getTime() + intervalMs);
+    guard += 1;
+  }
+  return next.getTime() > after.getTime() ? next.toISOString() : '';
+}
 function recurringDateKey(row) {
   const raw = String(row && row.nextRun || '').trim().toLowerCase();
   if (!raw) return '';
@@ -18922,7 +19039,11 @@ function isMigrationChargeLockedError(err) {
   ].includes(String(err && err.code || ''));
 }
 function assertRecurringChargeAllowed(data, recurring, payload, provider) {
-  const scheduledDueKey = validCalendarDateKey(payload.scheduledDueDate || recurringDateKey(recurring));
+  const rapidInterval = rapidAutopayIntervalMs(recurring) > 0;
+  const scheduledDueKey = rapidInterval
+    ? validRecurringInstant(payload.scheduledDueDate || recurringOccurrenceKey(recurring))
+    : validCalendarDateKey(payload.scheduledDueDate || recurringDateKey(recurring));
+  const migrationDateKey = rapidInterval ? localDateKey(new Date(scheduledDueKey || Date.now())) : scheduledDueKey;
   const allowAdditionalManualCharge = payload.automatic !== true && payload.allowAdditionalManualCharge === true;
   const selectedProvider = normalizedPaymentProvider(provider || recurring.paymentProvider || recurring.provider || 'clover');
   if (selectedProvider === 'stripe' && stripeCardAuthenticationRequired(recurring)) {
@@ -18933,7 +19054,7 @@ function assertRecurringChargeAllowed(data, recurring, payload, provider) {
     error.paymentIntent = recurring.stripeCardAuthenticationPaymentIntentId || recurring.lastStripePaymentIntentId || '';
     throw error;
   }
-  if (scheduledDueKey && !allowAdditionalManualCharge && scheduledDueKey <= localDateKey()) {
+  if (!rapidInterval && scheduledDueKey && !allowAdditionalManualCharge && scheduledDueKey <= localDateKey()) {
     const syncedPayment = successfulRecurringPaymentEvidence(data, recurring, scheduledDueKey, localDateKey());
     if (syncedPayment) {
       const error = stripeMigration.duplicateChargeError(syncedPayment, scheduledDueKey);
@@ -18941,7 +19062,7 @@ function assertRecurringChargeAllowed(data, recurring, payload, provider) {
       throw error;
     }
   }
-  if (scheduledDueKey) stripeMigration.assertBillingPeriodOpen(data, recurring, scheduledDueKey, { allowAdditionalManualCharge });
+  if (!rapidInterval && scheduledDueKey) stripeMigration.assertBillingPeriodOpen(data, recurring, scheduledDueKey, { allowAdditionalManualCharge });
   const migration = stripeMigration.migrationRecord(recurring);
   if (selectedProvider === 'stripe' && stripeMigration.hasCloverSource(recurring)) {
     if (migration.state === stripeMigration.STATES.STRIPE_SETUP_SENT || migration.state === stripeMigration.STATES.STRIPE_CARD_SAVED) {
@@ -18966,7 +19087,7 @@ function assertRecurringChargeAllowed(data, recurring, payload, provider) {
   // The provider/cutover state protects manual charges too. Without this
   // guard, a scheduled cutover blocked autopay but could still be bypassed by
   // the staff manual-charge route on the same billing date.
-  if (!stripeMigration.automaticChargeAllowed(recurring, selectedProvider, scheduledDueKey)) {
+  if (!stripeMigration.automaticChargeAllowed(recurring, selectedProvider, migrationDateKey)) {
     const providerName = paymentProviderLabel(selectedProvider);
     let message = providerName + ' charging is locked because this customer\'s payment-provider migration state does not match the requested charge.';
     if (selectedProvider === 'clover' && migration.state === stripeMigration.STATES.CUTOVER_SCHEDULED) {
@@ -18985,7 +19106,7 @@ function assertRecurringChargeAllowed(data, recurring, payload, provider) {
 }
 function finalizeStripeMigrationAfterPaid(recurring, payment, paymentAtIso) {
   const migration = stripeMigration.migrationRecord(recurring);
-  const billingPeriodKey = stripeMigration.billingPeriodKey(payment.scheduledDueDate);
+  const billingPeriodKey = recurringBillingPeriodKey(recurring, payment.scheduledDueDate);
   if (!stripeMigration.hasCloverSource(recurring)) {
     return stripeMigrationPatch(recurring, stripeMigration.STATES.STRIPE_ACTIVE, {
       at: paymentAtIso,
@@ -19030,12 +19151,21 @@ function finalizeStripeMigrationAfterPaid(recurring, payment, paymentAtIso) {
     lastBillingPeriodKey: disabled.lastBillingPeriodKey || ''
   };
 }
-function isDueForWheelsonAutoAutopay(row, dateKey = localDateKey()) {
+function isDueForWheelsonAutoAutopay(row, dateKey = localDateKey(), now = new Date()) {
   const status = String(row && row.status || '').toLowerCase();
   if (Number(row && (row.retryCount || row.failedAttempts) || 0) >= 2) return false;
   if (status !== 'active' && !status.includes('1x failed') && !status.includes('confirmation pending')) return false;
   if (!isWheelsonAutoManagedAutopay(row)) return false;
   if (!stripeMigration.automaticChargeAllowed(row, normalizedPaymentProvider(row.paymentProvider || row.provider || 'clover'), dateKey)) return false;
+  if (rapidAutopayIntervalMs(row)) {
+    const occurrence = recurringOccurrenceKey(row);
+    const dueAt = new Date(occurrence);
+    const nowAt = now instanceof Date ? now : new Date(now);
+    if (!occurrence || !Number.isFinite(dueAt.getTime()) || !Number.isFinite(nowAt.getTime()) || dueAt.getTime() > nowAt.getTime()) return false;
+    if (String(row.lastAutoChargeOccurrenceKey || '') === occurrence) return false;
+    if (!retryDelayPassed(row, nowAt)) return false;
+    return true;
+  }
   const dueKey = recurringDateKey(row);
   if (!dueKey || dueKey > dateKey) return false;
   if (dueKey === dateKey && businessMinutesNow() < chargeTimeMinutes(row)) return false;
@@ -19126,7 +19256,7 @@ function stripeChargeAttemptFor(row, payload = {}, scheduledDueKey = '', amount 
     sequence,
     amountCents,
     scheduledDueDate: scheduledDueKey || '',
-    billingPeriodKey: stripeMigration.billingPeriodKey(scheduledDueKey),
+    billingPeriodKey: recurringBillingPeriodKey(row, scheduledDueKey),
     status: 'requesting',
     startedAt: new Date().toISOString(),
     source: automatic ? 'WheelsonAuto Stripe autopay' : 'WheelsonAuto Stripe manual charge'
@@ -19271,7 +19401,8 @@ function saveStripeAuthenticationRequiredResult(data, row, payload = {}, err, op
   const message = String(err && (err.providerError || err.message) || err || 'Stripe requires customer authentication for this saved card.');
   const amount = Number(payload.amount || row.amount || 0);
   const identity = recurringPaymentIdentity(data, row, payload);
-  const scheduledDueDate = validCalendarDateKey(payload.scheduledDueDate || options.scheduledDueDate || recurringDateKey(row));
+  const rawScheduledDueDate = payload.scheduledDueDate || options.scheduledDueDate || recurringOccurrenceKey(row);
+  const scheduledDueDate = rapidAutopayIntervalMs(row) ? validRecurringInstant(rawScheduledDueDate) : validCalendarDateKey(rawScheduledDueDate);
   const stripePaymentIntentId = stripeObjectId(options.stripePaymentIntentId || err && err.paymentIntent || row.stripeChargeAttempt && row.stripeChargeAttempt.paymentIntentId || row.lastStripePaymentIntentId);
   const attempt = row.stripeChargeAttempt && Object.keys(row.stripeChargeAttempt).length
     ? row.stripeChargeAttempt
@@ -19280,7 +19411,7 @@ function saveStripeAuthenticationRequiredResult(data, row, payload = {}, err, op
       automatic: options.automatic === true,
       amountCents: cents(amount),
       scheduledDueDate,
-      billingPeriodKey: stripeMigration.billingPeriodKey(scheduledDueDate),
+      billingPeriodKey: recurringBillingPeriodKey(row, scheduledDueDate),
       source: options.source || 'Stripe saved-card authentication required'
     };
   const protectedAttempt = updateStripeChargeAttempt(data, row, attempt, {
@@ -19324,7 +19455,7 @@ function saveStripeAuthenticationRequiredResult(data, row, payload = {}, err, op
         source: options.source || existing.source || 'Stripe saved-card authentication required',
         notes: appendUniqueNote(existing.notes || '', message),
         scheduledDueDate: existing.scheduledDueDate || scheduledDueDate,
-        billingPeriodKey: existing.billingPeriodKey || stripeMigration.billingPeriodKey(scheduledDueDate),
+        billingPeriodKey: existing.billingPeriodKey || recurringBillingPeriodKey(row, scheduledDueDate),
         recurringPaymentId: existing.recurringPaymentId || row.id || '',
         paymentProvider: 'stripe',
         providerPaymentId: stripePaymentIntentId || existing.providerPaymentId || '',
@@ -19349,7 +19480,7 @@ function saveStripeAuthenticationRequiredResult(data, row, payload = {}, err, op
     source: options.source || 'Stripe saved-card authentication required',
     notes: [String(payload.note || '').trim(), message].filter(Boolean).join(' | '),
     scheduledDueDate,
-    billingPeriodKey: stripeMigration.billingPeriodKey(scheduledDueDate),
+    billingPeriodKey: recurringBillingPeriodKey(row, scheduledDueDate),
     recurringPaymentId: row.id || '',
     paymentProvider: 'stripe',
     providerPaymentId: stripePaymentIntentId || '',
@@ -19481,7 +19612,7 @@ function stripeRecurringChargeClaimRequest(recurring, payload = {}, attempt = {}
     provider: 'stripe',
     recurringPaymentId: String(recurring && (recurring.id || recurring.cloverSubscriptionId) || payload.recurringPaymentId || ''),
     scheduledDueDate: String(scheduledDueKey || ''),
-    billingPeriodKey: String(attempt.billingPeriodKey || stripeMigration.billingPeriodKey(scheduledDueKey)),
+    billingPeriodKey: String(attempt.billingPeriodKey || recurringBillingPeriodKey(recurring, scheduledDueKey)),
     amountCents: cents(amount),
     automatic: payload.automatic === true,
     additionalManualCharge: payload.allowAdditionalManualCharge === true
@@ -19516,7 +19647,7 @@ async function chargeStripeSavedCard(data, recurring, payload = {}) {
   const paymentMethodId = String(recurring.stripePaymentMethodId || '').trim();
   if (!customerId || !paymentMethodId) throw new Error('Stripe card not found. Ask the customer to save a Stripe card through the WheelsonAuto customer portal.');
   const scheduledDueKey = chargeGuard.scheduledDueKey;
-  const billingPeriodKey = stripeMigration.billingPeriodKey(scheduledDueKey);
+  const billingPeriodKey = recurringBillingPeriodKey(recurring, scheduledDueKey);
   let attempt = stripeChargeAttemptFor(recurring, payload, scheduledDueKey, amount);
   if (!attempt.resumed) {
     attempt = updateStripeChargeAttempt(data, recurring, attempt, { status: 'requesting' });
@@ -19799,7 +19930,7 @@ async function chargeSavedRecurringCard(data, payload, req) {
   if (!source) throw new Error('Clover shows a card on file for this recurring customer, but it did not return a chargeable Ecommerce saved-card token. Use Pay link for this charge, or save the customer card through WheelsonAuto checkout before using Charge saved card.');
   const ref = chargeReference();
   const scheduledDueKey = chargeGuard.scheduledDueKey;
-  const billingPeriodKey = stripeMigration.billingPeriodKey(scheduledDueKey);
+  const billingPeriodKey = recurringBillingPeriodKey(recurring, scheduledDueKey);
   const idempotencyKey = cloverRecurringChargeIdempotencyKey(recurring, payload, scheduledDueKey, amount);
   const cloverAttempt = {
     idempotencyKey,
@@ -19959,7 +20090,7 @@ function applyCustomerPortalCreditToBilling(data, recurring, amount, scheduledDu
     createdAt: now,
     scheduledDueDate,
     dueDate: scheduledDueDate,
-    billingPeriodKey: stripeMigration.billingPeriodKey(scheduledDueDate),
+    billingPeriodKey: recurringBillingPeriodKey(recurring, scheduledDueDate),
     method: 'WheelsonAuto account credit',
     paymentType: options.fullCoverage ? 'Weekly payment covered by account credit' : 'Account credit applied to weekly payment',
     amount: applied,
@@ -19980,7 +20111,8 @@ async function runWheelsonAutoAutopay(options = {}) {
   woaAutopayStatus.lastStartedAt = new Date().toISOString();
   woaAutopayStatus.lastError = '';
   woaAutopayStatus.fatalError = '';
-  const dateKey = options.dateKey || localDateKey();
+  const runAt = options.now instanceof Date ? options.now : new Date(options.now || Date.now());
+  const dateKey = options.dateKey || localDateKey(runAt);
   const result = { dateKey, charged: 0, creditCovered: 0, creditApplied: 0, pickupSchedulesRecovered: 0, reconciled: 0, failed: 0, notFound: 0, authenticationRequired: 0, confirmationPending: 0, providerBlocked: 0, duplicateBlocked: 0, skipped: 0, errors: [] };
   let autopayLock = null;
   try {
@@ -19996,6 +20128,7 @@ async function runWheelsonAutoAutopay(options = {}) {
     data.recurringPayments = Array.isArray(data.recurringPayments) ? data.recurringPayments : [];
     result.pickupSchedulesRecovered = repairCompletedPickupAutopayStates(data);
     for (const row of data.recurringPayments) {
+      if (rapidAutopayIntervalMs(row)) continue;
       const dueKey = recurringDateKey(row);
       const status = String(row && row.status || '').toLowerCase();
       if (!dueKey || dueKey > dateKey || (status !== 'active' && !status.includes('1x failed')) || !isWheelsonAutoManagedAutopay(row)) continue;
@@ -20021,18 +20154,19 @@ async function runWheelsonAutoAutopay(options = {}) {
       });
       result.reconciled += 1;
     }
-    const due = data.recurringPayments.filter(row => isDueForWheelsonAutoAutopay(row, dateKey));
+    const due = data.recurringPayments.filter(row => isDueForWheelsonAutoAutopay(row, dateKey, runAt));
     for (const row of due) {
-      const scheduledDueDate = recurringDateKey(row);
+      const scheduledDueDate = recurringOccurrenceKey(row);
       try {
-        const nextRun = nextFutureRecurringDate(row, dateKey, scheduledDueDate);
+        const nextRun = nextFutureRecurringRun(row, runAt, scheduledDueDate);
         if (!nextRun) throw new Error('WheelsonAuto could not calculate the next ' + (row.frequency || 'recurring') + ' date. The card was not charged.');
         const weeklyAmount = Math.max(0, Number(row.amount || row.weeklyAmount || 0));
         const availableCredit = Math.max(0, Number(row.customerPortalCreditBalance || 0));
         if (weeklyAmount > 0 && availableCredit >= weeklyAmount) {
           applyCustomerPortalCreditToBilling(data, row, weeklyAmount, scheduledDueDate, { fullCoverage: true });
           row.lastAutoChargeDate = dateKey;
-          row.lastAutoChargeAt = new Date().toISOString();
+          row.lastAutoChargeAt = runAt.toISOString();
+          row.lastAutoChargeOccurrenceKey = scheduledDueDate;
           row.nextRun = nextRun;
           row.adminNextRun = nextRun;
           row.paymentDay = /week/i.test(String(row.frequency || '')) ? calendarDayName(nextRun) : row.paymentDay;
@@ -20059,7 +20193,8 @@ async function runWheelsonAutoAutopay(options = {}) {
           throw new Error(paymentProviderLabel(row.paymentProvider || row.provider || 'clover') + ' returned ' + String(charged && charged.payment && charged.payment.status || 'an unconfirmed result') + '. The next charge date was not advanced.');
         }
         row.lastAutoChargeDate = dateKey;
-        row.lastAutoChargeAt = new Date().toISOString();
+        row.lastAutoChargeAt = runAt.toISOString();
+        row.lastAutoChargeOccurrenceKey = scheduledDueDate;
         row.nextRun = nextRun;
         row.status = 'Active';
         row.tone = 'good';
@@ -20139,7 +20274,7 @@ async function runWheelsonAutoAutopay(options = {}) {
           continue;
         }
         if (isDuplicateBillingPeriodError(err)) {
-          const nextRun = nextFutureRecurringDate(row, dateKey, scheduledDueDate);
+          const nextRun = nextFutureRecurringRun(row, runAt, scheduledDueDate);
           if (nextRun && nextRun !== scheduledDueDate) {
             updateRecurringChargeState(data, row.id, {
               nextRun,
@@ -20840,8 +20975,11 @@ function duplicateStripeBillingPeriodPayment(data, recurring, scheduledDueKey, i
 }
 function stripeWebhookChargeAllowed(recurring, scheduledDueKey) {
   const currentProvider = normalizedPaymentProvider(recurring && (recurring.paymentProvider || recurring.provider) || 'clover');
+  const migrationDateKey = rapidAutopayIntervalMs(recurring)
+    ? localDateKey(new Date(validRecurringInstant(scheduledDueKey) || Date.now()))
+    : scheduledDueKey;
   return currentProvider === 'stripe'
-    && stripeMigration.automaticChargeAllowed(recurring, 'stripe', scheduledDueKey);
+    && stripeMigration.automaticChargeAllowed(recurring, 'stripe', migrationDateKey);
 }
 function applyStripePaymentIntentSucceeded(data, intent = {}) {
   const intentId = stripeObjectId(intent);
@@ -20850,8 +20988,9 @@ function applyStripePaymentIntentSucceeded(data, intent = {}) {
   if (!recurring) return { matched: false, reason: 'No unambiguous WheelsonAuto recurring customer matched this Stripe payment intent.', paymentIntentId: intentId };
   const metadata = intent.metadata || {};
   const currentAttempt = recurring.stripeChargeAttempt || {};
-  const scheduledDueKey = validCalendarDateKey(metadata.scheduledDueDate || currentAttempt.scheduledDueDate || recurringDateKey(recurring));
-  const billingPeriodKey = String(metadata.billingPeriodKey || currentAttempt.billingPeriodKey || stripeMigration.billingPeriodKey(scheduledDueKey)).trim();
+  const rawScheduledDueKey = metadata.scheduledDueDate || currentAttempt.scheduledDueDate || recurringOccurrenceKey(recurring);
+  const scheduledDueKey = rapidAutopayIntervalMs(recurring) ? validRecurringInstant(rawScheduledDueKey) : validCalendarDateKey(rawScheduledDueKey);
+  const billingPeriodKey = String(metadata.billingPeriodKey || currentAttempt.billingPeriodKey || recurringBillingPeriodKey(recurring, scheduledDueKey)).trim();
   const claim = stripePaymentIntentClaimDescriptor(recurring, intent, scheduledDueKey);
   const paymentAt = stripePaymentIntentDate(intent);
   const paymentAtIso = paymentAt.toISOString();
@@ -21012,6 +21151,7 @@ function applyStripePaymentIntentSucceeded(data, intent = {}) {
   if (String(metadata.flow || '').toLowerCase() === 'autopay') Object.assign(patch, {
     lastAutoChargeDate: paymentDateKey,
     lastAutoChargeAt: paymentAtIso,
+    lastAutoChargeOccurrenceKey: scheduledDueKey || recurring.lastAutoChargeOccurrenceKey || '',
     lastAutoChargeResult: 'Paid'
   });
   if (!alreadyPaid && !duplicateBillingPeriod && !providerMigrationReview) Object.assign(patch, finalizeStripeMigrationAfterPaid(recurring, payment, paymentAtIso));
@@ -21424,7 +21564,8 @@ function applyStripePaymentIntentFailed(data, intent = {}) {
   const existing = (data.payments || []).find(row => String(row && row.stripePaymentIntentId || '') === intentId);
   if (existing && stripeMigration.paymentIsPaid(existing.status)) return { matched: true, ignored: true, reason: 'A later Stripe success is already recorded for this payment intent.', recurringPaymentId: recurring.id || '', paymentIntentId: intentId };
   const metadata = intent.metadata || {};
-  const scheduledDueKey = validCalendarDateKey(metadata.scheduledDueDate || recurring.stripeChargeAttempt && recurring.stripeChargeAttempt.scheduledDueDate || recurringDateKey(recurring));
+  const rawScheduledDueKey = metadata.scheduledDueDate || recurring.stripeChargeAttempt && recurring.stripeChargeAttempt.scheduledDueDate || recurringOccurrenceKey(recurring);
+  const scheduledDueKey = rapidAutopayIntervalMs(recurring) ? validRecurringInstant(rawScheduledDueKey) : validCalendarDateKey(rawScheduledDueKey);
   const claim = stripePaymentIntentClaimDescriptor(recurring, intent, scheduledDueKey);
   const paidBillingPeriod = stripeMigration.existingPaidPayment(data, recurring, scheduledDueKey);
   if (paidBillingPeriod) return {
@@ -21488,7 +21629,7 @@ function applyStripePaymentIntentFailed(data, intent = {}) {
     automatic: String(metadata.flow || '').toLowerCase() === 'autopay',
     amountCents: Number(intent.amount || 0),
     scheduledDueDate: scheduledDueKey,
-    billingPeriodKey: stripeMigration.billingPeriodKey(scheduledDueKey)
+    billingPeriodKey: recurringBillingPeriodKey(recurring, scheduledDueKey)
   }, {
     status: 'failed',
     paymentIntentId: intentId,
@@ -27544,9 +27685,23 @@ const server = http.createServer(async (req, res) => {
         .slice()
         .sort((left, right) => new Date(right.createdAt || right.date || 0).getTime() - new Date(left.createdAt || left.date || 0).getTime())
         .slice(0, limit);
-      const messages = (redactStaffSecrets({ messages: scoped }).messages || []);
+      const redacted = (redactStaffSecrets({ messages: scoped }).messages || []);
+      const sourceById = new Map(scoped.map(message => [String(message.id || ''), message]));
+      const messages = redacted.map(message => {
+        const source = sourceById.get(String(message.id || '')) || {};
+        const plan = source.aiPlan || {};
+        const reviewRequired = !!(plan.approvalRequired || plan.needsHuman || /needs approval|human needed|needs admin/i.test(String(source.status || '')));
+        const publicMessage = { ...message };
+        delete publicMessage.aiPlan;
+        return {
+          ...publicMessage,
+          starReview: reviewRequired,
+          starReviewReason: reviewRequired ? (plan.needsHuman ? 'Human review' : 'Admin approval') : '',
+          starReviewAction: reviewRequired ? String(plan.actionType || source.template || source.subject || 'Star reply').slice(0, 100) : ''
+        };
+      });
       const revision = platformMessageRevision(messages);
-      return json(res, 200, { ok: true, revision, messages }, { 'Cache-Control': 'private, no-store' });
+      return json(res, 200, { ok: true, revision, messages, starCoach: publicStarCoachState(data) }, { 'Cache-Control': 'private, no-store' });
     }
     if (url.pathname === '/api/state' && req.method === 'PUT') {
       const incoming = await readJsonBody(req, 32 * 1024 * 1024);
@@ -27669,6 +27824,20 @@ const server = http.createServer(async (req, res) => {
       data.integrations.messaging = { ...data.integrations.messaging, ...publicMessagingStatus(data) };
       await writeData(data);
       return json(res, 200, { ok: true, messaging: data.integrations.messaging });
+    }
+    if (url.pathname === '/api/messages/star-instructions' && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can coach Star or change automatic replies.' });
+      const payload = await readJsonBody(req);
+      const data = await readData();
+      try {
+        const saved = saveStarCoachInstruction(data, user, payload.instruction || payload.message || '');
+        appendAuditLog(data, user, saved.kind === 'control' ? 'Star automatic reply control changed' : 'Star reply guidance saved', [saved.instruction, saved.response]);
+        await protectConcurrentLocalWrites(data, { preferIncoming: true });
+        await writeData(data);
+        return json(res, 200, { ok: true, response: saved.response, starCoach: publicStarCoachState(data) });
+      } catch (error) {
+        return json(res, 400, { ok: false, error: String(error && error.message || error) });
+      }
     }
     if (url.pathname === '/api/integrations/stripe/readiness' && req.method === 'POST') {
       if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can verify Stripe account activation.' });
@@ -28186,8 +28355,20 @@ const server = http.createServer(async (req, res) => {
         body: payload.body || payload.message || (sourceMessage && sourceMessage.body) || ''
       };
       const aiResult = await createAiMessageDraft(data, request, { sourceMessageId: payload.messageId || payload.externalId || '', forceNew: payload.forceNew === true, user });
+      const plan = aiResult.plan || {};
+      let autoSend = { attempted: false, sent: false, warning: '' };
+      if (payload.autoSendSafe === true && messageSettings(data).aiAutoSend && plan.canAutoSend && !plan.approvalRequired && !plan.needsHuman) {
+        autoSend.attempted = true;
+        try {
+          const approved = await approveAiMessage(data, { draftId: aiResult.draft.id });
+          autoSend = { attempted: true, sent: !!approved.result.sent, message: approved.sent, warning: approved.result.sent ? '' : (approved.result.message || 'The delivery provider is not ready.') };
+        } catch (error) {
+          autoSend.warning = String(error && error.message || error);
+          aiResult.draft.status = 'Auto-send needs review';
+          aiResult.draft.tone = 'warn';
+        }
+      }
       if (!aiResult.existing) {
-        const plan = aiResult.plan || {};
         const draft = aiResult.draft || {};
         const action = plan.needsHuman
           ? 'Star AI human review drafted'
@@ -28212,7 +28393,7 @@ const server = http.createServer(async (req, res) => {
         lastError: ''
       };
       await writeData(data);
-      return json(res, 201, { ok: true, plan: aiResult.plan, draft: aiResult.draft, existing: aiResult.existing });
+      return json(res, 201, { ok: true, plan: aiResult.plan, draft: aiResult.draft, existing: aiResult.existing, autoSend });
     }
     if (url.pathname === '/api/messages/ai-action' && req.method === 'POST') {
       if (!WOA_STAR_AI_ENABLED) return json(res, 423, { ok: false, error: 'Star AI is turned off in Render with WOA_STAR_AI_ENABLED=0.' });
@@ -29422,27 +29603,29 @@ const server = http.createServer(async (req, res) => {
       const migrationBeforeUpdate = stripeMigration.migrationRecord(recurring);
       const nextRun = String(payload.nextRun || (recurring && recurring.nextRun) || '').trim();
       const frequency = String(payload.frequency || (recurring && recurring.frequency) || 'Weekly').trim();
+      const rapidInterval = rapidAutopayIntervalMs(frequency) > 0;
       const amount = payload.amount === undefined || payload.amount === '' ? undefined : Number(payload.amount);
       let status = String(payload.status || (recurring && recurring.status) || 'Active').trim();
       const requestedPaymentDay = String(payload.paymentDay || payload.chargeDay || (recurring && (recurring.paymentDay || recurring.chargeDay)) || '').trim();
-      const paymentDay = /week/i.test(frequency) && validCalendarDateKey(nextRun) ? calendarDayName(nextRun) : requestedPaymentDay;
-      const chargeTime = String(payload.chargeTime || payload.paymentTime || (recurring && (recurring.chargeTime || recurring.paymentTime)) || '18:00').trim();
+      const paymentDay = rapidInterval ? '' : /week/i.test(frequency) && validCalendarDateKey(nextRun) ? calendarDayName(nextRun) : requestedPaymentDay;
+      const chargeTime = rapidInterval ? '' : String(payload.chargeTime || payload.paymentTime || (recurring && (recurring.chargeTime || recurring.paymentTime)) || '18:00').trim();
       const monthlyDay = payload.monthlyDay === undefined || payload.monthlyDay === ''
         ? (recurring && recurring.monthlyDay === undefined ? undefined : Number(recurring && recurring.monthlyDay))
         : Number(payload.monthlyDay);
       const retryRule = String(payload.retryRule || (recurring && recurring.retryRule) || 'Retry once then contact').trim();
       const managedBy = String(payload.autopayManagedBy || (recurring && recurring.autopayManagedBy) || '').trim();
       if (!id || !nextRun) return json(res, 400, { ok: false, error: 'Choose a recurring customer and a WheelsonAuto due date.' });
-      if (!validCalendarDateKey(nextRun)) return json(res, 400, { ok: false, error: 'Choose a valid WheelsonAuto due date from the calendar.' });
-      if (!/^([01]?\d|2[0-3]):[0-5]\d$/.test(chargeTime)) return json(res, 400, { ok: false, error: 'Choose a valid charge time.' });
+      if (rapidInterval ? !validRecurringInstant(nextRun) : !validCalendarDateKey(nextRun)) return json(res, 400, { ok: false, error: rapidInterval ? 'Choose a valid first charge date and time for the rapid schedule.' : 'Choose a valid WheelsonAuto due date from the calendar.' });
+      if (!rapidInterval && !/^([01]?\d|2[0-3]):[0-5]\d$/.test(chargeTime)) return json(res, 400, { ok: false, error: 'Choose a valid charge time.' });
       if (!frequency) return json(res, 400, { ok: false, error: 'Choose how often this customer should be charged.' });
       if (amount !== undefined && (!Number.isFinite(amount) || amount < 0)) return json(res, 400, { ok: false, error: 'Enter a valid autopay amount.' });
       if (monthlyDay !== undefined && (!Number.isFinite(monthlyDay) || monthlyDay < 1 || monthlyDay > 31)) return json(res, 400, { ok: false, error: 'Choose a valid monthly day.' });
       const amountChanged = amount !== undefined && Number(recurring.amount || 0) !== amount;
+      const savedChargeTime = rapidInterval ? '' : String(recurring.chargeTime || recurring.paymentTime || '18:00');
       const scheduleChanged = String(recurring.nextRun || '') !== nextRun
         || String(recurring.frequency || 'Weekly') !== frequency
         || String(recurring.paymentDay || recurring.chargeDay || '') !== paymentDay
-        || String(recurring.chargeTime || recurring.paymentTime || '18:00') !== chargeTime
+        || savedChargeTime !== chargeTime
         || (monthlyDay !== undefined && Number(recurring.monthlyDay || 0) !== monthlyDay);
       const amountOrScheduleChanged = amountChanged || scheduleChanged;
       const providerConfirmationPending = stripeChargeAttemptIsPending(recurring.stripeChargeAttempt)
@@ -29454,7 +29637,7 @@ const server = http.createServer(async (req, res) => {
           error: 'A provider charge is still being confirmed for this customer. Wait for reconciliation before changing the amount or schedule so the payment cannot be orphaned or duplicated.'
         });
       }
-      if (scheduleChanged) {
+      if (scheduleChanged && !rapidInterval) {
         const occupiedTargetPeriod = stripeMigration.existingBillingPeriodPayment(data, recurring, nextRun);
         if (occupiedTargetPeriod) {
           return json(res, 409, {
@@ -30274,6 +30457,9 @@ module.exports = {
   calendarDayName,
   nextRecurringOccurrence,
   nextFutureRecurringDate,
+  rapidAutopayIntervalMs,
+  nextFutureRecurringRun,
+  recurringBillingPeriodKey,
   allRecurringRows,
   cardSetupPlanReview,
   findRecurringRow,

@@ -26,13 +26,30 @@ export type MessageRecord = {
   vehicleId?: string;
   recurringPaymentId?: string;
   aiPlan?: { approvalRequired?: boolean; needsHuman?: boolean };
+  starReview?: boolean;
+  starReviewReason?: string;
+  starReviewAction?: string;
 };
 
 export type MessageFeed = {
   ok: boolean;
   revision: string;
   messages: MessageRecord[];
+  starCoach?: StarCoachState;
   error?: string;
+};
+
+export type StarCoachInstruction = {
+  id: string;
+  instruction: string;
+  response: string;
+  createdAt: string;
+  createdBy?: string;
+};
+
+export type StarCoachState = {
+  autoSendEnabled: boolean;
+  instructions: StarCoachInstruction[];
 };
 
 export type MessageThread = {
@@ -44,6 +61,8 @@ export type MessageThread = {
   messages: MessageRecord[];
   latest: MessageRecord;
   unread: number;
+  starReviewCount: number;
+  latestStarReview?: MessageRecord;
 };
 
 export type PagedFeed<T> = {

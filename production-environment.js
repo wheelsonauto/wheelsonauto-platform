@@ -115,7 +115,6 @@ function productionEnvironmentReport(env = {}) {
   add('WOA_AI_MODEL', !!value(env, 'WOA_AI_MODEL', 'OPENAI_MODEL'), 'Pin the Star model explicitly.');
   add('WOA_STAR_AI_ENABLED', enabled(env, 'WOA_STAR_AI_ENABLED'), 'Enable Star only through the guarded server-side provider adapter.');
   add('WOA_AI_REPLY_DRAFTS', enabled(env, 'WOA_AI_REPLY_DRAFTS'), 'Keep Star reply drafting enabled for the staff approval workflow.');
-  add('WOA_AI_AUTO_SEND', !enabled(env, 'WOA_AI_AUTO_SEND'), 'Keep automatic AI sending disabled for the controlled launch.');
   add('WOA_AI_MAX_REQUESTS_PER_DAY', Number.isInteger(dailyAiLimit) && dailyAiLimit > 0, 'Set an explicit daily Star request limit.');
   add('WOA_AI_MAX_REQUESTS_PER_MONTH', Number.isInteger(monthlyAiLimit) && monthlyAiLimit >= dailyAiLimit, 'Set an explicit monthly Star request limit at least as large as the daily limit.');
 

@@ -1,4 +1,4 @@
-import type { ApplicationFeed, CustomerRecord, MaintenanceRecord, MessageFeed, MessageRecord, NotificationFeed, PagedFeed, PaymentRecord, ProviderRecord, RecurringPaymentRecord, RentalDetail, RentalRecord, TaskRecord, VehicleRecord } from './types';
+import type { ApplicationFeed, CustomerRecord, MaintenanceRecord, MessageFeed, MessageRecord, NotificationFeed, PagedFeed, PaymentRecord, ProviderRecord, RecurringPaymentRecord, RentalDetail, RentalRecord, StarCoachState, TaskRecord, VehicleRecord } from './types';
 
 async function parseJson<T>(response: Response): Promise<T> {
   const payload = await response.json().catch(() => ({}));
@@ -81,7 +81,7 @@ export async function sendMessage(input: SendMessageInput): Promise<{ ok: boolea
   return result;
 }
 
-export async function draftStarReply(message: MessageRecord): Promise<{ ok: boolean; draft: MessageRecord; plan?: { reply?: string } }> {
+export async function draftStarReply(message: MessageRecord): Promise<{ ok: boolean; draft: MessageRecord; plan?: { reply?: string; approvalRequired?: boolean; needsHuman?: boolean; canAutoSend?: boolean }; autoSend?: { attempted: boolean; sent: boolean; message?: MessageRecord; warning?: string } }> {
   const response = await fetch('/api/messages/ai-reply', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
@@ -92,10 +92,24 @@ export async function draftStarReply(message: MessageRecord): Promise<{ ok: bool
       email: message.email || '',
       channel: message.channel || '',
       body: message.body || message.subject || '',
-      forceNew: true
+      forceNew: false,
+      autoSendSafe: true
     })
   });
-  return parseJson(response);
+  const result = await parseJson<{ ok: boolean; draft: MessageRecord; plan?: { reply?: string; approvalRequired?: boolean; needsHuman?: boolean; canAutoSend?: boolean }; autoSend?: { attempted: boolean; sent: boolean; message?: MessageRecord; warning?: string } }>(response);
+  invalidateCachedPaths('/api/messages/feed', '/api/app-notifications');
+  return result;
+}
+
+export async function sendStarInstruction(instruction: string): Promise<{ ok: boolean; response: string; starCoach: StarCoachState }> {
+  const response = await fetch('/api/messages/star-instructions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ instruction })
+  });
+  const result = await parseJson<{ ok: boolean; response: string; starCoach: StarCoachState }>(response);
+  invalidateCachedPaths('/api/messages/feed', '/api/system/health');
+  return result;
 }
 
 async function loadPaged<T>(path: string, signal?: AbortSignal, force = false): Promise<PagedFeed<T>> {

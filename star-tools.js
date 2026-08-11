@@ -13,6 +13,7 @@ const READ_TOOLS = Object.freeze({
 
 const ACTION_TOOLS = Object.freeze({
   reply: Object.freeze({ access: 'draft', autoSendEligible: true, approvalRequired: false, description: 'Draft or send a normal customer reply.' }),
+  payment_self_service: Object.freeze({ access: 'draft', autoSendEligible: true, approvalRequired: false, description: 'Explain how the customer can make their own secure payment in the WheelsonAuto app without moving money.' }),
   send_payment_link: Object.freeze({ access: 'draft_link', autoSendEligible: true, approvalRequired: false, description: 'Prepare a secure customer-paid payment link without charging a saved card.' }),
   send_card_setup: Object.freeze({ access: 'draft_link', autoSendEligible: true, approvalRequired: false, description: 'Prepare a secure card setup/change link without exposing card details.' }),
   maintenance_schedule: Object.freeze({ access: 'draft', autoSendEligible: true, approvalRequired: false, description: 'Draft service scheduling guidance; staff workflow owns the appointment.' }),

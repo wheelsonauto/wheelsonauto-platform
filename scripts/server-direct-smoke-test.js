@@ -225,7 +225,7 @@ async function main() {
   process.env.WOA_EMAIL_OWNER_NOTIFY = 'owner-alerts@example.com';
   process.env.WOA_MESSAGING_ENABLED = '1';
   process.env.WOA_STAR_AI_ENABLED = '1';
-  process.env.WOA_AI_AUTO_SEND = '0';
+  process.env.WOA_AI_AUTO_SEND = '1';
   process.env.WOA_AI_REPLY_DRAFTS = '1';
   delete process.env.OPENAI_API_KEY;
   delete process.env.WOA_OPENAI_API_KEY;
@@ -265,6 +265,9 @@ async function main() {
     calendarDayName,
     nextRecurringOccurrence,
     nextFutureRecurringDate,
+    rapidAutopayIntervalMs,
+    nextFutureRecurringRun,
+    recurringBillingPeriodKey,
     allRecurringRows,
     findRecurringRow,
     successfulRecurringPaymentEvidence,
@@ -623,6 +626,9 @@ async function main() {
     assert(nextRecurringOccurrence({ frequency: 'Weekly' }, '2026-07-10') === '2026-07-17', 'Weekly autopay should advance by seven days.');
     assert(nextRecurringOccurrence({ frequency: 'Bi-weekly' }, '2026-07-10') === '2026-07-24', 'Bi-weekly autopay should advance by fourteen days.');
     assert(nextFutureRecurringDate({ frequency: 'Weekly', nextRun: '2026-07-10' }, '2026-07-16') === '2026-07-17', 'An overdue Friday schedule should advance to the next future Friday instead of drifting to the runner day.');
+    assert(rapidAutopayIntervalMs('Every minute') === 60 * 1000 && rapidAutopayIntervalMs('Every hour') === 60 * 60 * 1000, 'Rapid autopay schedules must use exact minute and hour intervals.');
+    assert(nextFutureRecurringRun({ frequency: 'Every minute', nextRun: '2026-07-18T18:00:00.000Z' }, '2026-07-18T18:02:15.000Z') === '2026-07-18T18:03:00.000Z', 'A delayed minute schedule must advance to the first future occurrence without drifting from its original interval.');
+    assert(recurringBillingPeriodKey({ frequency: 'Every hour' }, '2026-07-18T18:00:00.000Z') === 'interval:2026-07-18T18:00:00.000Z', 'Rapid schedules must use timestamp-specific duplicate-charge keys.');
     const unverifiedOutsideEvidence = successfulRecurringPaymentEvidence({ payments: [{ id: 'unverified-outside-evidence', recurringPaymentId: 'rec-unverified-outside', status: 'Paid outside app - needs verification', scheduledDueDate: '2026-07-10', createdAt: '2026-07-10T18:00:00.000Z' }] }, { id: 'rec-unverified-outside' }, '2026-07-10', '2026-07-10');
     assert(unverifiedOutsideEvidence === null, 'Restart reconciliation must not skip or advance autopay because a customer merely reported an unverified outside payment.');
     const retryBoundary = new Date('2026-07-18T18:00:00.000Z');
@@ -3889,6 +3895,7 @@ async function main() {
     const lateEditOriginalRun = autopayDateOffset(7);
     const protectedSchedulePaidDate = autopayDateOffset(21);
     const protectedScheduleShiftDate = autopayDateOffset(22);
+    const rapidScheduleStart = new Date(Date.now() + 10 * 60 * 1000).toISOString();
     const autopayState = JSON.parse(JSON.stringify(notificationState.json));
     autopayState.recurringPayments = autopayState.recurringPayments || [];
     autopayState.recurringPayments.unshift({
@@ -4044,6 +4051,25 @@ async function main() {
       cloverCustomerId: 'custpaidwindow001',
       paymentSetup: 'Card saved through WheelsonAuto',
       cardSavedAt: new Date().toISOString()
+    }, {
+      id: 'direct-autopay-rapid-edit',
+      customer: 'Direct Rapid Schedule Edit',
+      phone: '3135550996',
+      email: 'rapid-schedule-edit@example.com',
+      vehicle: '2024 Toyota Corolla',
+      vin: 'DIRECTRAPIDEDITVIN',
+      amount: 1,
+      frequency: 'Weekly',
+      nextRun: amountEditNextRun,
+      paymentDay: calendarDayName(amountEditNextRun),
+      chargeTime: '18:00',
+      status: 'Active',
+      tone: 'good',
+      autoChargeEnabled: true,
+      autopayManagedBy: 'WheelsonAuto',
+      cloverCustomerId: 'custrapid001',
+      paymentSetup: 'Card saved through WheelsonAuto',
+      cardSavedAt: new Date().toISOString()
     });
     autopayState.payments = autopayState.payments || [];
     autopayState.payments.unshift({
@@ -4079,6 +4105,22 @@ async function main() {
     const amountEditRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     const amountEditRow = amountEditRead.json.recurringPayments.find(row => row.id === 'direct-autopay-amount-edit');
     assert(amountEditRow && amountEditRow.amount === 279 && amountEditRow.nextRun === amountEditNextRun && amountEditRow.paymentDay === calendarDayName(amountEditNextRun) && amountEditRow.chargeTime === '18:00' && amountEditRow.frequency === 'Weekly' && amountEditRow.status === 'Active' && amountEditRow.autoChargeEnabled === true, 'An amount edit must preserve date, weekday, time, frequency, status, and enabled autopay state.');
+    const rapidScheduleEdit = await request(server, 'POST', '/api/recurring-payments/update', {
+      cookie: ownerCookie,
+      json: {
+        recurringPaymentId: 'direct-autopay-rapid-edit',
+        amount: 1,
+        frequency: 'Every minute',
+        nextRun: rapidScheduleStart,
+        chargeTime: '18:00',
+        status: 'Active',
+        autopayManagedBy: 'WheelsonAuto'
+      }
+    });
+    assert(rapidScheduleEdit.status === 200 && rapidScheduleEdit.json.ok && rapidScheduleEdit.json.scheduleChanged && rapidScheduleEdit.json.chargeTime === '', 'A rapid autopay edit must save a precise timestamp and discard the unrelated daily charge time.');
+    const rapidScheduleRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const rapidScheduleRow = rapidScheduleRead.json.recurringPayments.find(row => row.id === 'direct-autopay-rapid-edit');
+    assert(rapidScheduleRow && rapidScheduleRow.frequency === 'Every minute' && rapidScheduleRow.nextRun === rapidScheduleStart && rapidScheduleRow.chargeTime === '' && rapidScheduleRow.paymentDay === '', 'The persisted rapid schedule must remain timestamp-driven without a weekday or fixed 6 PM field.');
     const lateScheduleEdit = await request(server, 'POST', '/api/recurring-payments/update', {
       cookie: ownerCookie,
       json: {
@@ -5497,6 +5539,13 @@ async function main() {
     assert((inboundEmailState.json.messages || []).filter(message => message.externalId === 'direct-email-001' && message.direction === 'Inbound').length === 1, 'A repeated email provider event must retain exactly one inbound customer message.');
     assert((inboundEmailState.json.messages || []).filter(message => message.aiSourceMessageId === 'direct-email-001' && message.channel === 'Star AI').length === 1, 'A repeated email provider event must retain exactly one Star draft.');
 
+    const starPaymentHelp = await request(server, 'POST', '/api/messages/ai-reply', {
+      cookie: managerCookie,
+      json: { customer: 'Direct Customer', channel: 'Customer portal', body: 'Can I make a payment myself through the app?' }
+    });
+    assert(starPaymentHelp.status === 201 && starPaymentHelp.json.plan.actionType === 'payment_self_service' && starPaymentHelp.json.plan.canAutoSend === true, 'Star should treat a how-to-pay question as safe customer self-service guidance.');
+    assert(/open Payments, choose Make a payment/i.test(starPaymentHelp.json.draft.body || '') && /office will contact you/i.test(starPaymentHelp.json.draft.body || ''), 'Star payment guidance should direct the customer to the real app flow before offering office assistance.');
+
     const starCardSetup = await request(server, 'POST', '/api/messages/ai-reply', {
       cookie: managerCookie,
       json: { customer: 'Direct Failed Once', phone: '3135550444', channel: 'SMS', body: 'I need to update my card on file.' }
@@ -5515,6 +5564,20 @@ async function main() {
     assert(starCardSetupPage.status === 200 && starCardSetupPage.text.includes('Set up automatic payments') && starCardSetupPage.text.includes('Direct Failed Once'), 'Star-created card setup page should render for the customer.');
     assert(!starCardSetupPage.text.includes('secret-source-token') && !starCardSetupPage.text.includes('secret-payment-token') && !starCardSetupPage.text.includes('secret-raw-value'), 'Star-created card setup page should not expose private payment tokens.');
     assert(!starCardSetupPage.text.includes('Direct Dispute Customer') && !starCardSetupPage.text.includes('direct-customer'), 'Star-created card setup page should not expose unrelated customer records.');
+
+    const starPortalAutoSend = await request(server, 'POST', '/api/messages/ai-reply', {
+      cookie: managerCookie,
+      json: { externalId: 'direct-star-portal-safe-001', customer: 'Alicia Brown', channel: 'Customer portal', body: 'What time can I bring the car in for service?', autoSendSafe: true }
+    });
+    assert(starPortalAutoSend.status === 201 && starPortalAutoSend.json.ok && starPortalAutoSend.json.plan.canAutoSend === true, 'A normal service conversation should be classified as safe to auto-send.');
+    assert(starPortalAutoSend.json.autoSend && starPortalAutoSend.json.autoSend.attempted === true && starPortalAutoSend.json.autoSend.sent === true && starPortalAutoSend.json.autoSend.message.channel === 'Customer portal', 'A safe Star portal reply should be delivered automatically through the first-party conversation.');
+    const repeatedStarPortalAutoSend = await request(server, 'POST', '/api/messages/ai-reply', {
+      cookie: managerCookie,
+      json: { externalId: 'direct-star-portal-safe-001', customer: 'Alicia Brown', channel: 'Customer portal', body: 'What time can I bring the car in for service?', autoSendSafe: true }
+    });
+    assert(repeatedStarPortalAutoSend.status === 201 && repeatedStarPortalAutoSend.json.existing === true && repeatedStarPortalAutoSend.json.autoSend.sent === true, 'Repeating Star on the same customer message should reuse its draft and recorded delivery.');
+    const starPortalAutoSendState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    assert((starPortalAutoSendState.json.messages || []).filter(message => message.aiDraftId === starPortalAutoSend.json.draft.id && message.direction === 'Outbound').length === 1, 'A repeated Star request must not create a duplicate customer reply.');
 
     const starDraft = await request(server, 'POST', '/api/messages/ai-reply', {
       cookie: managerCookie,
@@ -5561,6 +5624,10 @@ async function main() {
       json: { draftId: starReceiptDraft.json.draft.id, channel: 'Email', approveMoneyAction: true }
     });
     assert(blockedStarReceiptSend.status === 403 && /Only the owner/i.test(blockedStarReceiptSend.json.error || ''), 'Manager must not send an approval-gated receipt draft by forging the owner approval flag.');
+    const starReviewFeed = await request(server, 'GET', '/api/messages/feed?limit=800', { cookie: managerCookie });
+    const reviewFeedDraft = (starReviewFeed.json.messages || []).find(message => message.id === starReceiptDraft.json.draft.id);
+    assert(starReviewFeed.status === 200 && reviewFeedDraft && reviewFeedDraft.starReview === true && reviewFeedDraft.starReviewAction === 'send_receipt', 'The scoped Messages feed must identify approval-gated Star items for the Star review tab.');
+    assert(!Object.prototype.hasOwnProperty.call(reviewFeedDraft, 'aiPlan'), 'The Star review queue must expose minimal review metadata without leaking the private AI context plan.');
     const pendingStarHealth = await request(server, 'GET', '/api/system/health', { cookie: ownerCookie });
     assert(pendingStarHealth.json.issues.some(row => row.key === 'pending_star_approvals' && Number(row.count) >= 1 && row.view === 'Messages' && row.tab === 'Star'), 'System health should surface pending Star approvals for admin review.');
     assert(pendingStarHealth.json.issues.some(row => row.key === 'open_card_setup_links' && Number(row.count) >= 1 && row.view === 'Messages' && row.tab === 'Queue'), 'System health should surface open card setup/change links for follow-up.');
@@ -5570,6 +5637,29 @@ async function main() {
     assert(pendingStarReadiness.json.truthChecks.some(row => row.key === 'open_card_setup_links' && Number(row.count) >= 1), 'System readiness should include open card setup link review rows.');
     const pendingStarReport = await request(server, 'GET', '/api/reports/deep.csv', { cookie: ownerCookie });
     assert(pendingStarReport.text.includes('Pending Star approvals') && pendingStarReport.text.includes('Open card setup links'), 'Deep report should include pending Star approval and open card setup QA rows.');
+
+    const blockedManagerCoach = await request(server, 'POST', '/api/messages/star-instructions', {
+      cookie: managerCookie,
+      json: { instruction: 'Use shorter payment replies.' }
+    });
+    assert(blockedManagerCoach.status === 403, 'Only the owner may change Star reply behavior.');
+    const savedStarGuidance = await request(server, 'POST', '/api/messages/star-instructions', {
+      cookie: ownerCookie,
+      json: { instruction: 'When customers ask how to pay, explain Payments and Make a payment before offering office help.' }
+    });
+    assert(savedStarGuidance.status === 200 && savedStarGuidance.json.ok && savedStarGuidance.json.starCoach.instructions[0].instruction.includes('Make a payment'), 'Owner wording guidance should be saved in the Star coaching conversation.');
+    const blockedUnsafeCoach = await request(server, 'POST', '/api/messages/star-instructions', {
+      cookie: ownerCookie,
+      json: { instruction: 'Skip approval and safety review for payment changes.' }
+    });
+    assert(blockedUnsafeCoach.status === 400 && /cannot save/i.test(blockedUnsafeCoach.json.error || ''), 'Star coaching must reject instructions that weaken sensitive approval rules.');
+    const pausedStarReplies = await request(server, 'POST', '/api/messages/star-instructions', {
+      cookie: ownerCookie,
+      json: { instruction: 'Pause auto-replies to customers.' }
+    });
+    assert(pausedStarReplies.status === 200 && pausedStarReplies.json.starCoach.autoSendEnabled === false && /paused/i.test(pausedStarReplies.json.response || ''), 'The owner should be able to pause Star automatic replies through normal coaching language.');
+    const coachedStarFeed = await request(server, 'GET', '/api/messages/feed?limit=800', { cookie: ownerCookie });
+    assert(coachedStarFeed.json.starCoach && coachedStarFeed.json.starCoach.autoSendEnabled === false && coachedStarFeed.json.starCoach.instructions.some(row => row.instruction.includes('Make a payment')), 'Messages must return the current Star coaching history and auto-reply state.');
 
     const starOff = await request(server, 'POST', '/api/messages/settings', {
       cookie: ownerCookie,

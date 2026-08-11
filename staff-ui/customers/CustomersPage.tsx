@@ -86,17 +86,42 @@ function dateInput(value?: string) {
   return match ? match[0] : '';
 }
 
+function rapidFrequency(value?: string) {
+  return /every (minute|hour)/i.test(String(value || ''));
+}
+
+function dateTimeInput(value?: string) {
+  const date = new Date(String(value || ''));
+  if (!Number.isFinite(date.getTime())) return '';
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 16);
+}
+
+function nextRapidInput(frequency: string) {
+  const date = new Date(Date.now() + (/hour/i.test(frequency) ? 60 : 1) * 60_000);
+  date.setSeconds(0, 0);
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 16);
+}
+
+function scheduleValue(frequency: string, value: string) {
+  if (!rapidFrequency(frequency)) return dateInput(value);
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : '';
+}
+
 function operationId() {
   return `staff-payment-${window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`}`;
 }
 
 function actionDraft(row: RecurringPaymentRecord | null, customer: CustomerRecord, action: PaymentAction): ActionDraft {
   const provider = /clover/i.test(String(row?.paymentProvider || row?.provider || '')) ? 'clover' : 'stripe';
+  const frequency = row?.frequency || 'Weekly';
   return {
     amount: String(row?.amount || customer.amount || ''),
-    frequency: row?.frequency || 'Weekly',
-    nextRun: dateInput(row?.nextRun),
-    chargeTime: row?.chargeTime || '18:00',
+    frequency,
+    nextRun: rapidFrequency(frequency) ? dateTimeInput(row?.nextRun) : dateInput(row?.nextRun),
+    chargeTime: rapidFrequency(frequency) ? '' : row?.chargeTime || '18:00',
     status: row?.status || 'Active',
     result: 'Paid',
     method: 'Paid outside app',
@@ -241,17 +266,21 @@ export function CustomersPage({ onNavigate, onOpenRental }: { onNavigate: (works
       if (paymentAction === 'new') {
         const vehicle = vehicles.find(row => row.id === paymentDraft.vehicleId);
         if (!vehicle || !paymentDraft.nextRun) throw new Error('Choose the exact vehicle and first charge date.');
+        const nextRun = scheduleValue(paymentDraft.frequency, paymentDraft.nextRun);
+        if (!nextRun) throw new Error(rapidFrequency(paymentDraft.frequency) ? 'Choose the exact first charge date and time.' : 'Choose the exact first charge date.');
         const tag = vehicle.plate || vehicle.stock || vehicle.tempTag || '';
-        const result = await createAutopay({ customer: draft.name || '', phone: draft.phone, email: draft.email, vehicle: vehicleTitle(vehicle), vehicleId: vehicle.id, vin: vehicle.vin, licensePlate: tag, plate: tag, tempTag: vehicle.tempTag, tracker: vehicle.tracker, amount, frequency: paymentDraft.frequency, nextRun: paymentDraft.nextRun, chargeTime: paymentDraft.chargeTime, notes: paymentDraft.note || 'Stripe setup created from the connected customer file.' });
+        const result = await createAutopay({ customer: draft.name || '', phone: draft.phone, email: draft.email, vehicle: vehicleTitle(vehicle), vehicleId: vehicle.id, vin: vehicle.vin, licensePlate: tag, plate: tag, tempTag: vehicle.tempTag, tracker: vehicle.tracker, amount, frequency: paymentDraft.frequency, nextRun, chargeTime: rapidFrequency(paymentDraft.frequency) ? '' : paymentDraft.chargeTime, notes: paymentDraft.note || 'Stripe setup created from the connected customer file.' });
         setGeneratedUrl(result.setupLink.url); setNotice('Stripe setup link created. No charge was made.');
       } else {
         if (!selectedSchedule) throw new Error('Choose the exact recurring plan first.');
         if (paymentAction === 'charge') {
-          const result = await chargeSavedCard({ recurringPaymentId: selectedSchedule.id, amount, nextRun: paymentDraft.nextRun, note: paymentDraft.note });
+          const nextRun = paymentDraft.nextRun ? scheduleValue(paymentDraft.frequency, paymentDraft.nextRun) : '';
+          const result = await chargeSavedCard({ recurringPaymentId: selectedSchedule.id, amount, nextRun, note: paymentDraft.note });
           setNotice(`${money(result.payment.amount)} ${result.payment.status || 'payment'} recorded for ${result.payment.customer || draft.name}.`);
         }
         if (paymentAction === 'result') {
-          const result = await recordManualPaymentResult({ recurringPaymentId: selectedSchedule.id, expectedUpdatedAt: selectedSchedule.updatedAt, operationId: paymentDraft.operationId, result: paymentDraft.result, amount, method: paymentDraft.method, nextRun: paymentDraft.nextRun, notes: paymentDraft.note });
+          const nextRun = paymentDraft.nextRun ? scheduleValue(paymentDraft.frequency, paymentDraft.nextRun) : '';
+          const result = await recordManualPaymentResult({ recurringPaymentId: selectedSchedule.id, expectedUpdatedAt: selectedSchedule.updatedAt, operationId: paymentDraft.operationId, result: paymentDraft.result, amount, method: paymentDraft.method, nextRun, notes: paymentDraft.note });
           setNotice(result.duplicate ? 'That exact payment result was already saved.' : `${paymentDraft.result} saved to the payment history.`);
         }
         if (paymentAction === 'link') {
@@ -274,7 +303,9 @@ export function CustomersPage({ onNavigate, onOpenRental }: { onNavigate: (works
         }
         if (paymentAction === 'edit') {
           if (!paymentDraft.nextRun) throw new Error('Choose the exact next charge date.');
-          await updateAutopay({ recurringPaymentId: selectedSchedule.id, nextRun: paymentDraft.nextRun, frequency: paymentDraft.frequency, amount, status: paymentDraft.status, chargeTime: paymentDraft.chargeTime, retryRule: 'Retry once then contact', autopayManagedBy: selectedSchedule.autopayManagedBy || 'WheelsonAuto', note: paymentDraft.note, autoChargeEnabled: paymentDraft.autoChargeEnabled });
+          const nextRun = scheduleValue(paymentDraft.frequency, paymentDraft.nextRun);
+          if (!nextRun) throw new Error(rapidFrequency(paymentDraft.frequency) ? 'Choose the exact next charge date and time.' : 'Choose the exact next charge date.');
+          await updateAutopay({ recurringPaymentId: selectedSchedule.id, nextRun, frequency: paymentDraft.frequency, amount, status: paymentDraft.status, chargeTime: rapidFrequency(paymentDraft.frequency) ? '' : paymentDraft.chargeTime, retryRule: 'Retry once then contact', autopayManagedBy: selectedSchedule.autopayManagedBy || 'WheelsonAuto', note: paymentDraft.note, autoChargeEnabled: paymentDraft.autoChargeEnabled });
           setNotice('Autopay amount, schedule, and charging state updated.');
         }
         if (paymentAction === 'remove') {
@@ -307,8 +338,8 @@ export function CustomersPage({ onNavigate, onOpenRental }: { onNavigate: (works
         {paymentAction === 'result' ? <><label>Result<select value={paymentDraft.result} onChange={event => setPaymentDraft({ ...paymentDraft, result: event.target.value })}><option>Paid</option><option>Pending</option><option>1x failed - retrying</option><option>2x failed - contact customer</option><option>Payment not found - check provider</option></select></label><label>Method<select value={paymentDraft.method} onChange={event => setPaymentDraft({ ...paymentDraft, method: event.target.value })}><option>Paid outside app</option><option>Stripe manual charge</option><option>Clover manual charge</option><option>Cash</option><option>Other</option></select></label></> : null}
         {paymentAction === 'link' ? <label>Reason<select value={paymentDraft.reason} onChange={event => setPaymentDraft({ ...paymentDraft, reason: event.target.value })}><option>Payment needs attention</option><option>Catch-up payment</option><option>One-time payment</option><option>Partial payment</option></select></label> : null}
         {paymentAction === 'card' ? <label>Secure provider<select value={paymentDraft.provider} onChange={event => setPaymentDraft({ ...paymentDraft, provider: event.target.value as 'stripe' | 'clover' })}><option value="stripe">Stripe</option><option value="clover">Clover</option></select></label> : null}
-        {['new', 'edit'].includes(paymentAction) ? <><label>Frequency<select value={paymentDraft.frequency} onChange={event => setPaymentDraft({ ...paymentDraft, frequency: event.target.value })}><option>Weekly</option><option>Bi-weekly</option><option>Monthly</option></select></label><label>Charge time<input type="time" value={paymentDraft.chargeTime} onChange={event => setPaymentDraft({ ...paymentDraft, chargeTime: event.target.value })} /></label></> : null}
-        {['new', 'charge', 'result', 'edit'].includes(paymentAction) ? <label>Next charge date<input type="date" value={paymentDraft.nextRun} onChange={event => setPaymentDraft({ ...paymentDraft, nextRun: event.target.value })} /></label> : null}
+        {['new', 'edit'].includes(paymentAction) ? <><label>Frequency<select value={paymentDraft.frequency} onChange={event => { const frequency = event.target.value; const rapid = rapidFrequency(frequency); setPaymentDraft({ ...paymentDraft, frequency, nextRun: rapid ? nextRapidInput(frequency) : dateInput(paymentDraft.nextRun) || dateInput(new Date().toISOString()), chargeTime: rapid ? '' : paymentDraft.chargeTime || '18:00' }); }}><option>Every minute</option><option>Every hour</option><option>Weekly</option><option>Bi-weekly</option><option>Monthly</option></select></label>{!rapidFrequency(paymentDraft.frequency) ? <label>Charge time<input type="time" value={paymentDraft.chargeTime} onChange={event => setPaymentDraft({ ...paymentDraft, chargeTime: event.target.value })} /></label> : <div className="rapid-schedule-note"><strong>Rapid interval</strong><span>The separate daily charge time is disabled. Each successful charge schedules the next exact interval.</span></div>}</> : null}
+        {['new', 'charge', 'result', 'edit'].includes(paymentAction) ? <label>{rapidFrequency(paymentDraft.frequency) ? 'Next charge date and time' : 'Next charge date'}<input type={rapidFrequency(paymentDraft.frequency) ? 'datetime-local' : 'date'} step={rapidFrequency(paymentDraft.frequency) ? '60' : undefined} value={paymentDraft.nextRun} onChange={event => setPaymentDraft({ ...paymentDraft, nextRun: event.target.value })} /></label> : null}
         {paymentAction === 'edit' ? <><label>Status<select value={paymentDraft.status} onChange={event => setPaymentDraft({ ...paymentDraft, status: event.target.value })}><option>Active</option><option>Pending</option><option>1x failed - retrying</option><option>2x failed - contact customer</option><option>Paused</option></select></label><label className="toggle-field"><input type="checkbox" checked={paymentDraft.autoChargeEnabled} onChange={event => setPaymentDraft({ ...paymentDraft, autoChargeEnabled: event.target.checked })} /> Automatic charging enabled</label></> : null}
         <label className="span-2">Internal note<textarea rows={3} value={paymentDraft.note} onChange={event => setPaymentDraft({ ...paymentDraft, note: event.target.value })} placeholder={paymentAction === 'remove' ? 'Why autopay is being removed' : 'Optional receipt, schedule, or customer context'} /></label>
         {setupAction || paymentAction === 'link' ? <label className="toggle-field span-2"><input type="checkbox" checked={paymentDraft.emailLink} disabled={!draft?.email} onChange={event => setPaymentDraft({ ...paymentDraft, emailLink: event.target.checked })} /> Email the secure link to {draft?.email || 'customer email not saved'}</label> : null}

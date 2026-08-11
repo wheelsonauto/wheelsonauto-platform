@@ -73,7 +73,7 @@ function main() {
     WOA_MESSAGING_ENABLED: '0',
     WOA_AI_AUTO_SEND: '1'
   });
-  ['DATABASE_NETWORK_SCOPE', 'WOA_TEST_DATABASE_URL', 'WOA_OBJECT_STORAGE_ENDPOINT', 'WOA_STATE_BACKUP_KEY_ISOLATION', 'STRIPE_SECRET_KEY', 'STRIPE_PUBLISHABLE_KEY', 'WOA_PAYMENT_PROVIDER', 'WOA_MESSAGING_ENABLED', 'WOA_AI_AUTO_SEND', 'WOA_AI_MAX_REQUESTS_PER_MONTH'].forEach(key => {
+  ['DATABASE_NETWORK_SCOPE', 'WOA_TEST_DATABASE_URL', 'WOA_OBJECT_STORAGE_ENDPOINT', 'WOA_STATE_BACKUP_KEY_ISOLATION', 'STRIPE_SECRET_KEY', 'STRIPE_PUBLISHABLE_KEY', 'WOA_PAYMENT_PROVIDER', 'WOA_MESSAGING_ENABLED', 'WOA_AI_MAX_REQUESTS_PER_MONTH'].forEach(key => {
     assert(unsafe.missing.includes(key), 'Unsafe production configuration must identify ' + key + '.');
   });
   assert.strictEqual(unsafe.ready, false, 'Unsafe production configuration must fail closed.');
