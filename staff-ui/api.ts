@@ -88,6 +88,12 @@ export async function draftStarReply(message: MessageRecord): Promise<{ ok: bool
     body: JSON.stringify({
       messageId: message.id,
       customer: message.customer || '',
+      customerAccountId: message.customerAccountId || '',
+      applicationId: message.applicationId || '',
+      customerId: message.customerId || '',
+      contractId: message.contractId || '',
+      recurringPaymentId: message.recurringPaymentId || '',
+      vehicleId: message.vehicleId || '',
       phone: message.phone || '',
       email: message.email || '',
       channel: message.channel || '',

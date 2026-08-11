@@ -11,6 +11,8 @@ export type MessageRecord = {
   customer?: string;
   customerId?: string;
   customerAccountId?: string;
+  applicationId?: string;
+  contractId?: string;
   phone?: string;
   email?: string;
   direction?: string;

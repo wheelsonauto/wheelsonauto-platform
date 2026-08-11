@@ -4288,6 +4288,12 @@ function scheduleCustomerPortalMessageFollowUp(messageId) {
           const aiResult = await createAiMessageDraft(data, {
             messageId: message.id,
             customer: message.customer,
+            customerAccountId: message.customerAccountId || '',
+            applicationId: message.applicationId || '',
+            customerId: message.customerId || '',
+            contractId: message.contractId || '',
+            recurringPaymentId: message.recurringPaymentId || '',
+            vehicleId: message.vehicleId || '',
             phone: message.phone,
             email: message.email,
             channel: 'Customer portal',
@@ -6117,6 +6123,8 @@ function messageContextFields(context = {}, payload = {}) {
   return {
     customer: context.customerName || payload.customer || payload.name || '',
     organizationId: context.organizationId || payload.organizationId || payload.orgId || payload.companyId || '',
+    customerAccountId: payload.customerAccountId || context.portalAccount && context.portalAccount.id || '',
+    applicationId: payload.applicationId || context.applications && context.applications[0] && context.applications[0].id || '',
     phone: context.phone || payload.phone || payload.from || payload.to || '',
     email: context.email || payload.email || '',
     customerId: customer.id || payload.customerId || '',
@@ -6691,6 +6699,8 @@ async function createAiMessageDraft(data, payload = {}, options = {}) {
     aiPlan: plan,
     aiSourceMessageId: duplicateKey,
     customerId: messageFields.customerId,
+    customerAccountId: messageFields.customerAccountId,
+    applicationId: messageFields.applicationId,
     contractId: messageFields.contractId,
     recurringPaymentId: plan.related && plan.related.recurringPaymentId || messageFields.recurringPaymentId,
     vehicleId: messageFields.vehicleId,
@@ -6782,7 +6792,7 @@ async function approveAiMessage(data, payload = {}) {
   if (plan.approvalRequired && payload.approveMoneyAction !== true) throw new Error('This AI item prepares a money or account change. Open the customer/payment action and approve it there.');
   const deliveryChannel = String(payload.channel || draft.deliveryChannel || (draft.email && !draft.phone ? 'Email' : 'SMS')).toLowerCase();
   const portalDelivery = ['customer portal', 'portal', 'customer app', 'in-app', 'in app'].includes(deliveryChannel);
-  const portalAccount = portalDelivery ? customerPortalAccountForName(data, draft.customer) : null;
+  const portalAccount = customerPortalAccountForMessage(data, draft);
   if (portalDelivery && !customerPortalLoginReady(portalAccount)) throw new Error('This customer needs an active portal login before Star can deliver an in-app reply.');
   const settings = messageSettings(data);
   const result = portalDelivery
@@ -6835,6 +6845,7 @@ async function approveAiMessage(data, payload = {}) {
     aiApprovedAt: new Date().toISOString(),
     aiDraftId: draft.id,
     customerAccountId: portalAccount && portalAccount.id || '',
+    applicationId: draft.applicationId || portalAccount && portalAccount.applicationId || '',
     customerId: draft.customerId || '',
     contractId: draft.contractId || '',
     recurringPaymentId: draft.recurringPaymentId || '',
@@ -9157,6 +9168,38 @@ function customerPortalAccountForName(data = {}, name = '') {
     return false;
   }) || null;
 }
+function customerPortalAccountForMessage(data = {}, message = {}) {
+  const accounts = (data.customerAccounts || []).filter(staffStatusActive);
+  const organizationId = String(message.organizationId || MAIN_ORG_ID);
+  const scoped = accounts.filter(account => rowOrganizationId(account) === organizationId);
+  const candidates = scoped.length ? scoped : accounts;
+  const directId = String(message.customerAccountId || '').trim();
+  if (directId) {
+    const direct = candidates.find(account => String(account.id || '') === directId);
+    if (direct) return direct;
+  }
+  const linkedIds = [
+    ['customerId', message.customerId],
+    ['applicationId', message.applicationId],
+    ['contractId', message.contractId],
+    ['recurringPaymentId', message.recurringPaymentId]
+  ].filter(([, value]) => String(value || '').trim());
+  for (const [field, value] of linkedIds) {
+    const matches = candidates.filter(account => String(account[field] || '') === String(value));
+    if (matches.length === 1) return matches[0];
+  }
+  const email = emailKey(message.email || '');
+  if (email) {
+    const matches = candidates.filter(account => emailKey(account.email || account.username) === email);
+    if (matches.length === 1) return matches[0];
+  }
+  const phone = phoneKey(message.phone || message.from || message.to || '');
+  if (phone) {
+    const matches = candidates.filter(account => phoneKey(account.phone) === phone);
+    if (matches.length === 1) return matches[0];
+  }
+  return customerPortalAccountForName(data, message.customer || message.name || '');
+}
 function customerPortalLoginReady(account = {}) {
   return !!(account && staffStatusActive(account) && account.passwordHash && account.passwordSalt);
 }
@@ -10423,6 +10466,12 @@ function customerPortalRecordMatches(row = {}, identity = {}, kind = '') {
   if (ids.vehicleId && row.vehicleId === ids.vehicleId && (!identity.pendingApplication || kind === 'vehicle')) return true;
   if (ids.recurringPaymentId && row.recurringPaymentId === ids.recurringPaymentId) return true;
   if (ids.cloverCustomerId && String(row.cloverCustomerId || row.customerId || '') === String(ids.cloverCustomerId)) return true;
+  if (kind === 'message') {
+    const rowPhone = phoneKey(row.phone || row.from || row.to || '');
+    if (rowPhone && identity.phones.includes(rowPhone)) return true;
+    const rowEmail = emailKey(row.email || row.from || row.to || '');
+    if (rowEmail && identity.emails.includes(rowEmail)) return true;
+  }
   if (identity.pendingApplication) return false;
   if (identity.applicationScoped) {
     const rowNames = [row.customer, row.name, row.currentCustomer, row.cardholderName, row.customerName].map(normKey).filter(Boolean);
@@ -28349,6 +28398,12 @@ const server = http.createServer(async (req, res) => {
       const request = {
         ...payload,
         customer: payload.customer || (sourceMessage && sourceMessage.customer) || '',
+        customerAccountId: payload.customerAccountId || (sourceMessage && sourceMessage.customerAccountId) || '',
+        applicationId: payload.applicationId || (sourceMessage && sourceMessage.applicationId) || '',
+        customerId: payload.customerId || (sourceMessage && sourceMessage.customerId) || '',
+        contractId: payload.contractId || (sourceMessage && sourceMessage.contractId) || '',
+        recurringPaymentId: payload.recurringPaymentId || (sourceMessage && sourceMessage.recurringPaymentId) || '',
+        vehicleId: payload.vehicleId || (sourceMessage && sourceMessage.vehicleId) || '',
         phone: payload.phone || (sourceMessage && (sourceMessage.phone || sourceMessage.from || sourceMessage.to)) || '',
         email: payload.email || (sourceMessage && sourceMessage.email) || '',
         channel: payload.channel || (sourceMessage && ['Email', 'Customer portal'].includes(sourceMessage.channel) ? sourceMessage.channel : ''),
@@ -28439,6 +28494,8 @@ const server = http.createServer(async (req, res) => {
               source: 'Star AI + ' + pendingChannel + ' provider confirmation',
               aiApprovedAt: now,
               aiDraftId: pendingDraft.id,
+              customerAccountId: pendingDraft.customerAccountId || '',
+              applicationId: pendingDraft.applicationId || '',
               customerId: pendingDraft.customerId || '',
               contractId: pendingDraft.contractId || '',
               recurringPaymentId: pendingDraft.recurringPaymentId || '',

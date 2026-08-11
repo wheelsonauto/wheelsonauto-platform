@@ -89,7 +89,8 @@ assert(worker.includes("key.startsWith('wheelsonauto-customer-shell-')") && staf
 async function run() {
   data.messages.unshift({
     id: 'star-draft-portal',
-    customer: 'Portal Customer',
+    customer: 'Portal Customer via email',
+    customerAccountId: account.id,
     email: account.email,
     phone: account.phone,
     direction: 'AI draft',
@@ -104,6 +105,10 @@ async function run() {
   assert.strictEqual(delivered.sent.channel, 'Customer portal');
   assert.strictEqual(delivered.sent.provider, 'wheelsonauto');
   assert.strictEqual(delivered.sent.customerAccountId, account.id);
+  data.messages.unshift({ id: 'historical-star-email', customer: 'Portal Customer email alias', email: account.email, direction: 'Outbound', channel: 'Email', status: 'Sent', body: 'Earlier Star email reply', createdAt: '2026-07-21T10:02:00.000Z' });
+  const portalAfterStar = server.customerPortalState(data, account);
+  assert(portalAfterStar.messages.some(message => message.id === delivered.sent.id && message.body === 'Your WheelsonAuto account message is ready.'), 'A Star reply must be persisted in the exact customer app conversation even when its display name differs.');
+  assert(portalAfterStar.messages.some(message => message.id === 'historical-star-email'), 'An earlier Star email reply with the account email must also appear in the unified in-app conversation.');
   const duplicate = await server.approveAiMessage(data, { draftId: 'star-draft-portal' });
   assert.strictEqual(duplicate.duplicate, true, 'Repeated Star approval must reuse the first in-app delivery.');
   assert.strictEqual(duplicate.result.sent, true, 'An existing in-app delivery must remain recognized as delivered.');
@@ -137,6 +142,7 @@ async function run() {
   assert(source.includes("url.pathname === '/api/messages/feed'"), 'Staff conversations need a small authenticated feed instead of repeatedly downloading the full platform state.');
   assert(source.includes('scheduleCustomerPortalMessageFollowUp(message.id)'), 'Customer message AI and owner-email follow-up must run after the inbound message is safely saved.');
   assert(source.includes("id: 'msg-ai-queued-'") && source.includes('portalQueuedStarDraftId'), 'A saved customer message must expose an immediate internal Star placeholder while the full draft is prepared.');
+  assert(source.includes('customerAccountId: message.customerAccountId') && source.includes('customerAccountId: payload.customerAccountId || (sourceMessage && sourceMessage.customerAccountId)'), 'Automatic and staff-requested Star replies must carry the exact portal account identity from the source message.');
   assert(source.includes("record.notificationEmailStatus = 'Queued'"), 'Customer-app delivery must not wait for its optional email notification.');
   assert(staffShell.includes("new EventSource('/api/events')") && staffShell.includes('loadNotifications(controller.signal, force)') && staffShell.includes('refresh(true)'), 'Staff alerts must update in-app and bypass their read cache when a live platform event arrives.');
   assert(staffStyles.includes('env(safe-area-inset-top)') && staffStyles.includes('body:has(.next-messages.has-thread) .staff-topbar,body:has(.next-messages.has-thread) .staff-mobile-nav{display:none}') && staffStyles.includes('grid-template-rows:minmax(0,1fr);padding-top:env(safe-area-inset-top)'), 'Staff phone conversations must stay below the camera area and hide duplicate chrome while replying.');
