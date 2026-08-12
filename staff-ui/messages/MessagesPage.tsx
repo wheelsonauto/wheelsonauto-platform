@@ -31,6 +31,11 @@ function internalStarDraft(message: MessageRecord): boolean {
   return /AI draft|AI action/i.test(message.direction || '') || /Star AI/i.test(message.channel || '');
 }
 
+function internalNotification(message: MessageRecord): boolean {
+  return /outbound notification/i.test(message.direction || '')
+    || /WheelsonAuto email notification/i.test(message.source || '');
+}
+
 function buildThreads(messages: MessageRecord[]): MessageThread[] {
   const parents = messages.map((_, index) => index);
   const identityOwner = new Map<string, number>();
@@ -68,9 +73,10 @@ function buildThreads(messages: MessageRecord[]): MessageThread[] {
 
   return [...groups.values()].map(rows => {
     const ordered = rows.slice().sort((a, b) => timeValue(a) - timeValue(b));
-    const visible = ordered.filter(message => !internalStarDraft(message));
+    const visible = ordered.filter(message => !internalStarDraft(message) && !internalNotification(message));
     const latest = visible[visible.length - 1] || ordered[ordered.length - 1];
     const contact = ordered.slice().reverse().find(row => row.phone || row.email || row.customerAccountId) || latest;
+    const accountIdentity = ordered.slice().reverse().find(row => row.customerAccountId);
     const named = ordered.slice().reverse().find(row => row.customer && !/^unknown customer$/i.test(row.customer)) || latest;
     const reviewRows = ordered.filter(starReviewRequired);
     const identities = ordered.flatMap(contactKeys);
@@ -80,7 +86,7 @@ function buildThreads(messages: MessageRecord[]): MessageThread[] {
       customer: named.customer || contact.customer || 'Unknown customer',
       phone: contact.phone || '',
       email: contact.email || '',
-      customerAccountId: contact.customerAccountId || '',
+      customerAccountId: accountIdentity?.customerAccountId || contact.customerAccountId || '',
       messages: ordered,
       latest,
       unread: ordered.filter(row => /inbound/i.test(row.direction || '') && !/read/i.test(row.status || '')).length,
@@ -190,7 +196,7 @@ export function MessagesPage() {
   useEffect(() => {
     if (!selected) return;
     const channels = availableChannels(selected);
-    if (!channels.includes(channel)) setChannel(channels[0]);
+    setChannel(channels.includes('Customer portal') ? 'Customer portal' : channels[0]);
     requestAnimationFrame(() => messageEnd.current?.scrollIntoView({ block: 'end' }));
   }, [selected?.key, selected?.messages.length]);
 
@@ -320,7 +326,7 @@ export function MessagesPage() {
           <button className="star-button" onClick={askStar} disabled={starLoading}>{starLoading ? 'Drafting...' : 'Star draft'}</button>
         </header>
         <div className="message-history">
-          {selected.messages.filter(message => inboxView === 'star' || !internalStarDraft(message)).map(message => {
+          {selected.messages.filter(message => !internalNotification(message) && (inboxView === 'star' || !internalStarDraft(message))).map(message => {
             const inbound = /inbound|customer action/i.test(message.direction || '');
             const star = /star|ai/i.test([message.channel, message.direction, message.provider].join(' '));
             return <article key={message.id} className={`bubble ${inbound ? 'inbound' : 'outbound'} ${star ? 'star' : ''}`}>

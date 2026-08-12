@@ -27822,6 +27822,8 @@ const server = http.createServer(async (req, res) => {
       const requestedLimit = Number(url.searchParams.get('limit') || 600);
       const limit = Math.max(50, Math.min(800, Number.isFinite(requestedLimit) ? requestedLimit : 600));
       const scoped = filterRowsForUserOrganization(data.messages || [], user)
+        .filter(message => !/outbound notification/i.test(String(message && message.direction || '')))
+        .filter(message => !/WheelsonAuto email notification/i.test(String(message && message.source || '')))
         .slice()
         .sort((left, right) => new Date(right.createdAt || right.date || 0).getTime() - new Date(left.createdAt || left.date || 0).getTime())
         .slice(0, limit);

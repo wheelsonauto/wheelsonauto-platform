@@ -25,6 +25,7 @@ export type MessageRecord = {
   createdAt?: string;
   date?: string;
   provider?: string;
+  source?: string;
   vehicleId?: string;
   recurringPaymentId?: string;
   aiPlan?: { approvalRequired?: boolean; needsHuman?: boolean };

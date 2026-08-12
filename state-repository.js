@@ -2880,9 +2880,17 @@ class PostgresStateRepository {
       if (existing.rowCount) assertChecksum(existing.rows[0].state, existing.rows[0].checksum, 'Current PostgreSQL state');
       const previous = existing.rowCount ? this.repair(clone(existing.rows[0].state)) : this.repair(await this.seed());
       const merged = options.mergeState ? await options.mergeState(clone(previous)) : incomingState;
-      const next = this.repair(clone(merged));
+      let next = this.repair(clone(merged));
       const fastMessagingWrite = options.fastMessagingWrite === true;
-      if (fastMessagingWrite) assertFastMessagingStateChange(previous, next);
+      if (fastMessagingWrite) {
+        const scopedNext = clone(previous);
+        FAST_MESSAGING_STATE_KEYS.forEach(key => {
+          if (Object.prototype.hasOwnProperty.call(next, key)) scopedNext[key] = clone(next[key]);
+          else delete scopedNext[key];
+        });
+        next = this.repair(scopedNext);
+        assertFastMessagingStateChange(previous, next);
+      }
       const nextVersion = (existing.rowCount ? Number(existing.rows[0].version || 0) : 0) + 1;
       const nextChecksum = checksum(next);
       await client.query(`INSERT INTO woa_state (organization_id, state, version, checksum, created_at, updated_at)
