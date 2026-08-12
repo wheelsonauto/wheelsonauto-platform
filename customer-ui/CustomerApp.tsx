@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { loadCustomerNotifications, loadCustomerPortal, markCustomerNotificationsRead, sendCustomerMessage, uploadCustomerDocument } from './api';
+import { useEffect, useMemo, useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from 'react';
+import { loadCustomerMessages, loadCustomerNotifications, loadCustomerPortal, markCustomerNotificationsRead, sendCustomerMessage, uploadCustomerDocument } from './api';
 import type { CustomerNotification, CustomerPortal, PortalRecord } from './types';
 import { useSwipeTabs } from '../staff-ui/useSwipeTabs';
 
@@ -137,7 +137,7 @@ function HomePage({ portal, onNavigate }: { portal: CustomerPortal; onNavigate: 
   </main>;
 }
 
-function MessagesPage({ portal, onPortal, onBack }: { portal: CustomerPortal; onPortal: (next: CustomerPortal) => void; onBack: () => void }) {
+function MessagesPage({ portal, onPortal, onBack }: { portal: CustomerPortal; onPortal: Dispatch<SetStateAction<CustomerPortal>>; onBack: () => void }) {
   const [body, setBody] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
@@ -158,12 +158,12 @@ function MessagesPage({ portal, onPortal, onBack }: { portal: CustomerPortal; on
       createdAt: new Date().toISOString()
     };
     setSending(true); setError(''); setBody('');
-    onPortal({ ...portal, messages: [optimistic, ...portal.messages] });
-    try {
-      const result = await sendCustomerMessage(text, deliveryId);
-      onPortal(result.portal);
-    } catch (reason) {
-      onPortal(portal);
+	    onPortal(current => ({ ...current, messages: [optimistic, ...current.messages.filter(row => row.id !== optimistic.id)] }));
+	    try {
+	      const result = await sendCustomerMessage(text, deliveryId);
+	      onPortal(current => ({ ...current, messages: [result.message, ...current.messages.filter(row => row.id !== optimistic.id && row.id !== result.message.id)] }));
+	    } catch (reason) {
+	      onPortal(current => ({ ...current, messages: current.messages.filter(row => row.id !== optimistic.id) }));
       setBody(current => current || text);
       setError(reason instanceof Error ? reason.message : 'Message could not be sent.');
     } finally { setSending(false); }
@@ -276,9 +276,20 @@ export function CustomerApp() {
     catch (reason) { if (!(reason instanceof DOMException && reason.name === 'AbortError')) setError(reason instanceof Error ? reason.message : 'Account could not be refreshed.'); }
     finally { setLoading(false); }
   };
-  const refreshNotifications = async (signal?: AbortSignal) => {
+	  const refreshNotifications = async (signal?: AbortSignal) => {
     try { const feed = await loadCustomerNotifications(signal); setNotifications(feed.notifications || []); setUnread(Number(feed.unreadCount || 0)); } catch { /* next event retries */ }
-  };
+	  };
+	  const refreshMessages = async (signal?: AbortSignal) => {
+	    try {
+	      const feed = await loadCustomerMessages(signal);
+	      setPortal(current => {
+	        const feedIds = new Set((feed.messages || []).map(row => String(row.id || '')));
+	        const optimistic = current.messages.filter(row => String(row.id || '').startsWith('sending-') && !feedIds.has(String(row.id || '')));
+	        const retained = current.messages.filter(row => !feedIds.has(String(row.id || '')) && !String(row.id || '').startsWith('sending-'));
+	        return { ...current, messages: [...optimistic, ...(feed.messages || []), ...retained] };
+	      });
+	    } catch { /* the next live event retries the feed */ }
+	  };
   useEffect(() => {
     const onHash = () => setTab(routeFromHash());
     onHash(); window.addEventListener('hashchange', onHash); return () => window.removeEventListener('hashchange', onHash);
@@ -294,18 +305,24 @@ export function CustomerApp() {
     let refreshTimer = 0;
     let refreshInFlight = false;
     let refreshQueued = false;
-    const runLiveRefresh = async () => {
-      if (refreshInFlight) { refreshQueued = true; return; }
-      refreshInFlight = true;
-      await Promise.all([refresh(), refreshNotifications()]);
-      refreshInFlight = false;
-      if (refreshQueued) { refreshQueued = false; scheduleLiveRefresh(); }
-    };
-    const scheduleLiveRefresh = () => {
-      window.clearTimeout(refreshTimer);
-      refreshTimer = window.setTimeout(() => { void runLiveRefresh(); }, 120);
-    };
-    events.addEventListener('platform', scheduleLiveRefresh);
+	    const runLiveRefresh = async (messagesOnly = false) => {
+	      if (refreshInFlight) { refreshQueued = true; return; }
+	      refreshInFlight = true;
+	      await (messagesOnly ? Promise.all([refreshMessages(), refreshNotifications()]) : Promise.all([refresh(), refreshNotifications()]));
+	      refreshInFlight = false;
+	      if (refreshQueued) { refreshQueued = false; scheduleLiveRefresh(); }
+	    };
+	    const scheduleLiveRefresh = (messagesOnly = false) => {
+	      window.clearTimeout(refreshTimer);
+	      refreshTimer = window.setTimeout(() => { void runLiveRefresh(messagesOnly); }, 80);
+	    };
+	    events.addEventListener('platform', (event: MessageEvent) => {
+	      try {
+	        const payload = JSON.parse(event.data || '{}');
+	        const topics = Array.isArray(payload.topics) ? payload.topics : [];
+	        scheduleLiveRefresh(topics.length > 0 && topics.every((topic: string) => topic === 'messages'));
+	      } catch { scheduleLiveRefresh(); }
+	    });
     return () => { controller.abort(); events.close(); window.clearTimeout(refreshTimer); };
   }, []);
   const markRead = async (rows: CustomerNotification[]) => {

@@ -21,6 +21,7 @@
     "style-check": "node scripts/responsive-style-check.js",
     "channel-check": "node scripts/messaging-channel-check.js",
     "first-party-messaging-check": "node --check scripts/first-party-messaging-check.js && node scripts/first-party-messaging-check.js",
+    "realtime-message-ledger-check": "node --check scripts/realtime-message-ledger-check.js && node scripts/realtime-message-ledger-check.js",
     "star-safety-check": "node scripts/star-safety-check.js",
     "star-tools-check": "node --check star-tools.js && node --check scripts/star-tools-check.js && node scripts/star-tools-check.js",
     "operations-readiness-check": "node scripts/operations-readiness-check.js",

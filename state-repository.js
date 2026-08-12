@@ -527,6 +527,54 @@ function normalizedIdentity(value) {
   return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
+function normalizedMessagePhone(value) {
+  return String(value || '').replace(/\D/g, '').slice(-10);
+}
+
+function messageLedgerFields(record = {}) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) {
+    const error = new Error('A message ledger record must be an object.');
+    error.code = 'woa_message_payload_invalid';
+    throw error;
+  }
+  const id = String(record.id || '').trim();
+  if (!id) {
+    const error = new Error('A stable message id is required.');
+    error.code = 'woa_message_identity_missing';
+    throw error;
+  }
+  const payload = clone(record);
+  return {
+    id,
+    customerAccountId: String(record.customerAccountId || '').trim(),
+    customerId: String(record.customerId || '').trim(),
+    customerKey: normalizedIdentity(record.customer || record.customerName || ''),
+    phoneKey: normalizedMessagePhone(record.phone || record.from || record.to || ''),
+    emailKey: normalizedIdentity(record.email || ''),
+    direction: String(record.direction || '').trim().slice(0, 80),
+    channel: String(record.channel || '').trim().slice(0, 80),
+    deliveryId: String(record.providerIdempotencyKey || record.deliveryId || '').trim().slice(0, 240),
+    payload,
+    payloadChecksum: checksum(payload)
+  };
+}
+
+function mergeMessageLedgerRows(canonical = [], ledger = []) {
+  const rows = Array.isArray(canonical) ? canonical.map(clone) : [];
+  const seen = new Set(rows.map(row => String(row && row.id || '')).filter(Boolean));
+  (Array.isArray(ledger) ? ledger : []).forEach(record => {
+    const id = String(record && record.id || '').trim();
+    if (!id || seen.has(id)) return;
+    seen.add(id);
+    rows.push(clone(record));
+  });
+  return rows.sort((left, right) => {
+    const leftTime = Date.parse(left && (left.createdAt || left.date) || '') || 0;
+    const rightTime = Date.parse(right && (right.createdAt || right.date) || '') || 0;
+    return rightTime - leftTime || String(right && right.id || '').localeCompare(String(left && left.id || ''));
+  });
+}
+
 function rowId(row, fallback) {
   return String(row && (row.id || row.paymentRequestId || row.recurringPaymentId || row.providerPaymentId || row.stripePaymentIntentId || row.cloverPaymentId || row.cloverSubscriptionId || row.subscriptionId || row.externalCaseId || row.providerCaseId) || fallback || '').trim();
 }
@@ -1391,6 +1439,7 @@ class JsonStateRepository {
     this.jobErrorFile = options.jobErrorFile || (this.dataFile ? this.dataFile + '.job-errors.json' : '');
     this.jobErrorLimit = Math.max(10, Math.min(250, Number(options.jobErrorLimit || 80)));
     this.jobErrorWrite = Promise.resolve();
+    this.messageLedger = new Map();
   }
 
   isTransactional() {
@@ -1400,6 +1449,7 @@ class JsonStateRepository {
   async read() {
     try {
       const raw = JSON.parse(await fs.readFile(this.dataFile, 'utf8'));
+      raw.messages = mergeMessageLedgerRows(raw.messages, [...this.messageLedger.values()]);
       return { state: this.repair(raw), version: await this.version(), exists: true };
     } catch {
       try {
@@ -1409,6 +1459,67 @@ class JsonStateRepository {
         return { state: {}, version: 'missing', exists: false };
       }
     }
+  }
+
+  async readMessageData(options = {}) {
+    const snapshot = await this.read();
+    const accountId = String(options.customerAccountId || '').trim();
+    const limit = Math.max(1, Math.min(2000, Number(options.limit || 800)));
+    const messages = (Array.isArray(snapshot.state.messages) ? snapshot.state.messages : [])
+      .filter(row => !accountId || String(row && row.customerAccountId || '') === accountId)
+      .slice()
+      .sort((left, right) => (Date.parse(right && (right.createdAt || right.date) || '') || 0) - (Date.parse(left && (left.createdAt || left.date) || '') || 0))
+      .slice(0, limit);
+    return { messages, messaging: clone(snapshot.state.integrations && snapshot.state.integrations.messaging || {}) };
+  }
+
+  async persistMessage(record) {
+    const fields = messageLedgerFields(record);
+    const inMemory = [...this.messageLedger.values()].find(row => String(row && row.id || '') === fields.id
+      || fields.deliveryId && String(row && row.providerIdempotencyKey || '') === fields.deliveryId);
+    if (inMemory) return { message: clone(inMemory), duplicate: true, revision: await this.version() };
+    const snapshot = await this.read();
+    const state = snapshot.state || {};
+    state.messages = Array.isArray(state.messages) ? state.messages : [];
+    const existing = state.messages.find(row => String(row && row.id || '') === fields.id
+      || fields.deliveryId && String(row && row.providerIdempotencyKey || '') === fields.deliveryId);
+    if (existing) return { message: clone(existing), duplicate: true, revision: snapshot.version };
+    this.messageLedger.set(fields.id, clone(fields.payload));
+    state.messages.unshift(fields.payload);
+    let written;
+    try {
+      written = await this.write(state, { reason: 'message ledger append' });
+    } catch (error) {
+      this.messageLedger.delete(fields.id);
+      throw error;
+    }
+    return { message: clone(fields.payload), duplicate: false, revision: written && written.version || await this.version() };
+  }
+
+  async readCustomerAccount(accountId) {
+    const snapshot = await this.read();
+    return clone((snapshot.state.customerAccounts || []).find(row => String(row && row.id || '') === String(accountId || '').trim()) || null);
+  }
+
+  async readCustomerMessageContext(identity = {}) {
+    const snapshot = await this.read();
+    const state = snapshot.state || {};
+    const find = (collection, id) => clone((state[collection] || []).find(row => String(row && row.id || '') === String(id || '').trim()) || null);
+    return {
+      recurring: find('recurringPayments', identity.recurringPaymentId),
+      vehicle: find('vehicles', identity.vehicleId),
+      customer: find('customers', identity.customerId),
+      contract: find('contracts', identity.contractId)
+    };
+  }
+
+  async readStaffAuthState() {
+    const snapshot = await this.read();
+    return {
+      staffAccounts: clone(snapshot.state.staffAccounts || []),
+      organizations: clone(snapshot.state.organizations || []),
+      ownerLogin: clone(snapshot.state.security && snapshot.state.security.ownerLogin || {})
+    };
   }
 
   async version() {
@@ -2186,6 +2297,26 @@ class PostgresStateRepository {
         await client.query('CREATE INDEX IF NOT EXISTS woa_resources_org_customer_idx ON woa_resources (organization_id, customer_key, resource_type) WHERE customer_key <> \'\'');
         await client.query('CREATE INDEX IF NOT EXISTS woa_resources_org_vehicle_idx ON woa_resources (organization_id, vehicle_id, resource_type) WHERE vehicle_id <> \'\'');
         await client.query('CREATE INDEX IF NOT EXISTS woa_resources_org_status_idx ON woa_resources (organization_id, resource_type, status) WHERE status <> \'\'');
+        await client.query(`CREATE TABLE IF NOT EXISTS woa_message_ledger (
+          organization_id TEXT NOT NULL REFERENCES woa_state(organization_id) ON DELETE CASCADE,
+          id TEXT NOT NULL,
+          customer_account_id TEXT NOT NULL DEFAULT '',
+          customer_id TEXT NOT NULL DEFAULT '',
+          customer_key TEXT NOT NULL DEFAULT '',
+          phone_key TEXT NOT NULL DEFAULT '',
+          email_key TEXT NOT NULL DEFAULT '',
+          direction TEXT NOT NULL DEFAULT '',
+          channel TEXT NOT NULL DEFAULT '',
+          delivery_id TEXT NOT NULL DEFAULT '',
+          payload JSONB NOT NULL CHECK (jsonb_typeof(payload) = 'object'),
+          payload_checksum TEXT NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          PRIMARY KEY (organization_id, id)
+        )`);
+        await client.query("CREATE UNIQUE INDEX IF NOT EXISTS woa_message_ledger_delivery_unique ON woa_message_ledger (organization_id, delivery_id) WHERE delivery_id <> ''");
+        await client.query('CREATE INDEX IF NOT EXISTS woa_message_ledger_account_created_idx ON woa_message_ledger (organization_id, customer_account_id, created_at DESC)');
+        await client.query('CREATE INDEX IF NOT EXISTS woa_message_ledger_created_idx ON woa_message_ledger (organization_id, created_at DESC)');
         await client.query(`CREATE TABLE IF NOT EXISTS woa_rental_files (
           organization_id TEXT NOT NULL REFERENCES woa_state(organization_id) ON DELETE CASCADE,
           id TEXT NOT NULL,
@@ -2343,14 +2474,120 @@ class PostgresStateRepository {
 
   async read() {
     await this.ensureSchema();
-    const result = await this.pool.query('SELECT state, version, checksum FROM woa_state WHERE organization_id = $1', [this.organizationId]);
+    const [result, ledgerResult] = await Promise.all([
+      this.pool.query('SELECT state, version, checksum FROM woa_state WHERE organization_id = $1', [this.organizationId]),
+      this.pool.query('SELECT payload FROM woa_message_ledger WHERE organization_id = $1 ORDER BY created_at DESC LIMIT 2000', [this.organizationId])
+    ]);
     if (!result.rowCount) {
       const state = this.repair(await this.seed());
       return { state, version: 0, checksum: checksum(state), exists: false };
     }
     const row = result.rows[0];
     assertChecksum(row.state, row.checksum, 'PostgreSQL state');
-    return { state: this.repair(clone(row.state)), version: Number(row.version || 0), checksum: row.checksum || checksum(row.state), exists: true };
+    const state = clone(row.state);
+    state.messages = mergeMessageLedgerRows(state.messages, ledgerResult.rows.map(item => item.payload));
+    return { state: this.repair(state), version: Number(row.version || 0), checksum: row.checksum || checksum(row.state), exists: true };
+  }
+
+  async readMessageData(options = {}) {
+    await this.ensureSchema();
+    const accountId = String(options.customerAccountId || '').trim();
+    const limit = Math.max(1, Math.min(2000, Number(options.limit || 800)));
+    const ledgerParams = [this.organizationId, limit];
+    const accountClause = accountId ? ' AND customer_account_id = $3' : '';
+    if (accountId) ledgerParams.push(accountId);
+    const resourceParams = [this.organizationId, limit];
+    const resourceAccountClause = accountId ? " AND payload->>'customerAccountId' = $3" : '';
+    if (accountId) resourceParams.push(accountId);
+    const [resourceResult, ledgerResult, settingsResult] = await Promise.all([
+      this.pool.query(`SELECT payload FROM woa_resources
+        WHERE organization_id = $1 AND resource_type = 'message'${resourceAccountClause}
+        ORDER BY updated_at DESC LIMIT $2`, resourceParams),
+      this.pool.query(`SELECT payload FROM woa_message_ledger
+        WHERE organization_id = $1${accountClause}
+        ORDER BY created_at DESC LIMIT $2`, ledgerParams),
+      this.pool.query("SELECT COALESCE(state #> '{integrations,messaging}', '{}'::jsonb) AS messaging FROM woa_state WHERE organization_id = $1", [this.organizationId])
+    ]);
+    return {
+      messages: mergeMessageLedgerRows(resourceResult.rows.map(row => row.payload), ledgerResult.rows.map(row => row.payload)).slice(0, limit),
+      messaging: clone(settingsResult.rows[0] && settingsResult.rows[0].messaging || {})
+    };
+  }
+
+  async persistMessage(record) {
+    await this.ensureSchema();
+    const fields = messageLedgerFields(record);
+    const params = [
+      this.organizationId,
+      fields.id,
+      fields.customerAccountId,
+      fields.customerId,
+      fields.customerKey,
+      fields.phoneKey,
+      fields.emailKey,
+      fields.direction,
+      fields.channel,
+      fields.deliveryId,
+      JSON.stringify(fields.payload),
+      fields.payloadChecksum
+    ];
+    try {
+      const inserted = await this.pool.query(`INSERT INTO woa_message_ledger (
+          organization_id, id, customer_account_id, customer_id, customer_key, phone_key, email_key,
+          direction, channel, delivery_id, payload, payload_checksum, created_at, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, now(), now())
+        ON CONFLICT (organization_id, id) DO NOTHING
+        RETURNING payload, updated_at`, params);
+      if (inserted.rowCount) return { message: clone(inserted.rows[0].payload), duplicate: false, revision: inserted.rows[0].updated_at };
+    } catch (error) {
+      if (String(error && error.code || '') !== '23505') throw error;
+    }
+    const existing = await this.pool.query(`SELECT payload, updated_at FROM woa_message_ledger
+      WHERE organization_id = $1 AND (id = $2 OR ($3 <> '' AND delivery_id = $3))
+      ORDER BY CASE WHEN id = $2 THEN 0 ELSE 1 END LIMIT 1`, [this.organizationId, fields.id, fields.deliveryId]);
+    if (!existing.rowCount) throw new Error('The message ledger rejected a duplicate but could not recover the original message.');
+    return { message: clone(existing.rows[0].payload), duplicate: true, revision: existing.rows[0].updated_at };
+  }
+
+  async readCustomerAccount(accountId) {
+    await this.ensureSchema();
+    const result = await this.pool.query(`SELECT payload FROM woa_resources
+      WHERE organization_id = $1 AND resource_type = 'customer_account' AND resource_id = $2`, [this.organizationId, String(accountId || '').trim()]);
+    return clone(result.rows[0] && result.rows[0].payload || null);
+  }
+
+  async readCustomerMessageContext(identity = {}) {
+    await this.ensureSchema();
+    const ids = {
+      recurring_payment: String(identity.recurringPaymentId || '').trim(),
+      vehicle: String(identity.vehicleId || '').trim(),
+      customer: String(identity.customerId || '').trim(),
+      customer_file: String(identity.contractId || '').trim()
+    };
+    const requested = Object.entries(ids).filter(([, id]) => id).map(([resourceType, resourceId]) => ({ resourceType, resourceId }));
+    if (!requested.length) return { recurring: null, vehicle: null, customer: null, contract: null };
+    const result = await this.pool.query(`SELECT resource_type, payload FROM woa_resources
+      WHERE organization_id = $1 AND (resource_type, resource_id) IN (
+        SELECT item->>'resourceType', item->>'resourceId' FROM jsonb_array_elements($2::jsonb) item
+      )`, [this.organizationId, JSON.stringify(requested)]);
+    const byType = new Map(result.rows.map(row => [String(row.resource_type || ''), clone(row.payload)]));
+    return {
+      recurring: byType.get('recurring_payment') || null,
+      vehicle: byType.get('vehicle') || null,
+      customer: byType.get('customer') || null,
+      contract: byType.get('customer_file') || null
+    };
+  }
+
+  async readStaffAuthState() {
+    await this.ensureSchema();
+    const result = await this.pool.query(`SELECT
+      COALESCE(state->'staffAccounts', '[]'::jsonb) AS staff_accounts,
+      COALESCE(state->'organizations', '[]'::jsonb) AS organizations,
+      COALESCE(state #> '{security,ownerLogin}', '{}'::jsonb) AS owner_login
+      FROM woa_state WHERE organization_id = $1`, [this.organizationId]);
+    const row = result.rows[0] || {};
+    return { staffAccounts: clone(row.staff_accounts || []), organizations: clone(row.organizations || []), ownerLogin: clone(row.owner_login || {}) };
   }
 
   async version() {

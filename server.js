@@ -1261,6 +1261,35 @@ async function writeMessagingData(data, reason, organizationId = MAIN_ORG_ID) {
   stageFastMessagingWrite(data, reason, organizationId);
   return writeData(data);
 }
+async function readRealtimeMessageData(options = {}) {
+  if (STATE_REPOSITORY && typeof STATE_REPOSITORY.readMessageData === 'function') {
+    return STATE_REPOSITORY.readMessageData(options);
+  }
+  const data = await readViewData();
+  const accountId = String(options.customerAccountId || '').trim();
+  return {
+    messages: (Array.isArray(data.messages) ? data.messages : []).filter(row => !accountId || String(row && row.customerAccountId || '') === accountId),
+    messaging: cloneConcurrentValue(data.integrations && data.integrations.messaging || {})
+  };
+}
+async function persistRealtimeMessage(record, options = {}) {
+  if (!STATE_REPOSITORY || typeof STATE_REPOSITORY.persistMessage !== 'function') {
+    const data = await readData();
+    data.messages = Array.isArray(data.messages) ? data.messages : [];
+    data.messages.unshift(record);
+    await writeMessagingData(data, options.reason || 'message received', options.organizationId || record.organizationId || MAIN_ORG_ID);
+    return { message: record, duplicate: false, revision: await dataVersion() };
+  }
+  const saved = await STATE_REPOSITORY.persistMessage(record);
+  publishPlatformEvent({
+    type: 'state.changed',
+    organizationId: options.organizationId || record.organizationId || MAIN_ORG_ID,
+    version: String(saved && saved.revision || ''),
+    reason: options.reason || 'message received',
+    topics: ['messages']
+  });
+  return saved;
+}
 async function mutateLatestData(reason, mutator, options = {}) {
   const job = writeDataQueue.then(async () => {
     const latest = await readData();
@@ -4286,13 +4315,20 @@ function scheduleCustomerPortalMessageFollowUp(messageId) {
       if (!message || message.portalFollowUpCompletedAt) return;
       const queuedStarDraftId = String(message.portalQueuedStarDraftId || '');
       const startedAt = new Date().toISOString();
-      await mutateLatestData('customer portal follow-up started', latest => {
-        const latestMessage = (latest.messages || []).find(row => String(row.id || '') === String(messageId || ''));
-        if (latestMessage) {
-          latestMessage.portalFollowUpStartedAt = startedAt;
-          latestMessage.portalFollowUpStage = 'Preparing Star reply';
-        }
-      }, { fastMessagingWrite: true, organizationId: message.organizationId });
+	      await mutateLatestData('customer portal follow-up started', latest => {
+	        const latestMessage = (latest.messages || []).find(row => String(row.id || '') === String(messageId || ''));
+	        if (latestMessage) {
+	          latestMessage.portalFollowUpStartedAt = startedAt;
+	          latestMessage.portalFollowUpStage = 'Preparing Star reply';
+	          const account = (latest.customerAccounts || []).find(row => String(row && row.id || '') === String(latestMessage.customerAccountId || '')) || {
+	            id: latestMessage.customerAccountId || '',
+	            organizationId: latestMessage.organizationId || MAIN_ORG_ID,
+	            customer: latestMessage.customer || '',
+	            name: latestMessage.customer || ''
+	          };
+	          appendCustomerPortalAudit(latest, account, 'Customer portal message received', [latestMessage.customer, latestMessage.intent || 'General question', latestMessage.status || 'Received', latestMessage.vehicle || latestMessage.vin || 'No vehicle linked', latestMessage.plate ? 'Tag ' + latestMessage.plate : '']);
+	        }
+	      }, { fastMessagingWrite: true, organizationId: message.organizationId });
       const existingMessageIds = new Set((data.messages || []).map(row => String(row.id || '')));
       const baseState = data && data[STATE_READ_META] && data[STATE_READ_META].baseState || {};
       const settings = messageSettings(data);
@@ -4313,10 +4349,14 @@ function scheduleCustomerPortalMessageFollowUp(messageId) {
             body: message.body
           }, { sourceMessageId: message.id, forceNew: true });
           const plan = aiResult.plan || {};
-          if (settings.aiAutoSend && plan.canAutoSend && !plan.approvalRequired && !plan.needsHuman) {
-            const approved = await approveAiMessage(data, { draftId: aiResult.draft.id });
-            aiResult.sent = approved.sent;
-          }
+	          if (settings.aiAutoSend && plan.canAutoSend && !plan.approvalRequired && !plan.needsHuman) {
+	            const approved = await approveAiMessage(data, { draftId: aiResult.draft.id });
+	            aiResult.sent = approved.sent;
+	            if (approved.sent && approved.sent.channel === 'Customer portal') {
+	              await persistRealtimeMessage(approved.sent, { reason: 'Star in-app reply sent', organizationId: approved.sent.organizationId || message.organizationId });
+	              if (approved.sent.notificationEmailStatus === 'Queued') scheduleCustomerPortalEmailNotification(approved.sent.id);
+	            }
+	          }
         } catch (error) {
           const queued = (data.messages || []).find(row => String(row.id || '') === queuedStarDraftId);
           if (queued) {
@@ -6877,28 +6917,11 @@ async function approveAiMessage(data, payload = {}) {
   draft.tone = sent.tone;
   draft.approvedAt = sent.aiApprovedAt;
   data.messages.unshift(sent);
-  if (channel === 'Customer portal' && (draft.email || portalAccount && portalAccount.email) && settings.emailEnabled) {
-    try {
-      const notification = await sendProviderEmail(draft.email || portalAccount.email, 'New WheelsonAuto message', [
-        'Hi ' + String(draft.customer || 'there').split(/\s+/)[0] + ',',
-        '',
-        'You have a new secure message from WheelsonAuto:',
-        draft.body,
-        '',
-        'Open your account: ' + PUBLIC_BASE_URL + '/customer#messages'
-      ].join('\n'), {
-        customer: draft.customer,
-        ownerCopy: false,
-        deliveryId: 'portal-notice-star-draft:' + draft.id,
-        messagingSettings: settings
-      });
-      sent.notificationEmailStatus = notification.status || '';
-      sent.notificationEmailSent = !!notification.sent;
-    } catch (notificationError) {
-      sent.notificationEmailStatus = 'Email notification failed';
-      sent.notificationEmailError = String(notificationError && notificationError.message || notificationError);
-    }
-  }
+	  if (channel === 'Customer portal' && (draft.email || portalAccount && portalAccount.email) && settings.emailEnabled) {
+	    sent.notificationEmailStatus = 'Queued';
+	    sent.notificationEmailSent = false;
+	    sent.notificationEmailError = '';
+	  }
   const ownerMirror = channel === 'SMS' ? await sendOwnerSmsMirror(data, {
     ...sent,
     direction: 'Outbound',
@@ -9000,12 +9023,14 @@ async function activeStaffSessionUser(user) {
   if (!user) return null;
   const version = await dataVersion();
   if (activeStaffSessionCache.version !== version) {
-    const data = await readData();
+    const authState = STATE_REPOSITORY && typeof STATE_REPOSITORY.readStaffAuthState === 'function'
+      ? await STATE_REPOSITORY.readStaffAuthState()
+      : await readData();
     activeStaffSessionCache = {
       version,
-      accounts: new Map((data.staffAccounts || []).filter(staffStatusActive).map(account => [String(account.id || ''), account])),
-      companies: new Map((data.organizations || []).map(company => [String(company.id || ''), company])),
-      ownerLogin: data.security && data.security.ownerLogin || {}
+      accounts: new Map((authState.staffAccounts || []).filter(staffStatusActive).map(account => [String(account.id || ''), account])),
+      companies: new Map((authState.organizations || []).map(company => [String(company.id || ''), company])),
+      ownerLogin: authState.ownerLogin || authState.security && authState.security.ownerLogin || {}
     };
   }
   if (isOwnerUser(user)) {
@@ -9067,6 +9092,15 @@ function activeCustomerSessionAccount(data, user) {
   if (!user || user.role !== 'Customer' || user.authSource !== 'customer' || !user.credentialVersion) return null;
   const account = (data.customerAccounts || []).find(item => item.id === user.id && staffStatusActive(item));
   if (!account) return null;
+  const currentVersion = sessionCredentialVersion(account, 'customer');
+  return currentVersion && secureCompare(user.credentialVersion, currentVersion) ? account : null;
+}
+async function activeRealtimeCustomerAccount(user) {
+  if (!user || user.role !== 'Customer' || user.authSource !== 'customer' || !user.credentialVersion) return null;
+  const account = STATE_REPOSITORY && typeof STATE_REPOSITORY.readCustomerAccount === 'function'
+    ? await STATE_REPOSITORY.readCustomerAccount(user.id)
+    : activeCustomerSessionAccount(await readData(), user);
+  if (!account || !staffStatusActive(account)) return null;
   const currentVersion = sessionCredentialVersion(account, 'customer');
   return currentVersion && secureCompare(user.credentialVersion, currentVersion) ? account : null;
 }
@@ -14233,7 +14267,8 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     route('POST', '/customer/issue-report', 'Customer portal toll/claim/issue report'),
     route('POST', '/customer/document-update', 'Customer portal document and verification update'),
     route('POST', '/customer/card-change', 'Customer portal card-on-file change request'),
-    route('GET', '/api/customer/portal-state', 'Customer-only account state'),
+	    route('GET', '/api/customer/portal-state', 'Customer-only account state'),
+	    route('GET', '/api/customer/messages/feed', 'Exact-account realtime customer message feed'),
     route('GET', '/api/customer/notifications', 'Customer app notification inbox'),
     route('POST', '/api/customer/notifications/read', 'Mark exact customer app notifications read'),
     route('GET', '/api/app-notifications', 'Role-scoped staff app notification inbox'),
@@ -24648,33 +24683,35 @@ const server = http.createServer(async (req, res) => {
       const payload = wantsJson ? await readJsonBody(req) : Object.fromEntries(new URLSearchParams(await readBody(req, 64 * 1024)));
       const body = String(payload.body || '').trim().slice(0, 1200);
       if (!body) return wantsJson ? json(res, 400, { ok: false, error: 'Type a message first.' }) : send(res, 302, '', 'text/plain', { Location: '/customer#messages' });
-      const data = await readData();
-      const account = activeCustomerSessionAccount(data, customerUser);
-      if (!account) return wantsJson
-        ? json(res, 401, { ok: false, error: 'Customer account is not active.' })
-        : send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: '/customer/login' });
-      const portalData = cloneConcurrentValue(data);
-      const portalAccount = (portalData.customerAccounts || []).find(row => row.id === account.id) || cloneConcurrentValue(account);
-      const portal = customerPortalState(portalData, portalAccount);
-      const deliveryId = String(payload.deliveryId || '').trim().slice(0, 180);
-      const existingDelivery = deliveryId ? (data.messages || []).find(row => row.customerAccountId === account.id && row.providerIdempotencyKey === deliveryId) : null;
-      if (existingDelivery) {
-        const customerMessage = stripCustomerPortalMessage(existingDelivery);
-        return wantsJson
-          ? json(res, 200, { ok: true, duplicate: true, message: customerMessage, portal: { ...portal, messages: [customerMessage, ...(portal.messages || []).filter(row => String(row.id || '') !== String(existingDelivery.id || ''))] } })
-          : send(res, 302, '', 'text/plain', { Location: '/customer#messages' });
-      }
-      const summary = portal.summary || {};
-      const recurring = portal.recurring || {};
-      const vehicle = portal.vehicle || {};
-      const triage = customerPortalMessageTriage(body);
-      data.messages = Array.isArray(data.messages) ? data.messages : [];
-      const message = {
+	      const account = await activeRealtimeCustomerAccount(customerUser);
+	      if (!account) return wantsJson
+	        ? json(res, 401, { ok: false, error: 'Customer account is not active.' })
+	        : send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: '/customer/login' });
+	      const [messageData, linkedContext] = await Promise.all([
+	        readRealtimeMessageData({ customerAccountId: account.id, limit: 400 }),
+	        STATE_REPOSITORY && typeof STATE_REPOSITORY.readCustomerMessageContext === 'function'
+	          ? STATE_REPOSITORY.readCustomerMessageContext({ ...customerUser, ...account })
+	          : Promise.resolve({})
+	      ]);
+	      const deliveryId = String(payload.deliveryId || '').trim().slice(0, 180);
+	      const existingDelivery = deliveryId ? (messageData.messages || []).find(row => row.customerAccountId === account.id && row.providerIdempotencyKey === deliveryId) : null;
+	      if (existingDelivery) {
+	        const customerMessage = stripCustomerPortalMessage(existingDelivery);
+	        return wantsJson
+	          ? json(res, 200, { ok: true, duplicate: true, message: customerMessage })
+	          : send(res, 302, '', 'text/plain', { Location: '/customer#messages' });
+	      }
+	      const triage = customerPortalMessageTriage(body);
+	      const recurring = linkedContext.recurring || {};
+	      const vehicle = linkedContext.vehicle || {};
+	      const linkedCustomer = linkedContext.customer || {};
+	      const linkedContract = linkedContext.contract || {};
+	      const message = {
         id: 'msg-customer-portal-' + Date.now() + '-' + crypto.randomBytes(4).toString('hex'),
         date: new Date().toLocaleString('en-US'),
         createdAt: new Date().toISOString(),
         organizationId: account.organizationId || MAIN_ORG_ID,
-        customer: summary.customer || account.customer || account.name || 'Customer',
+	        customer: account.customer || account.name || 'Customer',
         phone: account.phone || '',
         email: account.email || '',
         direction: 'Inbound',
@@ -24689,20 +24726,23 @@ const server = http.createServer(async (req, res) => {
         source: 'Customer portal',
         providerIdempotencyKey: deliveryId,
         customerAccountId: account.id,
-        recurringPaymentId: recurring.id || account.recurringPaymentId || '',
-        vehicleId: vehicle.id || account.vehicleId || '',
-        vehicle: summary.vehicle || vehicleNameFromParts(vehicle) || recurring.vehicle || '',
-        vin: summary.vin || vehicle.vin || recurring.vin || '',
-        licensePlate: summary.tag || vehicle.plate || vehicle.stock || recurring.licensePlate || recurring.plate || '',
-        plate: summary.tag || vehicle.plate || vehicle.stock || recurring.licensePlate || recurring.plate || '',
-        tracker: summary.tracker || trackerName(vehicle) || trackerName(recurring),
-        amount: recurring.amount || recurring.weeklyAmount || 0,
-        nextRun: recurring.nextRun || summary.nextRun || '',
-        chargeTime: recurring.chargeTime || summary.chargeTime || ''
-      };
-	      const messageSettingsState = messageSettings(data);
-	      if (messageSettingsState.aiEnabled && messageSettingsState.aiDrafts) {
-	        const queuedStarDraft = {
+	        customerId: linkedCustomer.id || account.customerId || '',
+	        contractId: linkedContract.id || account.contractId || '',
+	        recurringPaymentId: recurring.id || account.recurringPaymentId || '',
+	        vehicleId: vehicle.id || recurring.vehicleId || account.vehicleId || '',
+	        vehicle: vehicleNameFromParts(vehicle) || recurring.vehicle || linkedCustomer.vehicle || linkedContract.vehicle || account.vehicle || '',
+	        vin: vehicle.vin || recurring.vin || linkedCustomer.vin || linkedContract.vin || account.vin || '',
+	        licensePlate: vehicle.plate || vehicle.stock || recurring.licensePlate || recurring.plate || account.licensePlate || account.plate || '',
+	        plate: vehicle.plate || vehicle.stock || recurring.plate || recurring.licensePlate || account.plate || account.licensePlate || '',
+	        tracker: trackerName(vehicle) || trackerName(recurring) || account.tracker || '',
+	        amount: recurring.amount || recurring.weeklyAmount || account.amount || account.weeklyAmount || 0,
+	        nextRun: recurring.nextRun || account.nextRun || '',
+	        chargeTime: recurring.chargeTime || recurring.paymentTime || account.chargeTime || ''
+	      };
+		      const messageSettingsState = messageSettings({ integrations: { messaging: messageData.messaging || {} } });
+		      let queuedStarDraft = null;
+		      if (messageSettingsState.aiEnabled && messageSettingsState.aiDrafts) {
+		        queuedStarDraft = {
 	          id: 'msg-ai-queued-' + Date.now() + '-' + crypto.randomBytes(4).toString('hex'),
 	          date: new Date().toLocaleString('en-US'),
 	          createdAt: new Date().toISOString(),
@@ -24718,28 +24758,30 @@ const server = http.createServer(async (req, res) => {
 	          tone: 'blue',
 	          body: 'Star is preparing a reply for staff review.',
 	          aiSourceMessageId: message.id,
-	          source: 'WheelsonAuto Star AI',
-	          vehicleId: message.vehicleId,
+		          source: 'WheelsonAuto Star AI',
+		          customerAccountId: account.id,
+		          customerId: account.customerId || '',
+		          contractId: account.contractId || '',
+		          recurringPaymentId: message.recurringPaymentId,
+		          vehicleId: message.vehicleId,
 	          vehicle: message.vehicle,
 	          vin: message.vin,
 	          plate: message.plate,
 	          tracker: message.tracker,
 	          amount: message.amount
-	        };
-	        message.portalQueuedStarDraftId = queuedStarDraft.id;
-	        data.messages.unshift(queuedStarDraft);
-	      }
-	      data.messages.unshift(message);
-	      appendCustomerPortalAudit(data, account, 'Customer portal message received', [message.customer, triage.intent, triage.status, message.vehicle || message.vin || 'No vehicle linked', message.plate ? 'Tag ' + message.plate : '']);
-	      await writeMessagingData(data, 'customer portal message received', account.organizationId || MAIN_ORG_ID);
-	      scheduleCustomerPortalMessageFollowUp(message.id);
-	      if (wantsJson) {
-	        const customerMessage = stripCustomerPortalMessage(message);
-	        return json(res, 201, {
-	          ok: true,
-	          message: customerMessage,
-	          portal: { ...portal, messages: [customerMessage, ...(portal.messages || []).filter(row => String(row.id || '') !== String(message.id))] }
-	        });
+		        };
+		        message.portalQueuedStarDraftId = queuedStarDraft.id;
+		      }
+		      const saved = await persistRealtimeMessage(message, { reason: 'customer portal message received', organizationId: account.organizationId || MAIN_ORG_ID });
+		      if (!saved.duplicate && queuedStarDraft) await persistRealtimeMessage(queuedStarDraft, { reason: 'Star reply queued', organizationId: account.organizationId || MAIN_ORG_ID });
+		      scheduleCustomerPortalMessageFollowUp(message.id);
+		      if (wantsJson) {
+		        const customerMessage = stripCustomerPortalMessage(saved.message || message);
+		        return json(res, 201, {
+		          ok: true,
+		          duplicate: saved.duplicate === true,
+		          message: customerMessage
+		        });
 	      }
 	      return send(res, 302, '', 'text/plain', { Location: '/customer#messages' });
 	    }
@@ -25548,14 +25590,30 @@ const server = http.createServer(async (req, res) => {
       if (!account) return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: '/customer/login?next=' + encodeURIComponent('/customer-next') });
       return send(res, 200, customerNextHtml(account, customerUser || {}), 'text/html; charset=utf-8', { 'Cache-Control': 'private, no-store', 'X-Robots-Tag': 'noindex, nofollow' });
     }
-    if (url.pathname === '/api/customer/portal-state' && req.method === 'GET') {
+	    if (url.pathname === '/api/customer/portal-state' && req.method === 'GET') {
       const customerUser = customerSessionUser(req);
       const data = await readData();
       const account = customerUser ? activeCustomerSessionAccount(data, customerUser) : localCustomerPreviewAccount(req, data);
       if (!customerUser && !account) return json(res, 401, { ok: false, error: 'Customer login required.' });
       if (!account) return json(res, 401, { ok: false, error: 'Customer account is not active.' });
-      return json(res, 200, { ok: true, portal: customerPortalState(data, account) });
-    }
+	      return json(res, 200, { ok: true, portal: customerPortalState(data, account) });
+	    }
+	    if (url.pathname === '/api/customer/messages/feed' && req.method === 'GET') {
+	      const customerUser = customerSessionUser(req);
+	      let account = customerUser ? await activeRealtimeCustomerAccount(customerUser) : null;
+	      if (!customerUser && !account) {
+	        const previewData = await readViewData();
+	        account = localCustomerPreviewAccount(req, previewData);
+	      }
+	      if (!account) return json(res, 401, { ok: false, error: 'Customer login required.' });
+	      const feed = await readRealtimeMessageData({ customerAccountId: account.id, limit: 500 });
+	      const messages = (feed.messages || [])
+	        .filter(row => String(row && row.customerAccountId || '') === String(account.id || ''))
+	        .filter(customerPortalVisibleMessage)
+	        .filter(row => !row.hiddenFromCustomer && !row.hiddenFromPortal && !/owner mirror/i.test(String(row.direction || '')))
+	        .map(stripCustomerPortalMessage);
+	      return json(res, 200, { ok: true, revision: platformMessageRevision(messages), messages }, { 'Cache-Control': 'private, no-store' });
+	    }
     if (url.pathname === '/api/customer/events' && req.method === 'GET') {
       const customerUser = customerSessionUser(req);
       const data = await readData();
@@ -27757,9 +27815,10 @@ const server = http.createServer(async (req, res) => {
       }
     }
     if (url.pathname === '/api/state' && req.method === 'GET') return json(res, 200, stateForUserRead(await readData(), user));
-    if (url.pathname === '/api/messages/feed' && req.method === 'GET') {
-      if (String(user.role || '').toLowerCase() === 'mechanic') return json(res, 403, { ok: false, error: 'Mechanic accounts do not have access to customer messages.' });
-      const data = await readViewData();
+	    if (url.pathname === '/api/messages/feed' && req.method === 'GET') {
+	      if (String(user.role || '').toLowerCase() === 'mechanic') return json(res, 403, { ok: false, error: 'Mechanic accounts do not have access to customer messages.' });
+	      const messageData = await readRealtimeMessageData({ limit: 800 });
+	      const data = { messages: messageData.messages || [], integrations: { messaging: messageData.messaging || {} } };
       const requestedLimit = Number(url.searchParams.get('limit') || 600);
       const limit = Math.max(50, Math.min(800, Number.isFinite(requestedLimit) ? requestedLimit : 600));
       const scoped = filterRowsForUserOrganization(data.messages || [], user)
@@ -28258,19 +28317,31 @@ const server = http.createServer(async (req, res) => {
         return json(res, 409, { ok: false, error: String(err && err.message || err) });
       }
     }
-    if (url.pathname === '/api/messages/send' && req.method === 'POST') {
-      const payload = await readJsonBody(req);
-      const data = await readData();
-      data.messages = Array.isArray(data.messages) ? data.messages : [];
-      data.integrations = data.integrations || {};
-      const context = aiFindCustomerContext(data, payload, user, { skipEnrich: true, includeSystemHealth: false });
-      const contact = context.contact || findMessageContact(data, payload);
-      const requestedChannel = String(payload.channel || payload.deliveryChannel || 'SMS').trim().toLowerCase();
-      const channel = requestedChannel === 'email'
-        ? 'Email'
-        : ['customer portal', 'portal', 'customer app', 'in-app', 'in app'].includes(requestedChannel)
-          ? 'Customer portal'
-          : 'SMS';
+	    if (url.pathname === '/api/messages/send' && req.method === 'POST') {
+	      const payload = await readJsonBody(req);
+	      const requestedChannel = String(payload.channel || payload.deliveryChannel || 'SMS').trim().toLowerCase();
+	      const channel = requestedChannel === 'email'
+	        ? 'Email'
+	        : ['customer portal', 'portal', 'customer app', 'in-app', 'in app'].includes(requestedChannel)
+	          ? 'Customer portal'
+	          : 'SMS';
+	      let data;
+	      if (channel === 'Customer portal' && payload.customerAccountId && STATE_REPOSITORY && typeof STATE_REPOSITORY.readCustomerAccount === 'function') {
+	        const [directAccount, directMessages] = await Promise.all([
+	          STATE_REPOSITORY.readCustomerAccount(payload.customerAccountId),
+	          readRealtimeMessageData({ customerAccountId: payload.customerAccountId, limit: 400 })
+	        ]);
+	        data = emptyPlatformState();
+	        data.customerAccounts = directAccount ? [directAccount] : [];
+	        data.messages = directMessages.messages || [];
+	        data.integrations = { ...(data.integrations || {}), messaging: directMessages.messaging || {} };
+	      } else {
+	        data = channel === 'Customer portal' ? await readViewData() : await readData();
+	      }
+	      data.messages = Array.isArray(data.messages) ? data.messages : [];
+	      data.integrations = data.integrations || {};
+	      const context = aiFindCustomerContext(data, payload, user, { skipEnrich: true, includeSystemHealth: false });
+	      const contact = context.contact || findMessageContact(data, payload);
       const messageFields = messageContextFields(context, payload);
       const body = String(payload.body || payload.message || '').trim();
       const customer = payload.customer || messageFields.customer || contact.name || 'Customer';
@@ -28358,9 +28429,30 @@ const server = http.createServer(async (req, res) => {
           tracker: payload.tracker || messageFields.tracker,
           amount: payload.amount || messageFields.amount,
           frequency: payload.frequency || messageFields.frequency,
-          claimId: payload.claimId || ''
-        };
-        data.messages.unshift(record);
+	          claimId: payload.claimId || ''
+	        };
+	        if (channel === 'Customer portal') {
+	          let customerEmailNotification = null;
+	          if (email && settings.emailEnabled) {
+	            record.notificationEmailStatus = 'Queued';
+	            record.notificationEmailSent = false;
+	            record.notificationEmailError = '';
+	            customerEmailNotification = { sent: false, status: 'Queued', message: 'Customer email notification is sending in the background.' };
+	          }
+	          const saved = await persistRealtimeMessage(record, { reason: 'customer in-app message sent', organizationId: messageFields.organizationId || userOrganizationId(user) });
+	          if (!saved.duplicate && record.notificationEmailStatus === 'Queued') scheduleCustomerPortalEmailNotification(record.id);
+	          return json(res, 200, {
+	            ok: true,
+	            sent: true,
+	            duplicate: saved.duplicate === true,
+	            message: saved.message || record,
+	            provider: 'wheelsonauto',
+	            customerEmailNotification: customerEmailNotification ? { sent: false, status: customerEmailNotification.status, warning: customerEmailNotification.message } : null,
+	            ownerMirror: null,
+	            warning: ''
+	          });
+	        }
+	        data.messages.unshift(record);
         const ownerMirror = channel === 'SMS' && result.sent && !result.duplicate ? await sendOwnerSmsMirror(data, { ...record, direction: 'Outbound', phone, body }, settings) : null;
         let customerEmailNotification = null;
         if (channel === 'Customer portal' && email && settings.emailEnabled) {
@@ -28444,11 +28536,15 @@ const server = http.createServer(async (req, res) => {
       const aiResult = await createAiMessageDraft(data, request, { sourceMessageId: payload.messageId || payload.externalId || '', forceNew: payload.forceNew === true, user });
       const plan = aiResult.plan || {};
       let autoSend = { attempted: false, sent: false, warning: '' };
-      if (payload.autoSendSafe === true && messageSettings(data).aiAutoSend && plan.canAutoSend && !plan.approvalRequired && !plan.needsHuman) {
+	      if (payload.autoSendSafe === true && messageSettings(data).aiAutoSend && plan.canAutoSend && !plan.approvalRequired && !plan.needsHuman) {
         autoSend.attempted = true;
         try {
-          const approved = await approveAiMessage(data, { draftId: aiResult.draft.id });
-          autoSend = { attempted: true, sent: !!approved.result.sent, message: approved.sent, warning: approved.result.sent ? '' : (approved.result.message || 'The delivery provider is not ready.') };
+	          const approved = await approveAiMessage(data, { draftId: aiResult.draft.id });
+	          autoSend = { attempted: true, sent: !!approved.result.sent, message: approved.sent, warning: approved.result.sent ? '' : (approved.result.message || 'The delivery provider is not ready.') };
+	          if (approved.sent && approved.sent.channel === 'Customer portal') {
+	            await persistRealtimeMessage(approved.sent, { reason: 'Star in-app reply sent', organizationId: approved.sent.organizationId || MAIN_ORG_ID });
+	            if (approved.sent.notificationEmailStatus === 'Queued') scheduleCustomerPortalEmailNotification(approved.sent.id);
+	          }
         } catch (error) {
           autoSend.warning = String(error && error.message || error);
           aiResult.draft.status = 'Auto-send needs review';
@@ -28493,7 +28589,11 @@ const server = http.createServer(async (req, res) => {
         return json(res, 403, { ok: false, error: 'Only the owner can approve a sensitive Star money or account action.' });
       }
       try {
-        const approved = await approveAiMessage(data, payload);
+	        const approved = await approveAiMessage(data, payload);
+	        if (approved.sent && approved.sent.channel === 'Customer portal') {
+	          await persistRealtimeMessage(approved.sent, { reason: 'Star in-app reply sent', organizationId: approved.sent.organizationId || MAIN_ORG_ID });
+	          if (approved.sent.notificationEmailStatus === 'Queued') scheduleCustomerPortalEmailNotification(approved.sent.id);
+	        }
         data.integrations = data.integrations || {};
         data.integrations.messaging = { ...(data.integrations.messaging || {}), ...publicMessagingStatus(data), lastAiApprovalAt: new Date().toISOString(), lastError: '' };
         appendAuditLog(data, user, 'Star AI reply approved', [approved.sent.customer || approved.draft.customer || 'Unknown customer', approved.sent.channel || approved.draft.deliveryChannel || 'Message', approved.sent.status || 'Draft saved']);

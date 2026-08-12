@@ -3371,13 +3371,13 @@ async function main() {
 	    const customerPortalFormMessageId = customerPortalFormMessage.id;
 	    const customerPortalJsonStartedAt = Date.now();
 	    const customerPortalJsonMessage = await request(server, 'POST', '/customer/message', { cookie: customerCookie, json: { body: 'This customer app reply should update without a page reload.' } });
-	    assert(customerPortalJsonMessage.status === 201 && customerPortalJsonMessage.json.ok && customerPortalJsonMessage.json.message.channel === 'Customer portal' && Array.isArray(customerPortalJsonMessage.json.portal.messages), 'Customer portal JSON replies should save and return refreshed scoped conversation state.');
+	    assert(customerPortalJsonMessage.status === 201 && customerPortalJsonMessage.json.ok && customerPortalJsonMessage.json.message.channel === 'Customer portal' && !customerPortalJsonMessage.json.portal, 'Customer portal JSON replies should acknowledge the accepted message without rebuilding the full portal state.');
 	    assert(Date.now() - customerPortalJsonStartedAt < 750, 'Customer portal delivery should not wait for Star or owner-email follow-up.');
 	    const staffPortalDeliveryId = 'direct-customer-app-delivery-1';
 	    const managerPortalReply = await request(server, 'POST', '/api/messages/send', { cookie: managerCookie, json: { customer: 'Alicia Brown', channel: 'Customer portal', body: 'Your secure WheelsonAuto customer-app reply is ready.', deliveryId: staffPortalDeliveryId } });
 	    assert(managerPortalReply.status === 200 && managerPortalReply.json.ok && managerPortalReply.json.sent && managerPortalReply.json.message.channel === 'Customer portal' && managerPortalReply.json.message.provider === 'wheelsonauto' && managerPortalReply.json.message.customerAccountId, 'Manager should deliver a staff reply inside the matched customer account without a carrier.');
 	    const duplicateManagerPortalReply = await request(server, 'POST', '/api/messages/send', { cookie: managerCookie, json: { customer: 'Alicia Brown', channel: 'Customer portal', body: 'Your secure WheelsonAuto customer-app reply is ready.', deliveryId: staffPortalDeliveryId } });
-	    assert(duplicateManagerPortalReply.status === 200 && duplicateManagerPortalReply.json.duplicate === true && duplicateManagerPortalReply.json.message.id === managerPortalReply.json.message.id, 'Retrying the same customer-app delivery must return the original message instead of duplicating it.');
+	    assert(duplicateManagerPortalReply.status === 200 && duplicateManagerPortalReply.json.duplicate === true && duplicateManagerPortalReply.json.message.id === managerPortalReply.json.message.id, 'Retrying the same customer-app delivery must return the original message instead of duplicating it. First: ' + JSON.stringify(managerPortalReply.json) + ' Duplicate: ' + JSON.stringify(duplicateManagerPortalReply.json));
 	    let customerPortalMessageRead = null;
 	    for (let attempt = 0; attempt < 240; attempt += 1) {
 	      customerPortalMessageRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });

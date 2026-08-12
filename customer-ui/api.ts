@@ -11,6 +11,11 @@ export async function loadCustomerPortal(signal?: AbortSignal): Promise<Customer
   return (await parseJson<CustomerPortalEnvelope>(response)).portal;
 }
 
+export async function loadCustomerMessages(signal?: AbortSignal): Promise<{ ok: boolean; revision: string; messages: PortalRecord[] }> {
+  const response = await fetch('/api/customer/messages/feed', { headers: { Accept: 'application/json' }, cache: 'no-store', signal });
+  return parseJson(response);
+}
+
 export async function loadCustomerNotifications(signal?: AbortSignal): Promise<CustomerNotifications> {
   const response = await fetch('/api/customer/notifications', { headers: { Accept: 'application/json' }, cache: 'no-store', signal });
   return parseJson<CustomerNotifications>(response);
@@ -25,7 +30,7 @@ export async function markCustomerNotificationsRead(ids: string[]): Promise<Cust
   return parseJson<CustomerNotifications>(response);
 }
 
-export async function sendCustomerMessage(body: string, deliveryId: string): Promise<{ ok: boolean; message: PortalRecord; portal: CustomerPortal }> {
+export async function sendCustomerMessage(body: string, deliveryId: string): Promise<{ ok: boolean; duplicate?: boolean; message: PortalRecord }> {
   const response = await fetch('/customer/message', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
@@ -51,4 +56,3 @@ export async function uploadCustomerDocument(input: CustomerDocumentInput): Prom
   });
   return parseJson(response);
 }
-
