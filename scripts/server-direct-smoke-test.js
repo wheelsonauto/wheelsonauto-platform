@@ -3378,14 +3378,17 @@ async function main() {
 	    assert(managerPortalReply.status === 200 && managerPortalReply.json.ok && managerPortalReply.json.sent && managerPortalReply.json.message.channel === 'Customer portal' && managerPortalReply.json.message.provider === 'wheelsonauto' && managerPortalReply.json.message.customerAccountId, 'Manager should deliver a staff reply inside the matched customer account without a carrier.');
 	    const duplicateManagerPortalReply = await request(server, 'POST', '/api/messages/send', { cookie: managerCookie, json: { customer: 'Alicia Brown', channel: 'Customer portal', body: 'Your secure WheelsonAuto customer-app reply is ready.', deliveryId: staffPortalDeliveryId } });
 	    assert(duplicateManagerPortalReply.status === 200 && duplicateManagerPortalReply.json.duplicate === true && duplicateManagerPortalReply.json.message.id === managerPortalReply.json.message.id, 'Retrying the same customer-app delivery must return the original message instead of duplicating it. First: ' + JSON.stringify(managerPortalReply.json) + ' Duplicate: ' + JSON.stringify(duplicateManagerPortalReply.json));
-	    let customerPortalMessageRead = null;
-	    for (let attempt = 0; attempt < 240; attempt += 1) {
-	      customerPortalMessageRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
-	      const rows = customerPortalMessageRead.json.messages || [];
+	    let customerPortalMessageFeed = null;
+	    for (let attempt = 0; attempt < 600; attempt += 1) {
+	      customerPortalMessageFeed = await request(server, 'GET', '/api/messages/feed?limit=800', { cookie: ownerCookie });
+	      const rows = customerPortalMessageFeed.json.messages || [];
 	      const inbound = rows.find(message => message.id === customerPortalFormMessageId);
-	      if (inbound && rows.some(message => message.source === 'WheelsonAuto Star AI' && message.aiSourceMessageId === inbound.id) && rows.some(note => note.event === 'customer_message' && /Admin approval required: Yes/.test(note.body || ''))) break;
+	      const starReady = inbound && rows.some(message => message.source === 'WheelsonAuto Star AI' && message.aiSourceMessageId === inbound.id);
+	      const ownerEmailReady = rows.some(note => note.event === 'customer_message' && note.customer === 'Alicia Brown' && /money\/account review/i.test(note.subject || '') && /Admin approval required: Yes/.test(note.body || ''));
+	      if (starReady && ownerEmailReady) break;
 	      await new Promise(resolve => setTimeout(resolve, 25));
 	    }
+	    const customerPortalMessageRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     const savedPortalMessage = (customerPortalMessageRead.json.messages || []).find(message => message.id === customerPortalFormMessageId);
     assert(savedPortalMessage, 'Customer portal message should be saved in staff Messages.');
     assert(savedPortalMessage.status === 'Needs admin review' && savedPortalMessage.approvalRequired === true && savedPortalMessage.intent === 'Money/account question', 'Customer portal money/card questions should be triaged for admin review.');
