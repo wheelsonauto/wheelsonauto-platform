@@ -21,6 +21,7 @@ import {
   createReplacementCardSetup,
   deleteCardSetup,
   loadAutopay,
+  loadClaims,
   loadCustomers,
   loadPayments,
   loadVehicles,
@@ -30,16 +31,17 @@ import {
   updateAutopay,
   updateCustomer
 } from '../api';
-import type { CustomerRecord, PaymentRecord, RecurringPaymentRecord, VehicleRecord } from '../types';
-import { dateTime, money, shortDate, statusTone, wordsMatch } from '../ui';
+import type { ClaimRecord, CustomerRecord, PaymentRecord, RecurringPaymentRecord, VehicleRecord } from '../types';
+import { canonicalCustomerRecords, dateTime, money, normalized, shortDate, statusTone, wordsMatch } from '../ui';
 import { useSwipeTabs } from '../useSwipeTabs';
 import { useViewedRecords } from '../useViewedRecords';
 
-type Filter = 'active' | 'setup' | 'history';
+type Filter = 'active' | 'dues' | 'history';
 type DetailTab = 'customer' | 'payments';
 type PaymentAction = 'new' | 'charge' | 'result' | 'link' | 'card' | 'edit' | 'remove' | 'delete' | null;
 
-const filters: readonly Filter[] = ['active', 'setup', 'history'];
+const filters: readonly Filter[] = ['active', 'dues', 'history'];
+const filterLabels: Record<Filter, string> = { active: 'Active', dues: 'Tolls / violations & dues', history: 'History' };
 
 type ActionDraft = {
   amount: string;
@@ -59,19 +61,13 @@ type ActionDraft = {
   operationId: string;
 };
 
-function normalized(value: unknown) {
-  return String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-}
-
-function isHistory(customer: CustomerRecord) {
-  return /history|ended|removed|inactive|returned/i.test([customer.status, customer.stage].join(' '));
-}
-
-function isSetup(customer: CustomerRecord) {
-  return !isHistory(customer) && /setup|pending|application|onboarding/i.test([customer.status, customer.stage].join(' '));
-}
-
 function sameCustomer(row: PaymentRecord | RecurringPaymentRecord, customer: CustomerRecord) {
+  if (row.customerId && String(row.customerId) === String(customer.id)) return true;
+  if (row.customerAccountId && customer.customerAccountId && String(row.customerAccountId) === String(customer.customerAccountId)) return true;
+  return !!(row.customer && customer.name && normalized(row.customer) === normalized(customer.name));
+}
+
+function sameClaim(row: ClaimRecord, customer: CustomerRecord) {
   if (row.customerId && String(row.customerId) === String(customer.id)) return true;
   if (row.customerAccountId && customer.customerAccountId && String(row.customerAccountId) === String(customer.customerAccountId)) return true;
   return !!(row.customer && customer.name && normalized(row.customer) === normalized(customer.name));
@@ -140,6 +136,7 @@ export function CustomersPage({ onNavigate, onOpenRental }: { onNavigate: (works
   const [customers, setCustomers] = useState<CustomerRecord[]>([]);
   const [payments, setPayments] = useState<PaymentRecord[]>([]);
   const [autopay, setAutopay] = useState<RecurringPaymentRecord[]>([]);
+  const [claims, setClaims] = useState<ClaimRecord[]>([]);
   const [vehicles, setVehicles] = useState<VehicleRecord[]>([]);
   const [selectedId, setSelectedId] = useState('');
   const [selectedAutopayId, setSelectedAutopayId] = useState('');
@@ -161,13 +158,14 @@ export function CustomersPage({ onNavigate, onOpenRental }: { onNavigate: (works
 
   const refresh = async (signal?: AbortSignal, force = false) => {
     try {
-      const [customerFeed, paymentFeed, autopayFeed, vehicleFeed] = await Promise.all([
-        loadCustomers(signal, force), loadPayments(signal, force), loadAutopay(signal, force), loadVehicles(signal, force)
+      const [customerFeed, paymentFeed, autopayFeed, vehicleFeed, claimFeed] = await Promise.all([
+        loadCustomers(signal, force), loadPayments(signal, force), loadAutopay(signal, force), loadVehicles(signal, force), loadClaims(signal, force)
       ]);
       setCustomers(customerFeed.records || []);
       setPayments(paymentFeed.records || []);
       setAutopay(autopayFeed.records || []);
       setVehicles(vehicleFeed.records || []);
+      setClaims(claimFeed.records || []);
       setError('');
     } catch (requestError) {
       if ((requestError as Error).name !== 'AbortError') setError((requestError as Error).message);
@@ -181,32 +179,43 @@ export function CustomersPage({ onNavigate, onOpenRental }: { onNavigate: (works
     events.addEventListener('platform', (event: MessageEvent) => {
       try {
         const payload = JSON.parse(event.data || '{}');
-        if ((payload.topics || []).some((topic: string) => ['customers', 'payments', 'assignments'].includes(topic))) void refresh(undefined, true);
+        if ((payload.topics || []).some((topic: string) => ['customers', 'payments', 'assignments', 'claims'].includes(topic))) void refresh(undefined, true);
       } catch { /* A later event repairs the view. */ }
     });
     return () => { controller.abort(); events.close(); };
   }, []);
+  const customerRows = useMemo(() => canonicalCustomerRecords(customers, vehicles), [customers, vehicles]);
   useEffect(() => {
-    const customer = customers.find(row => row.id === selectedId);
+    const customer = customerRows.find(row => row.id === selectedId);
     if (!customer) return;
     setDraft({ ...customer });
     setAssignmentVehicleId(customer.vehicleId || '');
-  }, [selectedId, customers]);
+  }, [selectedId, customerRows]);
 
-  const viewed = useViewedRecords('customers', customers, !loading);
+  const viewed = useViewedRecords('customers', customerRows, !loading);
   const paymentCountFor = (customer: CustomerRecord) => payments.filter(row => sameCustomer(row, customer)).length + autopay.filter(row => sameCustomer(row, customer)).length;
-  const paymentAttentionFor = (customer: CustomerRecord) => autopay.filter(row => sameCustomer(row, customer) && /failed|declined|not found|review|paused|setup|waiting/i.test([row.status, row.paymentSetup].join(' '))).length;
-  const visible = useMemo(() => customers.filter(customer => {
-    if (filter === 'history' && !isHistory(customer)) return false;
-    if (filter === 'setup' && !isSetup(customer)) return false;
-    if (filter === 'active' && (isHistory(customer) || isSetup(customer))) return false;
+  const paymentAttentionFor = (customer: CustomerRecord) => autopay.filter(row => sameCustomer(row, customer) && /failed|declined|not found|contact|past due/i.test([row.status, row.paymentSetup].join(' '))).length + payments.filter(row => sameCustomer(row, customer) && /failed|declined|unpaid|past due/i.test(row.status || '')).length;
+  const openClaimsFor = (customer: CustomerRecord) => claims.filter(row => sameClaim(row, customer) && !/paid|closed|resolved|dismissed|cancelled/i.test(row.status || '') && Number(row.amount || 0) > 0);
+  const hasAssignedVehicle = (customer: CustomerRecord) => vehicles.some(vehicle => !/removed|retired|sold/i.test(vehicle.status || '') && normalized(vehicle.currentCustomer) === normalized(customer.name)) || !!(customer.activeRentalFileId && customer.vehicleId && vehicles.some(vehicle => vehicle.id === customer.vehicleId && !/removed|retired|sold/i.test(vehicle.status || '')));
+  const dueAmountFor = (customer: CustomerRecord) => {
+    const failedPayments = payments.filter(row => sameCustomer(row, customer) && /failed|declined|unpaid|past due/i.test(row.status || '')).reduce((sum, row) => sum + Number(row.amount || 0), 0);
+    const failedSchedules = autopay.filter(row => sameCustomer(row, customer) && /failed|declined|not found|contact|past due/i.test([row.status, row.paymentSetup].join(' ')));
+    const scheduleAmount = failedPayments ? 0 : failedSchedules.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+    return openClaimsFor(customer).reduce((sum, row) => sum + Number(row.amount || 0), 0) + failedPayments + scheduleAmount;
+  };
+  const hasDues = (customer: CustomerRecord) => paymentAttentionFor(customer) > 0 || openClaimsFor(customer).length > 0;
+  const visible = useMemo(() => customerRows.filter(customer => {
+    const active = hasAssignedVehicle(customer);
+    if (filter === 'history' && active) return false;
+    if (filter === 'dues' && !hasDues(customer)) return false;
+    if (filter === 'active' && !active) return false;
     return wordsMatch(query, [customer.name, customer.phone, customer.email, customer.vehicle, customer.vin, customer.licensePlate, customer.status]);
-  }).sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''))), [customers, query, filter]);
+  }).sort((a, b) => filter === 'dues' ? dueAmountFor(b) - dueAmountFor(a) || String(a.name || '').localeCompare(String(b.name || '')) : String(a.name || '').localeCompare(String(b.name || ''))), [customerRows, vehicles, payments, autopay, claims, query, filter]);
 
   const counts = {
-    active: customers.filter(row => !isHistory(row) && !isSetup(row)).length,
-    setup: customers.filter(isSetup).length,
-    history: customers.filter(isHistory).length
+    active: customerRows.filter(hasAssignedVehicle).length,
+    dues: customerRows.filter(hasDues).length,
+    history: customerRows.filter(row => !hasAssignedVehicle(row)).length
   };
   const selectedCustomerPayments = useMemo(() => draft ? payments.filter(row => sameCustomer(row, draft)).sort((a, b) => (Date.parse(b.createdAt || b.date || '') || 0) - (Date.parse(a.createdAt || a.date || '') || 0)) : [], [draft, payments]);
   const selectedCustomerAutopay = useMemo(() => draft ? autopay.filter(row => sameCustomer(row, draft)).sort((a, b) => Number(/failed|declined|not found|review|paused/i.test(b.status || '')) - Number(/failed|declined|not found|review|paused/i.test(a.status || '')) || String(a.nextRun || '').localeCompare(String(b.nextRun || ''))) : [], [draft, autopay]);
@@ -352,12 +361,12 @@ export function CustomersPage({ onNavigate, onOpenRental }: { onNavigate: (works
     <section className="operations-index">
       <header className="workspace-title"><div><span>One connected customer record</span><h1>Customers</h1></div>{viewed.unreadCount ? <button type="button" className="unread-summary" onClick={viewed.markAllViewed}>{viewed.unreadCount} new</button> : null}</header>
       <div className="customer-filter-swipe swipe-zone" {...filterSwipe}>
-        <div className="compact-metrics swipe-tabs" role="tablist" aria-label="Customer status">{filters.map(key => <button type="button" role="tab" aria-selected={filter === key} key={key} className={filter === key ? 'active' : ''} onClick={() => setFilter(key)}><span>{key[0].toUpperCase() + key.slice(1)}</span><strong>{counts[key]}</strong></button>)}</div>
+        <div className="compact-metrics swipe-tabs" role="tablist" aria-label="Customer status">{filters.map(key => <button type="button" role="tab" aria-selected={filter === key} key={key} className={filter === key ? 'active' : ''} onClick={() => setFilter(key)}><span>{filterLabels[key]}</span><strong>{counts[key]}</strong></button>)}</div>
         <label className="workspace-search"><span aria-hidden="true">/</span><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search customer, vehicle, VIN, tag" /></label>
       </div>
       {error && !draft ? <div className="inline-alert error">{error}</div> : null}
       <div className="record-list">{loading ? <div className="empty-state">Loading connected customer files...</div> : null}{!loading && !visible.length ? <div className="empty-state">No customers match this view.</div> : null}
-        {visible.map(customer => { const paymentCount = paymentCountFor(customer); const attention = paymentAttentionFor(customer); return <button type="button" key={customer.id} className={`${customer.id === selectedId ? 'record-row active' : 'record-row'}${viewed.unreadIds.has(customer.id) ? ' unread-record' : ''}`} onClick={() => openCustomer(customer)} aria-label={`Open ${customer.name || 'customer'} file`}>{viewed.unreadIds.has(customer.id) ? <span className="record-unread-dot" aria-label="Unviewed" /> : <span className={`status-line ${statusTone(customer.status || customer.stage)}`} />}<span className="record-main"><strong>{customer.name || 'Unnamed customer'}</strong><span>{customer.vehicle || customer.email || customer.phone || 'Customer file'}</span></span><span className="record-side"><b>{customer.status || customer.stage || 'Active'}</b><time>{attention ? `${attention} need attention` : customer.nextRun ? `Due ${shortDate(customer.nextRun)}` : paymentCount ? `${paymentCount} payment record${paymentCount === 1 ? '' : 's'}` : customer.amount ? money(customer.amount) : ''}</time></span></button>; })}
+        {visible.map(customer => { const paymentCount = paymentCountFor(customer); const attention = paymentAttentionFor(customer); const claimCount = openClaimsFor(customer).length; const dueAmount = dueAmountFor(customer); return <button type="button" key={customer.id} className={`${customer.id === selectedId ? 'record-row active' : 'record-row'}${viewed.unreadIds.has(customer.id) ? ' unread-record' : ''}`} onClick={() => openCustomer(customer)} aria-label={`Open ${customer.name || 'customer'} file`}>{viewed.unreadIds.has(customer.id) ? <span className="record-unread-dot" aria-label="Unviewed" /> : <span className={`status-line ${filter === 'dues' ? 'warn' : statusTone(customer.status || customer.stage)}`} />}<span className="record-main"><strong>{customer.name || 'Unnamed customer'}</strong><span>{customer.vehicle || customer.email || customer.phone || 'Customer file'}</span></span><span className="record-side"><b>{filter === 'dues' ? [claimCount ? `${claimCount} toll / violation` : '', attention ? `${attention} payment issue` : ''].filter(Boolean).join(' | ') : hasAssignedVehicle(customer) ? 'Active rental' : 'History'}</b><time>{filter === 'dues' ? `${money(dueAmount)} due` : customer.nextRun ? `Due ${shortDate(customer.nextRun)}` : paymentCount ? `${paymentCount} payment record${paymentCount === 1 ? '' : 's'}` : ''}</time></span></button>; })}
       </div>
     </section>
 

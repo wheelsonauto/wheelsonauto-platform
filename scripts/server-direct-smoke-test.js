@@ -1118,6 +1118,34 @@ async function main() {
     assert(persistedMaintenance && persistedMaintenance.status === 'Completed' && persistedMaintenance.mechanicSignoff === 'Direct Mechanic' && nextMaintenanceRows.length === 1 && maintainedVehicle && maintainedVehicle.mileage === 44500 && (maintenanceCommandState.json.auditLogs || []).some(row => /Maintenance job completed/.test(row.action || '') && /Direct Dispute Car/.test(row.details || '')), 'Maintenance job, vehicle history, one reminder, and audit proof must persist in the same state version.');
     assert(savedStateVersion.json.version !== initialStateVersion.json.version, 'State version should change immediately after a real save.');
     const duplicateRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const createdFleetVehicle = await request(server, 'POST', '/api/vehicles', {
+      cookie: ownerCookie,
+      json: { year: '2020', make: 'Direct', model: 'Fleet Photo Car', vin: 'DIRECTFLEETPHOTO01', plate: 'DIR-PHO', mileage: 18000, weeklyPayment: 199, downPayment: 499 }
+    });
+    assert(createdFleetVehicle.status === 201 && createdFleetVehicle.json.record.id && createdFleetVehicle.json.record.publishedOnline === false, 'Add Vehicle must create the fleet record and a safely unpublished website listing.');
+    const createdFleetId = createdFleetVehicle.json.record.id;
+    const uploadedFleetPhoto = await request(server, 'POST', '/api/vehicles/' + encodeURIComponent(createdFleetId) + '/photos', {
+      cookie: ownerCookie,
+      json: { expectedUpdatedAt: createdFleetVehicle.json.record.updatedAt || '', file: { name: 'direct-fleet-photo.png', type: 'image/png', dataUrl: pngDataUrl() } }
+    });
+    assert(uploadedFleetPhoto.status === 201 && uploadedFleetPhoto.json.record.imageUrls.length === 1 && uploadedFleetPhoto.json.record.photoArtifacts.length === 1, 'Vehicle photo upload must persist one encrypted display photo.');
+    const safePhotoJson = JSON.stringify(uploadedFleetPhoto.json.record.photoArtifacts[0]);
+    assert(!/storageKey|encryption|sha256|authenticationTag/i.test(safePhotoJson), 'Vehicle API responses must not expose encrypted-object storage internals.');
+    const fleetPhoto = uploadedFleetPhoto.json.record.photoArtifacts[0];
+    const publicFleetPhoto = await request(server, 'GET', fleetPhoto.url);
+    assert(publicFleetPhoto.status === 200 && /^image\/png/i.test(String(publicFleetPhoto.headers['Content-Type'] || publicFleetPhoto.headers['content-type'] || '')) && publicFleetPhoto.rawBody.length > 8, 'Saved vehicle photos must render through their controlled image route.');
+    const removedFleetPhoto = await request(server, 'POST', '/api/vehicles/' + encodeURIComponent(createdFleetId) + '/photos/remove', {
+      cookie: ownerCookie,
+      json: { expectedUpdatedAt: uploadedFleetPhoto.json.record.updatedAt || '', photoId: fleetPhoto.id, photoUrl: fleetPhoto.url }
+    });
+    assert(removedFleetPhoto.status === 200 && removedFleetPhoto.json.record.imageUrls.length === 0 && removedFleetPhoto.json.record.photoArtifacts[0].removedAt, 'Remove Photo must archive the photo and immediately remove it from the gallery.');
+    const archivedFleetVehicle = await request(server, 'POST', '/api/vehicles/' + encodeURIComponent(createdFleetId) + '/retire', {
+      cookie: ownerCookie,
+      json: { expectedUpdatedAt: removedFleetPhoto.json.record.updatedAt || '', confirmation: 'REMOVE_VEHICLE' }
+    });
+    assert(archivedFleetVehicle.status === 200 && archivedFleetVehicle.json.record.status === 'Removed' && archivedFleetVehicle.json.record.removedAt, 'Delete Vehicle must archive an unassigned vehicle into Fleet History.');
+    const archivedFleetPhotoRead = await request(server, 'GET', fleetPhoto.url);
+    assert(archivedFleetPhotoRead.status === 404, 'Archived vehicle photos must not remain publicly readable.');
     const vehicleResourceSearch = await request(server, 'GET', '/api/vehicles?search=DIRECTDISPUTEVIN&limit=1&page=1', { cookie: ownerCookie });
     assert(vehicleResourceSearch.status === 200 && vehicleResourceSearch.json && vehicleResourceSearch.json.total === 1 && vehicleResourceSearch.json.records[0].id === 'veh-direct-dispute-car', 'Vehicle resource search must return the exact VIN match with pagination metadata.');
     const vehicleResourceDetail = await request(server, 'GET', '/api/vehicles/veh-direct-dispute-car', { cookie: ownerCookie });

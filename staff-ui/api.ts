@@ -1,4 +1,4 @@
-import type { ApplicationFeed, CustomerRecord, DashboardPriorityFeed, MaintenanceRecord, MessageFeed, MessageRecord, NotificationFeed, PagedFeed, PaymentRecord, ProviderRecord, RecurringPaymentRecord, RentalDetail, RentalRecord, StarCoachState, TaskRecord, VehicleRecord } from './types';
+import type { ApplicationFeed, ClaimRecord, CustomerRecord, DashboardPriorityFeed, MaintenanceRecord, MessageFeed, MessageRecord, NotificationFeed, PagedFeed, PaymentRecord, ProviderRecord, RecurringPaymentRecord, RentalDetail, RentalRecord, StarCoachState, TaskRecord, VehicleRecord } from './types';
 
 async function parseJson<T>(response: Response): Promise<T> {
   const payload = await response.json().catch(() => ({}));
@@ -162,6 +162,10 @@ export function loadCustomers(signal?: AbortSignal, force = false): Promise<Page
 
 export function loadPayments(signal?: AbortSignal, force = false): Promise<PagedFeed<PaymentRecord>> {
   return loadPaged<PaymentRecord>('/api/payments?limit=200', signal, force);
+}
+
+export function loadClaims(signal?: AbortSignal, force = false): Promise<PagedFeed<ClaimRecord>> {
+  return loadPaged<ClaimRecord>('/api/claims?limit=500', signal, force);
 }
 
 export function loadDashboardPriority(signal?: AbortSignal, force = false): Promise<DashboardPriorityFeed> {
@@ -429,6 +433,50 @@ async function patchResource<T>(path: string, payload: Record<string, unknown>, 
 
 export function updateVehicle(id: string, payload: Partial<VehicleRecord> & { expectedUpdatedAt?: string }) {
   return patchResource<VehicleRecord>(`/api/vehicles/${encodeURIComponent(id)}`, payload, ['/api/vehicles', '/api/customers', '/api/app-notifications']);
+}
+
+export async function createVehicle(payload: Partial<VehicleRecord> & { weeklyPayment?: number; downPayment?: number }): Promise<{ ok: boolean; record: VehicleRecord }> {
+  const response = await fetch('/api/vehicles', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  const result = await parseJson<{ ok: boolean; record: VehicleRecord }>(response);
+  invalidateCachedPaths('/api/vehicles', '/api/applications/live-feed', '/api/app-notifications');
+  return result;
+}
+
+export async function uploadVehiclePhoto(id: string, input: { expectedUpdatedAt?: string; file: { name: string; type: string; size: number; dataUrl: string } }): Promise<{ ok: boolean; record: VehicleRecord }> {
+  const response = await fetch(`/api/vehicles/${encodeURIComponent(id)}/photos`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify(input)
+  });
+  const result = await parseJson<{ ok: boolean; record: VehicleRecord }>(response);
+  invalidateCachedPaths('/api/vehicles', '/api/applications/live-feed', '/api/app-notifications');
+  return result;
+}
+
+export async function removeVehiclePhoto(id: string, photoId: string, photoUrl: string, expectedUpdatedAt?: string): Promise<{ ok: boolean; record: VehicleRecord }> {
+  const response = await fetch(`/api/vehicles/${encodeURIComponent(id)}/photos/remove`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ photoId, photoUrl, expectedUpdatedAt })
+  });
+  const result = await parseJson<{ ok: boolean; record: VehicleRecord }>(response);
+  invalidateCachedPaths('/api/vehicles', '/api/applications/live-feed', '/api/app-notifications');
+  return result;
+}
+
+export async function archiveVehicle(id: string, expectedUpdatedAt?: string): Promise<{ ok: boolean; record: VehicleRecord; alreadyRemoved?: boolean }> {
+  const response = await fetch(`/api/vehicles/${encodeURIComponent(id)}/retire`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ expectedUpdatedAt, confirmation: 'REMOVE_VEHICLE' })
+  });
+  const result = await parseJson<{ ok: boolean; record: VehicleRecord; alreadyRemoved?: boolean }>(response);
+  invalidateCachedPaths('/api/vehicles', '/api/applications/live-feed', '/api/app-notifications');
+  return result;
 }
 
 export function updateCustomer(id: string, payload: Partial<CustomerRecord> & { expectedUpdatedAt?: string }) {

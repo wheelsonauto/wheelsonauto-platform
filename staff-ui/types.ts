@@ -118,6 +118,18 @@ export type VehicleRecord = {
   onlineListingId?: string;
   publishedOnline?: boolean;
   onlineAvailability?: string;
+  imageUrls?: string[];
+  photoArtifacts?: Array<{
+    id: string;
+    url: string;
+    originalName?: string;
+    contentType?: string;
+    size?: number;
+    createdAt?: string;
+    createdBy?: string;
+    removedAt?: string;
+  }>;
+  removedAt?: string;
   updatedAt?: string;
 };
 
@@ -165,6 +177,25 @@ export type PaymentRecord = {
   provider?: string;
   paymentProvider?: string;
   notes?: string;
+  updatedAt?: string;
+};
+
+export type ClaimRecord = {
+  id: string;
+  organizationId?: string;
+  customer?: string;
+  customerId?: string;
+  customerAccountId?: string;
+  vehicle?: string;
+  vehicleId?: string;
+  type?: string;
+  amount?: number;
+  status?: string;
+  provider?: string;
+  due?: string;
+  deadline?: string;
+  notes?: string;
+  createdAt?: string;
   updatedAt?: string;
 };
 
@@ -382,6 +413,7 @@ export type MaintenanceRecord = {
   notes?: string;
   status?: string;
   completedAt?: string;
+  fixedAt?: string;
   odometer?: string | number;
   mileageAtService?: string | number;
   inspectionCondition?: string;

@@ -10,7 +10,6 @@ import {
   MessageSquareText,
   Settings,
   UsersRound,
-  Wrench,
   type LucideIcon
 } from 'lucide-react';
 import { loadNotifications, markNotificationsRead, prewarmStaffFeeds } from './api';
@@ -26,7 +25,6 @@ const loadMessagesModule = () => import('./messages/MessagesPage');
 const loadMoreModule = () => import('./more/MorePage');
 const loadApplicationsModule = () => import('./applications/ApplicationsPage');
 const loadDispatchModule = () => import('./dispatch/DispatchPage');
-const loadMaintenanceModule = () => import('./maintenance/MaintenancePage');
 const loadAccountingModule = () => import('./accounting/AccountingPage');
 const loadManagerReportsModule = () => import('./reports/ManagerReportsPage');
 const loadSettingsModule = () => import('./settings/SettingsPage');
@@ -37,7 +35,6 @@ const PaymentsPage = lazy(() => loadPaymentsModule().then(module => ({ default: 
 const ApplicationsPage = lazy(() => loadApplicationsModule().then(module => ({ default: module.ApplicationsPage })));
 const MessagesPage = lazy(() => loadMessagesModule().then(module => ({ default: module.MessagesPage })));
 const DispatchPage = lazy(() => loadDispatchModule().then(module => ({ default: module.DispatchPage })));
-const MaintenancePage = lazy(() => loadMaintenanceModule().then(module => ({ default: module.MaintenancePage })));
 const AccountingPage = lazy(() => loadAccountingModule().then(module => ({ default: module.AccountingPage })));
 const ManagerReportsPage = lazy(() => loadManagerReportsModule().then(module => ({ default: module.ManagerReportsPage })));
 const MorePage = lazy(() => loadMoreModule().then(module => ({ default: module.MorePage })));
@@ -82,7 +79,6 @@ const ownerNavGroups: Array<{ label: string; items: NavItem[] }> = [
     { id: 'customers', label: 'Customers & payments', icon: UsersRound }
   ] },
   { label: 'Operations', items: [
-    { id: 'maintenance', label: 'Maintenance', icon: Wrench },
     { id: 'accounting', label: 'Accounting', icon: Calculator }
   ] }
 ];
@@ -97,14 +93,14 @@ const ownerMobileItems: NavItem[] = [
 
 const workspaceNames = new Map<Workspace, string>([
   ...ownerNavGroups.flatMap(group => group.items.map(item => [item.id, item.label] as [Workspace, string])),
-  ['payments', 'Payments'], ['applications', 'Applications'], ['dispatch', 'Dispatch'], ['systems', 'Systems'],
+  ['payments', 'Payments'], ['applications', 'Applications'], ['dispatch', 'Dispatch'], ['maintenance', 'Maintenance'], ['systems', 'Systems'],
   ['reports', 'Reports'], ['more', 'Owner admin'], ['settings', 'Settings'], ['rental', 'Rental File']
 ]);
 
 const roleWorkspaceAccess: Record<StaffRole, Set<Workspace>> = {
   owner: new Set(Array.from(workspaceNames.keys()).filter((workspace) => workspace !== 'reports')),
-  manager: new Set(['dashboard', 'fleet', 'customers', 'applications', 'messages', 'dispatch', 'maintenance', 'reports', 'more', 'settings', 'rental']),
-  mechanic: new Set(['dashboard', 'fleet', 'dispatch', 'maintenance', 'more', 'settings'])
+  manager: new Set(['dashboard', 'fleet', 'customers', 'applications', 'messages', 'dispatch', 'reports', 'more', 'settings', 'rental']),
+  mechanic: new Set(['dashboard', 'fleet', 'dispatch', 'more', 'settings'])
 };
 
 function staffRole(): StaffRole {
@@ -120,8 +116,7 @@ function navigationForRole(role: StaffRole) {
       { id: 'dispatch', label: 'Work queue', icon: ClipboardCheck }
     ] as NavItem[] },
     { label: 'Shop', items: [
-      { id: 'fleet', label: 'Vehicles', icon: CarFront },
-      { id: 'maintenance', label: 'Maintenance', icon: Wrench }
+      { id: 'fleet', label: 'Fleet & service', icon: CarFront }
     ] as NavItem[] }
   ];
   if (role === 'manager') return [
@@ -135,7 +130,6 @@ function navigationForRole(role: StaffRole) {
     ] as NavItem[] },
     { label: 'Operations', items: [
       { id: 'dispatch', label: 'Dispatch', icon: ClipboardCheck },
-      { id: 'maintenance', label: 'Maintenance', icon: Wrench },
       { id: 'reports', label: 'Reports', icon: Gauge }
     ] as NavItem[] }
   ];
@@ -146,8 +140,7 @@ function mobileNavigationForRole(role: StaffRole): NavItem[] {
   if (role === 'mechanic') return [
     { id: 'dashboard', label: 'Home', icon: LayoutDashboard },
     { id: 'dispatch', label: 'Work', icon: ClipboardCheck },
-    { id: 'fleet', label: 'Vehicles', icon: CarFront },
-    { id: 'maintenance', label: 'Service', icon: Wrench },
+    { id: 'fleet', label: 'Fleet', icon: CarFront },
     { id: 'more', label: 'More', icon: Ellipsis }
   ];
   return ownerMobileItems;
@@ -162,6 +155,7 @@ function routeFromHash(): { workspace: Workspace; recordId: string } {
 function consolidatedRoute(role: StaffRole, route: { workspace: Workspace; recordId: string }) {
   if (route.workspace === 'payments') return { workspace: 'customers' as Workspace, recordId: route.recordId || 'payments' };
   if (route.workspace === 'applications') return { workspace: 'dashboard' as Workspace, recordId: route.recordId || 'applications' };
+  if (route.workspace === 'maintenance') return { workspace: 'fleet' as Workspace, recordId: route.recordId || 'service' };
   if (role === 'owner' && (route.workspace === 'dispatch' || route.workspace === 'systems')) return { workspace: 'more' as Workspace, recordId: route.workspace };
   return route;
 }
@@ -171,7 +165,7 @@ function notificationTarget(row: NotificationRecord): Workspace {
   return /message|inbox/.test(hint) ? 'messages'
     : /payment|charge|card|refund|dispute/.test(hint) ? 'customers'
       : /application|applicant|onboard|pickup/.test(hint) ? 'dashboard'
-        : /service|maintenance|inspection/.test(hint) ? 'maintenance'
+        : /service|maintenance|inspection/.test(hint) ? 'fleet'
           : /vehicle|fleet|assignment/.test(hint) ? 'fleet'
             : /task|dispatch|claim|issue/.test(hint) ? 'dispatch'
               : 'dashboard';
@@ -253,7 +247,7 @@ export function StaffApp() {
   }, [notificationsOpen]);
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      const modules: Promise<unknown>[] = [loadFleetModule(), loadMoreModule(), loadDispatchModule(), loadMaintenanceModule(), loadSettingsModule()];
+      const modules: Promise<unknown>[] = [loadFleetModule(), loadMoreModule(), loadDispatchModule(), loadSettingsModule()];
       if (role !== 'mechanic') modules.push(loadCustomersModule(), loadMessagesModule(), loadApplicationsModule(), loadRentalModule());
       if (role === 'owner') modules.push(loadPaymentsModule(), loadAccountingModule());
       if (role === 'manager') modules.push(loadManagerReportsModule());
@@ -324,13 +318,12 @@ export function StaffApp() {
       <header className="staff-topbar"><div>{mobileContextBack ? <button type="button" className="mobile-context-back" onClick={() => open('more')} aria-label="Back to More">‹</button> : null}<span>WheelsonAuto</span><strong>{heading}</strong></div><div className="notification-center" ref={notificationCenterRef}><button type="button" className={`notification-command${notificationsOpen ? ' active' : ''}`} onClick={toggleNotifications} aria-label={`${unread} unread notifications`} aria-expanded={notificationsOpen} aria-controls="staff-notification-panel"><span aria-hidden="true"><Bell size={17} strokeWidth={1.8} /></span>{unread ? <b>{unread > 99 ? '99+' : unread}</b> : null}</button>{notificationsOpen ? <section className="notification-panel" id="staff-notification-panel" aria-label="Notifications"><header><div><strong>Notifications</strong><span>{unread ? `${unread} unread` : 'All caught up'}</span></div>{unread ? <button type="button" onClick={markAllNotificationsRead}>Mark all read</button> : null}</header><div className="notification-list">{notificationsLoading && !notifications.length ? <div className="notification-empty"><strong>Loading updates</strong></div> : notifications.length ? notifications.map(row => <button type="button" key={row.id} className={row.read ? 'read' : ''} onClick={() => openNotification(row)}><i className={`tone-${row.tone || 'blue'}`} aria-hidden="true" /><span><strong>{row.title || 'WheelsonAuto update'}</strong><small>{row.body || row.message || 'Open for details.'}</small>{notificationTime(row) ? <time>{notificationTime(row)}</time> : null}</span>{!row.read ? <b aria-label="Unread" /> : null}</button>) : <div className="notification-empty"><strong>No notifications</strong><span>New activity will appear here automatically.</span></div>}</div></section> : null}</div></header>
       <section className="staff-app-workspace" aria-live="polite"><Suspense fallback={<div className="workspace-loading"><span /><strong>Opening {heading}</strong></div>}>
         {workspace === 'dashboard' ? role === 'mechanic' ? <ServiceDashboardPage onNavigate={open} /> : role === 'manager' ? <ManagerDashboardPage onNavigate={open} onOpenRental={openRental} section={recordId === 'applications' ? 'applications' : 'overview'} onSectionChange={section => open('dashboard', section === 'overview' ? '' : section)} /> : <DashboardPage onNavigate={open} onOpenRental={openRental} section={recordId === 'applications' ? 'applications' : 'overview'} onSectionChange={section => open('dashboard', section === 'overview' ? '' : section)} /> : null}
-        {workspace === 'fleet' ? <FleetPage role={role} onNavigate={open} onOpenRental={openRental} /> : null}
+        {workspace === 'fleet' ? <FleetPage role={role} initialSection={recordId} onNavigate={open} onOpenRental={openRental} /> : null}
         {workspace === 'customers' ? <CustomersPage onNavigate={open} onOpenRental={openRental} /> : null}
         {workspace === 'payments' ? <PaymentsPage onOpenRental={openRental} /> : null}
         {workspace === 'applications' ? <ApplicationsPage onOpenRental={openRental} /> : null}
         {workspace === 'messages' ? <MessagesPage /> : null}
         {workspace === 'dispatch' ? <DispatchPage /> : null}
-        {workspace === 'maintenance' ? <MaintenancePage /> : null}
         {workspace === 'accounting' ? <AccountingPage /> : null}
         {workspace === 'reports' ? <ManagerReportsPage onNavigate={open} /> : null}
         {workspace === 'more' ? <MorePage role={role} theme={theme} onThemeChange={setTheme} onNavigate={open} initialSection={recordId} /> : null}

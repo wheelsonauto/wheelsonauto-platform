@@ -421,7 +421,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260820-priority-service-files-356';
+const ASSET_VERSION = 'platform-20260820-fleet-service-dues-357';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -8555,6 +8555,29 @@ function enrichLinkedProfiles(data) {
 function vehicleNameFromParts(row = {}) {
   return row.name || [row.year, row.make, row.model].filter(Boolean).join(' ').trim() || [row.year, row.makeModel].filter(Boolean).join(' ').trim() || 'Vehicle';
 }
+function safeVehicleRecord(row = {}, online = null) {
+  const { photoArtifacts = [], ...record } = row || {};
+  return {
+    ...record,
+    photoArtifacts: (Array.isArray(photoArtifacts) ? photoArtifacts : []).map(photo => ({
+      id: photo.id || '',
+      url: photo.url || '',
+      originalName: photo.originalName || '',
+      contentType: photo.contentType || '',
+      size: Number(photo.size || 0),
+      createdAt: photo.createdAt || '',
+      createdBy: photo.createdBy || '',
+      removedAt: photo.removedAt || '',
+      removedBy: photo.removedBy || ''
+    })),
+    ...(online ? {
+      imageUrls: Array.from(new Set([...(record.imageUrls || []), ...(online.imageUrls || []), online.imageUrl].filter(Boolean))),
+      onlineListingId: online.id || '',
+      publishedOnline: !!online.published,
+      onlineAvailability: online.availability || ''
+    } : {})
+  };
+}
 async function loadVehicleImport() {
   try {
     const body = JSON.parse(await fs.readFile(VEHICLE_IMPORT_FILE, 'utf8'));
@@ -14500,6 +14523,10 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     route('POST', '/api/payments/manual-result', 'Owner-recorded exact recurring payment result'),
     route('POST', '/api/payments/:id/match', 'Owner-confirmed exact recurring customer match'),
     route('POST', '/api/claims/:id/match', 'Owner-confirmed exact claim customer match'),
+    route('GET', '/api/claims', 'Tolls, violations, disputes, and outstanding customer dues'),
+    route('POST', '/api/vehicles', 'Add a fleet vehicle and unpublished website listing'),
+    route('POST', '/api/vehicles/:id/photos', 'Store an encrypted fleet photo'),
+    route('POST', '/api/vehicles/:id/photos/remove', 'Archive a fleet photo without losing recovery history'),
     route('POST', '/api/vehicles/:id/retire', 'Assignment-safe vehicle removal'),
     route('GET', '/forgot', 'Staff email password recovery page'),
     route('POST', '/forgot', 'Send account-bound staff recovery code'),
@@ -23271,6 +23298,22 @@ const server = http.createServer(async (req, res) => {
         return send(res, 404, 'Not found', 'text/plain; charset=utf-8');
       }
     }
+    const publicVehiclePhotoMatch = /^\/vehicle-photo\/([^/]+)\/([^/]+)$/.exec(url.pathname);
+    if (publicVehiclePhotoMatch && req.method === 'GET') {
+      const vehicleId = decodeURIComponent(publicVehiclePhotoMatch[1]);
+      const photoId = decodeURIComponent(publicVehiclePhotoMatch[2]);
+      const data = await readData();
+      const vehicle = (data.vehicles || []).find(row => String(row.id || '') === vehicleId);
+      if (!vehicle || /removed|retired|sold|history|archived/i.test(String(vehicle.status || '')) || vehicle.removedAt) return send(res, 404, 'Not found', 'text/plain; charset=utf-8');
+      const photo = vehicle && (vehicle.photoArtifacts || []).find(row => String(row.id || '') === photoId && !row.removedAt);
+      if (!photo || !privateDocumentAvailable(photo) || !/^image\/(?:jpeg|png)$/i.test(String(photo.contentType || ''))) return send(res, 404, 'Not found', 'text/plain; charset=utf-8');
+      try {
+        const body = await readPrivateDocumentBytes(photo);
+        return send(res, 200, body, photo.contentType, { 'Cache-Control': 'public, max-age=31536000, immutable', 'X-Content-Type-Options': 'nosniff' });
+      } catch {
+        return send(res, 404, 'Not found', 'text/plain; charset=utf-8');
+      }
+    }
     if (url.pathname === '/staff/login' && req.method === 'GET') return send(res, 302, '', 'text/plain', { Location: '/login' });
     if (req.method === 'GET' && (url.pathname === '/site-preview' || url.pathname === '/' && nativePublicRoot(req))) {
       const data = await readData();
@@ -27479,7 +27522,7 @@ const server = http.createServer(async (req, res) => {
           if (sourceIds.length > 1) throw Object.assign(new Error('This customer is linked to more than one current vehicle. Resolve the assignment conflict before swapping.'), { statusCode: 409 });
           const source = sourceCandidates[0] || null;
           if (source && String(source.id || '') === String(target.id || '')) {
-            response = { unchanged: true, customer: { ...customer }, vehicle: { ...target }, previousVehicle: null, propagated: [] };
+            response = { unchanged: true, customer: { ...customer }, vehicle: safeVehicleRecord(target), previousVehicle: null, propagated: [] };
             return;
           }
 
@@ -27531,18 +27574,73 @@ const server = http.createServer(async (req, res) => {
           data.vehicleAssignmentHistory.unshift({ id: 'assignment-' + crypto.randomUUID(), customerId, customer: customerName, fromVehicleId: source && source.id || '', fromVehicle: source && vehicleNameFromParts(source) || '', toVehicleId: target.id, toVehicle: targetName, reason: cleanResourceText(payload.reason || 'Customer vehicle swap', 500), at: now, by: user.name || user.username || 'Staff' });
           enrichLinkedProfiles(data);
           appendAuditLog(data, user, source ? 'Customer vehicle swapped' : 'Customer vehicle assigned', [customerName, source ? vehicleNameFromParts(source) + ' to ' + targetName : targetName, target.vin ? 'VIN ' + target.vin : 'VIN missing', targetTag ? 'Tag ' + targetTag : 'Tag missing', propagated.length + ' linked record(s) updated']);
-          response = { unchanged: false, customer: { ...customer }, vehicle: { ...target }, previousVehicle: source && { ...source }, rentalFile: rental && rentalFiles.summarize(rental), propagated };
+          response = { unchanged: false, customer: { ...customer }, vehicle: safeVehicleRecord(target), previousVehicle: source && safeVehicleRecord(source), rentalFile: rental && rentalFiles.summarize(rental), propagated };
         });
       } catch (error) {
         return json(res, Number(error && error.statusCode || 409), { ok: false, error: String(error && error.message || error), currentUpdatedAt: error && error.currentUpdatedAt || '' });
       }
       return json(res, 200, safeResourcePayload({ ok: true, ...response, version: await dataVersion() }));
     }
+    if (url.pathname === '/api/vehicles' && req.method === 'POST') {
+      const role = String(user.role || '').toLowerCase();
+      if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'Only an owner or manager can add a vehicle.' });
+      const payload = await readJsonBody(req, 128 * 1024);
+      const year = cleanResourceText(payload.year, 8);
+      const make = cleanResourceText(payload.make, 80);
+      const model = cleanResourceText(payload.model, 100);
+      const vin = cleanResourceText(payload.vin, 40).toUpperCase().replace(/\s+/g, '');
+      if (!make || !model) return json(res, 400, { ok: false, error: 'Vehicle make and model are required.' });
+      let saved = null;
+      try {
+        await mutateLatestData('Add exact fleet vehicle', async data => {
+          data.vehicles = Array.isArray(data.vehicles) ? data.vehicles : [];
+          data.onlineVehicles = Array.isArray(data.onlineVehicles) ? data.onlineVehicles : [];
+          if (vin && data.vehicles.some(row => rowVisibleToUserOrganization(row, user) && normKey(row.vin) === normKey(vin) && !/removed|retired/i.test(String(row.status || '')))) throw Object.assign(new Error('That VIN already exists in active Fleet.'), { statusCode: 409 });
+          const now = new Date().toISOString();
+          const id = 'vehicle-' + crypto.randomUUID();
+          const record = {
+            id,
+            organizationId: user.organizationId || MAIN_ORG_ID,
+            name: cleanResourceText(payload.name || [year, make, model].filter(Boolean).join(' '), 180),
+            year,
+            make,
+            model,
+            vin,
+            plate: cleanResourceText(payload.plate, 40),
+            stock: cleanResourceText(payload.stock, 80),
+            tempTag: cleanResourceText(payload.tempTag, 80),
+            tracker: cleanResourceText(payload.tracker, 160),
+            color: cleanResourceText(payload.color, 80),
+            location: cleanResourceText(payload.location || 'WheelsonAuto lot', 240),
+            mileage: Math.max(0, Math.round(Number(payload.mileage || 0) || 0)),
+            notes: cleanResourceText(payload.notes, 20000),
+            currentCustomer: '',
+            status: 'Ready',
+            createdAt: now,
+            updatedAt: now,
+            updatedBy: user.name || user.username || 'Staff'
+          };
+          const online = cleanOnlineVehiclePayload({
+            title: vehicleNameFromParts(record), platformVehicleId: id, year, make, model, color: record.color,
+            vin, plate: record.plate || record.stock, mileage: record.mileage,
+            weeklyPayment: payload.weeklyPayment, downPayment: payload.downPayment,
+            availability: 'Ready', published: false, source: 'WheelsonAuto Fleet'
+          });
+          data.vehicles.unshift(record);
+          data.onlineVehicles.unshift(online);
+          appendAuditLog(data, user, 'Fleet vehicle added', [vehicleNameFromParts(record), vin ? 'VIN ' + vin : 'VIN pending', record.plate || record.stock ? 'Tag ' + (record.plate || record.stock) : 'Tag pending']);
+          saved = safeVehicleRecord(record, online);
+        });
+      } catch (error) {
+        return json(res, Number(error && error.statusCode || 409), { ok: false, error: String(error && error.message || error) });
+      }
+      return json(res, 201, safeResourcePayload({ ok: true, record: saved, version: await dataVersion() }));
+    }
     if (url.pathname === '/api/vehicles' && req.method === 'GET') {
       const data = await readViewData();
       const vehicleRows = viewResourceRows(data, 'vehicles', user).map(vehicle => {
         const online = (data.onlineVehicles || []).find(row => String(row.platformVehicleId || row.vehicleId || '') === String(vehicle.id || '') || vehicle.vin && row.vin && normKey(row.vin) === normKey(vehicle.vin));
-        return { ...vehicle, onlineListingId: online && online.id || '', publishedOnline: !!(online && online.published), onlineAvailability: online && online.availability || '' };
+        return safeVehicleRecord(vehicle, online);
       });
       const page = paginatedResource(vehicleRows, url, { searchFields: ['id', 'name', 'year', 'make', 'model', 'vin', 'plate', 'stock', 'tempTag', 'tracker', 'currentCustomer', 'status'], defaultLimit: 50 });
       return json(res, 200, safeResourcePayload({ ok: true, ...page }), { 'Cache-Control': 'private, no-store' });
@@ -27552,7 +27650,7 @@ const server = http.createServer(async (req, res) => {
       const scoped = stateForUserRead(await readData(), user);
       const record = (scoped.vehicles || []).find(row => String(row.id || '') === decodeURIComponent(vehicleResourceMatch[1]));
       if (!record) return json(res, 404, { ok: false, error: 'Vehicle record was not found.' });
-      return json(res, 200, safeResourcePayload({ ok: true, record }), { 'Cache-Control': 'private, no-store' });
+      return json(res, 200, safeResourcePayload({ ok: true, record: safeVehicleRecord(record) }), { 'Cache-Control': 'private, no-store' });
     }
     if (vehicleResourceMatch && req.method === 'PATCH') {
       const role = String(user.role || '').toLowerCase();
@@ -27570,7 +27668,7 @@ const server = http.createServer(async (req, res) => {
             throw error;
           }
           assertResourceRevision(record, payload);
-          const limits = { plate: 40, stock: 80, tempTag: 80, tracker: 160, color: 80, location: 240, notes: 20000 };
+          const limits = { name: 180, year: 8, make: 80, model: 100, vin: 40, plate: 40, stock: 80, tempTag: 80, tracker: 160, color: 80, location: 240, notes: 20000 };
           const changes = [];
           Object.entries(limits).forEach(([field, maxLength]) => {
             if (!Object.prototype.hasOwnProperty.call(payload, field)) return;
@@ -27591,15 +27689,15 @@ const server = http.createServer(async (req, res) => {
               changes.push('mileage');
             }
           }
-          if (!changes.length) {
-            const error = new Error('No supported vehicle identity field changed.');
-            error.statusCode = 400;
-            throw error;
+          if (changes.includes('vin')) {
+            record.vin = String(record.vin || '').toUpperCase().replace(/\s+/g, '');
+            if (record.vin && (data.vehicles || []).some(row => row !== record && rowVisibleToUserOrganization(row, user) && normKey(row.vin) === normKey(record.vin) && !/removed|retired/i.test(String(row.status || '')))) throw Object.assign(new Error('That VIN already belongs to another active fleet vehicle.'), { statusCode: 409 });
           }
+          if (!changes.length) { saved = safeVehicleRecord(record); return; }
           const now = new Date().toISOString();
           record.updatedAt = now;
           record.updatedBy = user.name || user.username || 'Staff';
-          const copiedFields = changes.filter(field => ['plate', 'stock', 'tempTag', 'tracker'].includes(field));
+          const copiedFields = changes.filter(field => ['plate', 'stock', 'tempTag', 'tracker', 'vin'].includes(field));
           const exactLinks = [
             ['onlineVehicles', row => String(row.platformVehicleId || row.vehicleId || '') === vehicleId],
             ['recurringPayments', row => String(row.vehicleId || '') === vehicleId],
@@ -27612,8 +27710,12 @@ const server = http.createServer(async (req, res) => {
               copiedFields.forEach(field => {
                 row[field] = record[field];
               });
-              if (collection === 'onlineVehicles' && changes.includes('mileage')) row.mileage = record.mileage;
-              if (copiedFields.length || collection === 'onlineVehicles' && changes.includes('mileage')) {
+              if (collection === 'onlineVehicles') {
+                if (changes.includes('mileage')) row.mileage = record.mileage;
+                ['year', 'make', 'model', 'color'].filter(field => changes.includes(field)).forEach(field => { row[field] = record[field]; });
+                if (changes.some(field => ['name', 'year', 'make', 'model'].includes(field))) row.title = vehicleNameFromParts(record);
+              }
+              if (copiedFields.length || collection === 'onlineVehicles' && changes.some(field => ['mileage', 'name', 'year', 'make', 'model', 'color'].includes(field))) {
                 row.updatedAt = now;
                 propagated.push(collection + ':' + String(row.id || 'linked'));
               }
@@ -27631,12 +27733,89 @@ const server = http.createServer(async (req, res) => {
             propagated.push('rentalFiles:' + String(row.id || 'linked'));
           });
           appendAuditLog(data, user, 'Vehicle identity resource updated', [vehicleNameFromParts(record), changes.join(', '), propagated.length ? propagated.length + ' exact linked record(s) updated' : 'No copied identity fields required propagation']);
-          saved = { ...record };
+          saved = safeVehicleRecord(record);
         });
       } catch (error) {
         return json(res, Number(error && error.statusCode || 409), { ok: false, error: String(error && error.message || error), currentUpdatedAt: error && error.currentUpdatedAt || '' });
       }
       return json(res, 200, safeResourcePayload({ ok: true, record: saved, propagated, version: await dataVersion() }));
+    }
+    const vehiclePhotosMatch = /^\/api\/vehicles\/([^/]+)\/photos$/.exec(url.pathname);
+    if (vehiclePhotosMatch && req.method === 'POST') {
+      const role = String(user.role || '').toLowerCase();
+      if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'Only an owner or manager can upload vehicle photos.' });
+      const vehicleId = decodeURIComponent(vehiclePhotosMatch[1]);
+      const payload = await readJsonBody(req, 8 * 1024 * 1024);
+      if (!payload.file || !/^image\/(?:jpeg|png)$/i.test(String(payload.file.type || ''))) return json(res, 400, { ok: false, error: 'Choose a JPG or PNG vehicle photo.' });
+      let stored = null;
+      let saved = null;
+      try {
+        stored = await onboarding.savePrivateDocument(payload.file, DATA_DIR, 'vehicle-photo', PRIVATE_DOCUMENT_STORE, { organizationId: user.organizationId || MAIN_ORG_ID });
+        await mutateLatestData('Upload exact vehicle photo', async data => {
+          const vehicle = (data.vehicles || []).find(row => String(row.id || '') === vehicleId);
+          if (!vehicle || !rowVisibleToUserOrganization(vehicle, user)) throw Object.assign(new Error('Vehicle record was not found.'), { statusCode: 404 });
+          assertResourceRevision(vehicle, payload);
+          if (/removed|retired/i.test(String(vehicle.status || ''))) throw Object.assign(new Error('Restore this vehicle before adding new photos.'), { statusCode: 409 });
+          const now = new Date().toISOString();
+          const urlPath = '/vehicle-photo/' + encodeURIComponent(vehicleId) + '/' + encodeURIComponent(stored.id);
+          const photo = { ...stored, url: urlPath, createdAt: now, createdBy: user.name || user.username || 'Staff' };
+          vehicle.photoArtifacts = Array.isArray(vehicle.photoArtifacts) ? vehicle.photoArtifacts : [];
+          vehicle.photoArtifacts.push(photo);
+          vehicle.imageUrls = Array.from(new Set([...(vehicle.imageUrls || []), urlPath]));
+          vehicle.updatedAt = now;
+          vehicle.updatedBy = user.name || user.username || 'Staff';
+          const online = (data.onlineVehicles || []).find(row => String(row.platformVehicleId || row.vehicleId || '') === vehicleId);
+          if (online) {
+            online.imageUrls = Array.from(new Set([...(online.imageUrls || []), urlPath]));
+            online.imageUrl = online.imageUrls[0] || '';
+            online.updatedAt = now;
+          }
+          appendAuditLog(data, user, 'Vehicle photo uploaded', [vehicleNameFromParts(vehicle), stored.originalName || stored.id]);
+          saved = safeVehicleRecord(vehicle, online);
+        });
+      } catch (error) {
+        const finalError = stored ? await attachPrivateDocumentRollback(error, stored) : error;
+        return json(res, Number(finalError && finalError.statusCode || 409), { ok: false, error: String(finalError && finalError.message || finalError) });
+      }
+      return json(res, 201, safeResourcePayload({ ok: true, record: saved, version: await dataVersion() }));
+    }
+    const vehiclePhotoRemoveMatch = /^\/api\/vehicles\/([^/]+)\/photos\/remove$/.exec(url.pathname);
+    if (vehiclePhotoRemoveMatch && req.method === 'POST') {
+      const role = String(user.role || '').toLowerCase();
+      if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'Only an owner or manager can remove vehicle photos.' });
+      const vehicleId = decodeURIComponent(vehiclePhotoRemoveMatch[1]);
+      const payload = await readJsonBody(req, 64 * 1024);
+      let saved = null;
+      try {
+        await mutateLatestData('Archive exact vehicle photo', async data => {
+          const vehicle = (data.vehicles || []).find(row => String(row.id || '') === vehicleId);
+          if (!vehicle || !rowVisibleToUserOrganization(vehicle, user)) throw Object.assign(new Error('Vehicle record was not found.'), { statusCode: 404 });
+          assertResourceRevision(vehicle, payload);
+          const photoUrl = cleanResourceText(payload.photoUrl, 1200);
+          const photo = (vehicle.photoArtifacts || []).find(row => String(row.id || '') === String(payload.photoId || '') && !row.removedAt);
+          const targetUrl = photo && photo.url || photoUrl;
+          if (!targetUrl || !(vehicle.imageUrls || []).includes(targetUrl) && !(data.onlineVehicles || []).some(row => String(row.platformVehicleId || row.vehicleId || '') === vehicleId && (row.imageUrls || []).includes(targetUrl))) throw Object.assign(new Error('Vehicle photo was not found.'), { statusCode: 404 });
+          const now = new Date().toISOString();
+          if (photo) {
+            photo.removedAt = now;
+            photo.removedBy = user.name || user.username || 'Staff';
+          }
+          vehicle.imageUrls = (vehicle.imageUrls || []).filter(item => item !== targetUrl);
+          vehicle.updatedAt = now;
+          vehicle.updatedBy = user.name || user.username || 'Staff';
+          const online = (data.onlineVehicles || []).find(row => String(row.platformVehicleId || row.vehicleId || '') === vehicleId);
+          if (online) {
+            online.imageUrls = (online.imageUrls || []).filter(item => item !== targetUrl);
+            online.imageUrl = online.imageUrls[0] || '';
+            online.updatedAt = now;
+          }
+          appendAuditLog(data, user, 'Vehicle photo archived', [vehicleNameFromParts(vehicle), photo && (photo.originalName || photo.id) || targetUrl]);
+          saved = safeVehicleRecord(vehicle, online);
+        });
+      } catch (error) {
+        return json(res, Number(error && error.statusCode || 409), { ok: false, error: String(error && error.message || error), currentUpdatedAt: error && error.currentUpdatedAt || '' });
+      }
+      return json(res, 200, safeResourcePayload({ ok: true, record: saved, version: await dataVersion() }));
     }
     const vehicleStateMatch = /^\/api\/vehicles\/([^/]+)\/state$/.exec(url.pathname);
     if (vehicleStateMatch && req.method === 'POST') {
@@ -27674,7 +27853,7 @@ const server = http.createServer(async (req, res) => {
             if (nextStatus !== 'Online') online.unpublishedAt = now;
           }
           appendAuditLog(data, user, 'Vehicle fleet state changed', [vehicleNameFromParts(vehicle), nextStatus, online ? (online.published ? 'Website listing published' : 'Website listing offline') : 'No website listing linked']);
-          response = { record: { ...vehicle, onlineListingId: online && online.id || '', publishedOnline: !!(online && online.published), onlineAvailability: online && online.availability || '' }, setupRequired: false };
+          response = { record: safeVehicleRecord(vehicle, online), setupRequired: false };
         });
       } catch (error) {
         return json(res, Number(error && error.statusCode || 409), { ok: false, error: String(error && error.message || error), setupRequired: !!(error && error.setupRequired), rentalFileId: error && error.rentalFileId || '', currentUpdatedAt: error && error.currentUpdatedAt || '' });
@@ -27701,7 +27880,7 @@ const server = http.createServer(async (req, res) => {
           assertResourceRevision(vehicle, payload);
           if (String(vehicle.status || '').toLowerCase() === 'removed') {
             alreadyRemoved = true;
-            saved = { ...vehicle };
+            saved = safeVehicleRecord(vehicle);
             return;
           }
           const activeRental = (data.rentalFiles || []).find(row => rentalFiles.isActiveRentalFile(row) && String(row.vehicleId || '') === vehicleId);
@@ -27726,12 +27905,17 @@ const server = http.createServer(async (req, res) => {
             row.updatedAt = now;
           });
           appendAuditLog(data, user, 'Unassigned vehicle removed from Fleet', [vehicleNameFromParts(vehicle), vehicle.vin ? 'VIN ' + vehicle.vin : 'VIN missing', vehicle.plate || vehicle.stock ? 'Tag ' + (vehicle.plate || vehicle.stock) : 'Tag missing']);
-          saved = { ...vehicle };
+          saved = safeVehicleRecord(vehicle);
         });
       } catch (error) {
         return json(res, Number(error && error.statusCode || 409), { ok: false, error: String(error && error.message || error), currentUpdatedAt: error && error.currentUpdatedAt || '' });
       }
       return json(res, 200, safeResourcePayload({ ok: true, alreadyRemoved, record: saved, version: await dataVersion() }));
+    }
+    if (url.pathname === '/api/claims' && req.method === 'GET') {
+      const data = await readViewData();
+      const page = paginatedResource(viewResourceRows(data, 'claims', user), url, { searchFields: ['id', 'customer', 'vehicle', 'type', 'status', 'provider', 'notes'], defaultLimit: 100 });
+      return json(res, 200, safeResourcePayload({ ok: true, ...page }), { 'Cache-Control': 'private, no-store' });
     }
     const claimMatchCommand = /^\/api\/claims\/([^/]+)\/match$/.exec(url.pathname);
     if (url.pathname.startsWith('/api/claims/') && claimMatchCommand && req.method === 'POST') {
