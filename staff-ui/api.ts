@@ -1,4 +1,4 @@
-import type { ApplicationFeed, ClaimRecord, CustomerRecord, DashboardPriorityFeed, MaintenanceRecord, MessageFeed, MessageRecord, NotificationFeed, PagedFeed, PaymentRecord, ProviderRecord, RecurringPaymentRecord, RentalDetail, RentalRecord, StarCoachState, TaskRecord, VehicleRecord } from './types';
+import type { AccountDirectory, ApplicationFeed, ClaimRecord, CustomerAccountRecord, CustomerRecord, DashboardPriorityFeed, MaintenanceRecord, MessageFeed, MessageRecord, NotificationFeed, OrganizationRecord, PagedFeed, PaymentRecord, ProviderRecord, RecurringPaymentRecord, RentalDetail, RentalRecord, StaffAccountRecord, StarCoachState, TaskRecord, VehicleRecord } from './types';
 
 async function parseJson<T>(response: Response): Promise<T> {
   const payload = await response.json().catch(() => ({}));
@@ -483,11 +483,25 @@ export function updateCustomer(id: string, payload: Partial<CustomerRecord> & { 
   return patchResource<CustomerRecord>(`/api/customers/${encodeURIComponent(id)}`, payload, ['/api/customers', '/api/app-notifications']);
 }
 
-export async function assignCustomerVehicle(customerId: string, input: { vehicleId: string; expectedUpdatedAt?: string; reason: string }): Promise<{ ok: boolean; unchanged: boolean; customer: CustomerRecord; vehicle: VehicleRecord; previousVehicle?: VehicleRecord; propagated: string[] }> {
+export async function createCustomer(payload: Partial<CustomerRecord>): Promise<{ ok: boolean; record: CustomerRecord }> {
+  const response = await fetch('/api/customers', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify(payload) });
+  const result = await parseJson<{ ok: boolean; record: CustomerRecord }>(response);
+  invalidateCachedPaths('/api/customers', '/api/app-notifications');
+  return result;
+}
+
+export async function archiveCustomer(id: string, input: { expectedUpdatedAt?: string; contractEndedAt: string; reason: string }): Promise<{ ok: boolean; record: CustomerRecord; vehicle?: VehicleRecord }> {
+  const response = await fetch(`/api/customers/${encodeURIComponent(id)}/archive`, { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify({ ...input, confirmation: 'END_CUSTOMER_CONTRACT' }) });
+  const result = await parseJson<{ ok: boolean; record: CustomerRecord; vehicle?: VehicleRecord }>(response);
+  invalidateCachedPaths('/api/customers', '/api/vehicles', '/api/recurring-payments', '/api/payments', '/api/rentals', '/api/app-notifications');
+  return result;
+}
+
+export async function assignCustomerVehicle(customerId: string, input: { vehicleId: string; expectedUpdatedAt?: string; reason: string; replaceExistingCustomer?: boolean }): Promise<{ ok: boolean; unchanged: boolean; customer: CustomerRecord; vehicle: VehicleRecord; previousVehicle?: VehicleRecord; propagated: string[] }> {
   const response = await fetch(`/api/customers/${encodeURIComponent(customerId)}/vehicle-assignment`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify({ ...input, confirmation: 'ASSIGN_EXACT_CUSTOMER_VEHICLE' })
+    body: JSON.stringify({ ...input, confirmation: 'ASSIGN_EXACT_CUSTOMER_VEHICLE', replacementConfirmation: input.replaceExistingCustomer ? 'END_PRIOR_CUSTOMER_AND_REASSIGN' : '' })
   });
   const result = await parseJson<{ ok: boolean; unchanged: boolean; customer: CustomerRecord; vehicle: VehicleRecord; previousVehicle?: VehicleRecord; propagated: string[] }>(response);
   invalidateCachedPaths('/api/customers', '/api/vehicles', '/api/recurring-payments', '/api/payments', '/api/rentals', '/api/app-notifications');
@@ -517,7 +531,7 @@ export async function saveMaintenance(job: Partial<MaintenanceRecord> & { id: st
 }
 
 export type MaintenanceCompletionInput = {
-  expectedUpdatedAt: string;
+  expectedUpdatedAt?: string;
   cost?: number;
   completedAt: string;
   odometer?: string | number;
@@ -537,4 +551,46 @@ export async function completeMaintenance(id: string, input: MaintenanceCompleti
   const result = await parseJson<{ ok: boolean; job: MaintenanceRecord; vehicle: VehicleRecord; nextReminder?: MaintenanceRecord; version: string }>(response);
   invalidateCachedPaths('/api/maintenance', '/api/vehicles', '/api/tasks', '/api/app-notifications');
   return result;
+}
+
+export async function createClaim(input: { customerId: string; vehicleId?: string; type: string; amount: number; due?: string; incidentDate?: string; reference?: string; notes?: string; file?: { name: string; type: string; size: number; dataUrl: string } }): Promise<{ ok: boolean; claim: ClaimRecord }> {
+  const response = await fetch('/api/claims', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify(input) });
+  const result = await parseJson<{ ok: boolean; claim: ClaimRecord }>(response);
+  invalidateCachedPaths('/api/claims', '/api/customers', '/api/app-notifications');
+  return result;
+}
+
+export async function archiveClaim(id: string, expectedUpdatedAt?: string, reason = 'Removed by staff.'): Promise<{ ok: boolean; claim: ClaimRecord }> {
+  const response = await fetch(`/api/claims/${encodeURIComponent(id)}/archive`, { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify({ expectedUpdatedAt, reason, confirmation: 'REMOVE_CUSTOMER_DUE' }) });
+  const result = await parseJson<{ ok: boolean; claim: ClaimRecord }>(response);
+  invalidateCachedPaths('/api/claims', '/api/customers', '/api/app-notifications');
+  return result;
+}
+
+export function loadAccountDirectory(signal?: AbortSignal, force = false): Promise<AccountDirectory> {
+  return loadCachedJson<AccountDirectory>('/api/owner/account-directory', signal, force);
+}
+
+async function saveAccount<T>(path: string, payload: Record<string, unknown>, key: string): Promise<T> {
+  const response = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify(payload) });
+  const result = await parseJson<T>(response);
+  invalidateCachedPaths('/api/owner/account-directory', key);
+  return result;
+}
+
+export function saveStaffAccount(payload: Partial<StaffAccountRecord> & { password?: string }) {
+  return saveAccount<{ ok: boolean; staff: StaffAccountRecord }>('/api/staff-accounts', payload as Record<string, unknown>, '/api/staff-accounts');
+}
+
+export function saveCustomerAccount(payload: Partial<CustomerAccountRecord> & { password?: string }) {
+  return saveAccount<{ ok: boolean; account: CustomerAccountRecord }>('/api/customer-accounts', payload as Record<string, unknown>, '/api/customer-accounts');
+}
+
+export function saveOrganization(payload: Partial<OrganizationRecord>) {
+  return saveAccount<{ ok: boolean; organization: OrganizationRecord }>('/api/organizations', payload as Record<string, unknown>, '/api/organizations');
+}
+
+export async function assistCustomerAccount(id: string): Promise<{ ok: boolean; url: string; account: CustomerAccountRecord }> {
+  const response = await fetch('/api/customer-accounts/assist', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify({ id }) });
+  return parseJson<{ ok: boolean; url: string; account: CustomerAccountRecord }>(response);
 }

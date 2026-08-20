@@ -421,7 +421,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260820-fleet-service-dues-357';
+const ASSET_VERSION = 'platform-20260820-owner-lifecycle-358';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -8576,6 +8576,41 @@ function safeVehicleRecord(row = {}, online = null) {
       publishedOnline: !!online.published,
       onlineAvailability: online.availability || ''
     } : {})
+  };
+}
+function staffCustomerRecord(data = {}, customer = {}) {
+  const customerId = String(customer.id || '');
+  const accountId = String(customer.customerAccountId || '');
+  const applicationId = String(customer.applicationId || '');
+  const rentalFileId = String(customer.activeRentalFileId || customer.rentalFileId || '');
+  const customerKey = normKey(customer.name || customer.customer || '');
+  const contract = (data.contracts || []).find(row =>
+    customerId && String(row.customerId || '') === customerId
+    || accountId && String(row.customerAccountId || '') === accountId
+    || rentalFileId && String(row.rentalFileId || '') === rentalFileId
+    || applicationId && String(row.applicationId || '') === applicationId
+  ) || null;
+  const signature = (data.eSignatures || []).find(row =>
+    customerId && String(row.customerId || '') === customerId
+    || accountId && String(row.customerAccountId || '') === accountId
+    || rentalFileId && String(row.rentalFileId || '') === rentalFileId
+    || applicationId && String(row.applicationId || '') === applicationId
+    || contract && String(row.contractId || '') === String(contract.id || '')
+    || contract && row.onboardingSessionId && String(row.onboardingSessionId) === String(contract.onboardingSessionId || '')
+  ) || (!customerId && customerKey
+    ? (data.eSignatures || []).find(row => normKey(row.customer || row.name || row.renterName) === customerKey)
+    : null);
+  const rental = rentalFileId
+    ? (data.rentalFiles || []).find(row => String(row.id || '') === rentalFileId)
+    : customerId
+      ? (data.rentalFiles || []).find(row => String(row.customerId || '') === customerId && rentalFiles.isActiveRentalFile(row))
+      : null;
+  return {
+    ...customer,
+    contractStartedAt: customer.contractStartedAt || customer.startDate || rental && (rental.startDate || rental.actualPickupDate) || contract && (contract.startDate || contract.createdAt) || '',
+    contractEndedAt: customer.contractEndedAt || customer.endDate || rental && (rental.endDate || rental.endedAt) || contract && (contract.endDate || contract.endedAt) || '',
+    signedAgreementId: signature && signature.id || '',
+    signedAgreementUrl: signature && privateDocumentAvailable(signature) ? '/api/onboarding/contracts/' + encodeURIComponent(signature.id) : ''
   };
 }
 async function loadVehicleImport() {
@@ -27397,11 +27432,55 @@ const server = http.createServer(async (req, res) => {
       openPlatformEventStream(req, res, user);
       return;
     }
+    if (url.pathname === '/api/customers' && req.method === 'POST') {
+      const role = String(user.role || '').toLowerCase();
+      if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'Only an owner or manager can add a customer.' });
+      const payload = await readJsonBody(req, 128 * 1024);
+      const name = cleanResourceText(payload.name || payload.customer, 180);
+      if (!name) return json(res, 400, { ok: false, error: 'Customer name is required.' });
+      let saved = null;
+      try {
+        await mutateLatestData('Add exact customer resource', async data => {
+          data.customers = Array.isArray(data.customers) ? data.customers : [];
+          const duplicate = data.customers.find(row => rowVisibleToUserOrganization(row, user) && normKey(row.name || row.customer) === normKey(name) && !/history|ended|removed|inactive|returned/i.test([row.status, row.stage].join(' ')));
+          if (duplicate) throw Object.assign(new Error('An active customer with that exact name already exists. Open the saved customer instead of creating a duplicate.'), { statusCode: 409 });
+          const now = new Date().toISOString();
+          const customer = {
+            id: 'customer-' + crypto.randomUUID(),
+            organizationId: user.organizationId || MAIN_ORG_ID,
+            name,
+            phone: cleanResourceText(payload.phone, 80),
+            email: cleanResourceText(payload.email, 240),
+            address: cleanResourceText(payload.address, 300),
+            city: cleanResourceText(payload.city, 120),
+            state: cleanResourceText(payload.state, 80),
+            postalCode: cleanResourceText(payload.postalCode, 30),
+            notes: cleanResourceText(payload.notes, 20000),
+            vehicleId: '',
+            vehicle: '',
+            vin: '',
+            licensePlate: '',
+            status: 'Setup',
+            stage: 'No vehicle assigned',
+            contractStartedAt: cleanResourceText(payload.contractStartedAt, 40),
+            createdAt: now,
+            updatedAt: now,
+            updatedBy: user.name || user.username || 'Staff'
+          };
+          data.customers.unshift(customer);
+          appendAuditLog(data, user, 'Customer resource added', [customer.name, customer.phone || customer.email || 'Contact pending', 'No vehicle assigned']);
+          saved = staffCustomerRecord(data, customer);
+        });
+      } catch (error) {
+        return json(res, Number(error && error.statusCode || 409), { ok: false, error: String(error && error.message || error) });
+      }
+      return json(res, 201, safeResourcePayload({ ok: true, record: saved, version: await dataVersion() }));
+    }
     if (url.pathname === '/api/customers' && req.method === 'GET') {
       const role = String(user.role || '').toLowerCase();
       if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'Only owner or manager accounts can view customer records.' });
       const data = await readViewData();
-      const page = paginatedResource(viewResourceRows(data, 'customers', user), url, { searchFields: ['id', 'name', 'phone', 'email', 'vehicle', 'vin', 'licensePlate'], defaultLimit: 50 });
+      const page = paginatedResource(viewResourceRows(data, 'customers', user).map(row => staffCustomerRecord(data, row)), url, { searchFields: ['id', 'name', 'phone', 'email', 'vehicle', 'vin', 'licensePlate'], defaultLimit: 50 });
       return json(res, 200, safeResourcePayload({ ok: true, ...page }), { 'Cache-Control': 'private, no-store' });
     }
     const customerResourceMatch = /^\/api\/customers\/([^/]+)$/.exec(url.pathname);
@@ -27411,7 +27490,7 @@ const server = http.createServer(async (req, res) => {
       const scoped = stateForUserRead(await readData(), user);
       const record = (scoped.customers || []).find(row => String(row.id || '') === decodeURIComponent(customerResourceMatch[1]));
       if (!record) return json(res, 404, { ok: false, error: 'Customer record was not found.' });
-      return json(res, 200, safeResourcePayload({ ok: true, record }), { 'Cache-Control': 'private, no-store' });
+      return json(res, 200, safeResourcePayload({ ok: true, record: staffCustomerRecord(scoped, record) }), { 'Cache-Control': 'private, no-store' });
     }
     if (customerResourceMatch && req.method === 'PATCH') {
       const role = String(user.role || '').toLowerCase();
@@ -27480,6 +27559,72 @@ const server = http.createServer(async (req, res) => {
       }
       return json(res, 200, safeResourcePayload({ ok: true, record: saved, propagated, version: await dataVersion() }));
     }
+    const customerArchiveMatch = /^\/api\/customers\/([^/]+)\/archive$/.exec(url.pathname);
+    if (customerArchiveMatch && req.method === 'POST') {
+      const role = String(user.role || '').toLowerCase();
+      if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'Only an owner or manager can end a customer contract.' });
+      const payload = await readJsonBody(req, 128 * 1024);
+      if (String(payload.confirmation || '') !== 'END_CUSTOMER_CONTRACT') return json(res, 400, { ok: false, error: 'Confirm the exact customer and contract end date before continuing.' });
+      const customerId = decodeURIComponent(customerArchiveMatch[1]);
+      const contractEndedAt = cleanResourceText(payload.contractEndedAt, 50);
+      const endedTime = Date.parse(contractEndedAt);
+      if (!contractEndedAt || !Number.isFinite(endedTime)) return json(res, 400, { ok: false, error: 'Choose the exact date and time the contract ended.' });
+      let saved = null;
+      let returnedVehicle = null;
+      try {
+        await mutateLatestData('End exact customer contract and return vehicle', async data => {
+          const customer = (data.customers || []).find(row => String(row.id || '') === customerId);
+          if (!customer || !rowVisibleToUserOrganization(customer, user)) throw Object.assign(new Error('Customer record was not found.'), { statusCode: 404 });
+          assertResourceRevision(customer, payload);
+          const customerName = String(customer.name || customer.customer || '').trim();
+          const accountId = String(customer.customerAccountId || '').trim();
+          const uniqueCustomerName = customerName && (data.customers || []).filter(row => normKey(row.name || row.customer) === normKey(customerName)).length === 1;
+          const exact = row => String(row.customerId || '') === customerId
+            || accountId && String(row.customerAccountId || '') === accountId
+            || uniqueCustomerName && normKey(row.customer || row.name || row.customerName) === normKey(customerName);
+          const activeRentals = (data.rentalFiles || []).filter(row => rentalFiles.isActiveRentalFile(row) && exact(row));
+          if (activeRentals.length > 1) throw Object.assign(new Error('This customer has more than one active Rental File. Resolve the duplicate before ending the contract.'), { statusCode: 409 });
+          const endDate = new Date(endedTime).toISOString().slice(0, 10);
+          if (activeRentals[0]) {
+            const vehicle = (data.vehicles || []).find(row => String(row.id || '') === String(activeRentals[0].vehicleId || '')) || {};
+            const result = rentalFiles.endRentalFile(data, activeRentals[0].id, {
+              endDate,
+              endingMileage: Math.max(Number(activeRentals[0].startingMileage || 0), Math.round(Number(vehicle.mileage || vehicle.odometer || activeRentals[0].startingMileage || 0))),
+              vehicleStatus: 'Ready',
+              reason: cleanResourceText(payload.reason || 'Customer contract ended by staff.', 1200)
+            }, user);
+            returnedVehicle = result.vehicle && safeVehicleRecord(result.vehicle) || null;
+          } else {
+            const linkedVehicles = (data.vehicles || []).filter(row => String(row.id || '') === String(customer.vehicleId || '') || uniqueCustomerName && normKey(row.currentCustomer) === normKey(customerName));
+            if (linkedVehicles.length > 1) throw Object.assign(new Error('More than one vehicle is linked to this customer. Resolve the assignment conflict before ending the contract.'), { statusCode: 409 });
+            if (linkedVehicles[0]) {
+              const vehicle = linkedVehicles[0];
+              const now = new Date().toISOString();
+              Object.assign(vehicle, { previousCustomer: vehicle.currentCustomer || customerName, currentCustomer: '', activeRentalFileId: '', status: 'Ready', returnedAt: now, updatedAt: now });
+              (data.onlineVehicles || []).filter(row => String(row.platformVehicleId || row.vehicleId || '') === String(vehicle.id || '')).forEach(row => Object.assign(row, { published: false, availability: 'Ready - publish after inspection', currentCustomer: '', updatedAt: now }));
+              returnedVehicle = safeVehicleRecord(vehicle);
+            }
+          }
+          const now = new Date().toISOString();
+          (data.recurringPayments || []).filter(exact).forEach(row => Object.assign(row, { status: 'Removed', autoChargeEnabled: false, autopayManagedBy: 'Stopped - customer contract ended', nextRun: '', endDate, endedAt: contractEndedAt, removedAt: now, updatedAt: now }));
+          (data.contracts || []).filter(exact).forEach(row => Object.assign(row, { status: 'Ended', endStatus: 'Ended', endDate, endedAt: contractEndedAt, updatedAt: now }));
+          (data.customerAccounts || []).filter(row => String(row.id || '') === accountId || String(row.customerId || '') === customerId).forEach(row => Object.assign(row, { status: 'Disabled', disabledAt: now, disabledBy: user.name || user.username || 'Staff', portalStage: 'Contract ended', updatedAt: now }));
+          const openClaimAmount = (data.claims || []).filter(row => exact(row) && !/paid|closed|resolved|dismissed|cancelled|removed/i.test(String(row.status || ''))).reduce((sum, row) => sum + Number(row.amount || 0), 0);
+          const unpaidAmount = (data.payments || []).filter(row => exact(row) && /failed|declined|unpaid|past due/i.test(String(row.status || ''))).reduce((sum, row) => sum + Number(row.amount || 0), 0);
+          Object.assign(customer, {
+            activeRentalFileId: '', vehicleId: '', vehicle: '', vin: '', licensePlate: '',
+            status: 'History', stage: 'Contract ended', contractEndedAt, endDate,
+            contractEndReason: cleanResourceText(payload.reason || 'Customer contract ended by staff.', 1200),
+            outstandingBalance: openClaimAmount + unpaidAmount, archivedAt: now, archivedBy: user.name || user.username || 'Staff', updatedAt: now
+          });
+          appendAuditLog(data, user, 'Customer contract ended', [customerName || customerId, contractEndedAt, returnedVehicle ? 'Vehicle returned to In lot' : 'No vehicle assigned', 'Outstanding record ' + moneyText(customer.outstandingBalance), 'Payment and contract history preserved']);
+          saved = staffCustomerRecord(data, customer);
+        });
+      } catch (error) {
+        return json(res, Number(error && error.statusCode || 409), { ok: false, error: String(error && error.message || error), currentUpdatedAt: error && error.currentUpdatedAt || '' });
+      }
+      return json(res, 200, safeResourcePayload({ ok: true, record: saved, vehicle: returnedVehicle, version: await dataVersion() }));
+    }
     const customerVehicleAssignmentMatch = /^\/api\/customers\/([^/]+)\/vehicle-assignment$/.exec(url.pathname);
     if (customerVehicleAssignmentMatch && req.method === 'POST') {
       const role = String(user.role || '').toLowerCase();
@@ -27502,9 +27647,38 @@ const server = http.createServer(async (req, res) => {
           const sameCustomer = name => sameExplicitAssignmentCustomer(data, targetVehicleId, name, customerName);
           const targetRental = (data.rentalFiles || []).find(row => rentalFiles.isActiveRentalFile(row) && String(row.vehicleId || '') === targetVehicleId);
           const targetRecurring = (data.recurringPayments || []).find(row => String(row.vehicleId || '') === targetVehicleId && activeAssignmentRecord(row, 'recurringPayments') && !sameCustomer(row.customer || row.name));
-          if (targetRental && !sameCustomer(targetRental.customerName || targetRental.customer)) throw Object.assign(new Error('That vehicle already has an active Rental File for ' + (targetRental.customerName || 'another customer') + '.'), { statusCode: 409 });
-          if (String(target.currentCustomer || '').trim() && !sameCustomer(target.currentCustomer)) throw Object.assign(new Error('That vehicle is already assigned to ' + target.currentCustomer + '.'), { statusCode: 409 });
-          if (targetRecurring) throw Object.assign(new Error('That vehicle is linked to another active recurring payment plan.'), { statusCode: 409 });
+          const replacingTargetCustomer = targetRental && !sameCustomer(targetRental.customerName || targetRental.customer)
+            || String(target.currentCustomer || '').trim() && !sameCustomer(target.currentCustomer)
+            || !!targetRecurring;
+          if (replacingTargetCustomer) {
+            if (payload.replaceExistingCustomer !== true || String(payload.replacementConfirmation || '') !== 'END_PRIOR_CUSTOMER_AND_REASSIGN') {
+              throw Object.assign(new Error('That vehicle is already assigned to ' + (targetRental && (targetRental.customerName || targetRental.customer) || target.currentCustomer || targetRecurring && targetRecurring.customer || 'another customer') + '. Confirm ending that customer contract before reassigning it.'), { statusCode: 409, replacementRequired: true });
+            }
+            const now = new Date().toISOString();
+            const priorName = String(targetRental && (targetRental.customerName || targetRental.customer) || target.currentCustomer || targetRecurring && (targetRecurring.customer || targetRecurring.name) || '').trim();
+            const priorCustomerId = String(targetRental && targetRental.customerId || targetRecurring && targetRecurring.customerId || '').trim();
+            const priorNameMatches = priorName ? (data.customers || []).filter(row => normKey(row.name || row.customer) === normKey(priorName)) : [];
+            const priorMatches = (data.customers || []).filter(row => String(row.id || '') === priorCustomerId || !priorCustomerId && priorNameMatches.length === 1 && row === priorNameMatches[0]);
+            const priorCustomer = priorMatches.length === 1 ? priorMatches[0] : null;
+            if (targetRental) {
+              rentalFiles.endRentalFile(data, targetRental.id, {
+                endDate: localDateKey(),
+                endingMileage: Math.max(Number(targetRental.startingMileage || 0), Math.round(Number(target.mileage || target.odometer || targetRental.startingMileage || 0))),
+                vehicleStatus: 'Ready',
+                reason: cleanResourceText(payload.reason || 'Vehicle reassigned to another customer.', 1200)
+              }, user);
+            } else if (priorCustomer) {
+              Object.assign(priorCustomer, { activeRentalFileId: '', vehicleId: '', vehicle: '', vin: '', licensePlate: '', status: 'History', stage: 'Vehicle reassigned', contractEndedAt: now, endDate: localDateKey(), archivedAt: now, updatedAt: now });
+            }
+            const priorExact = row => priorCustomerId && String(row.customerId || '') === priorCustomerId
+              || priorCustomer && priorCustomer.customerAccountId && String(row.customerAccountId || '') === String(priorCustomer.customerAccountId)
+              || !priorCustomerId && priorNameMatches.length === 1 && priorName && normKey(row.customer || row.name || row.customerName) === normKey(priorName);
+            (data.recurringPayments || []).filter(row => String(row.vehicleId || '') === targetVehicleId || priorExact(row)).forEach(row => Object.assign(row, { status: 'Removed', autoChargeEnabled: false, autopayManagedBy: 'Stopped - vehicle reassigned', nextRun: '', removedAt: now, endedAt: now, updatedAt: now }));
+            (data.contracts || []).filter(row => String(row.vehicleId || '') === targetVehicleId || priorExact(row)).forEach(row => Object.assign(row, { status: 'Ended', endStatus: 'Ended', endDate: localDateKey(), endedAt: now, updatedAt: now }));
+            if (priorCustomer) (data.customerAccounts || []).filter(row => String(row.customerId || '') === String(priorCustomer.id || '') || priorCustomer.customerAccountId && String(row.id || '') === String(priorCustomer.customerAccountId)).forEach(row => Object.assign(row, { status: 'Disabled', disabledAt: now, disabledBy: user.name || user.username || 'Staff', portalStage: 'Vehicle reassigned', updatedAt: now }));
+            Object.assign(target, { previousCustomer: priorName, currentCustomer: '', activeRentalFileId: '', status: 'Ready', returnedAt: now, updatedAt: now });
+            (data.onlineVehicles || []).filter(row => String(row.platformVehicleId || row.vehicleId || '') === targetVehicleId).forEach(row => Object.assign(row, { published: false, availability: 'Ready - reassignment in progress', currentCustomer: '', updatedAt: now }));
+          }
 
           const customerNameMatches = (data.customers || []).filter(row => normKey(row.name) === normKey(customerName));
           const accountId = String(customer.customerAccountId || '').trim();
@@ -27912,10 +28086,101 @@ const server = http.createServer(async (req, res) => {
       }
       return json(res, 200, safeResourcePayload({ ok: true, alreadyRemoved, record: saved, version: await dataVersion() }));
     }
+    if (url.pathname === '/api/claims' && req.method === 'POST') {
+      const role = String(user.role || '').toLowerCase();
+      if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'Only an owner or manager can add a customer due.' });
+      const payload = await readJsonBody(req, 10 * 1024 * 1024);
+      const customerId = cleanResourceText(payload.customerId, 240);
+      const amount = Number(payload.amount);
+      if (!customerId) return json(res, 400, { ok: false, error: 'Choose the exact customer.' });
+      if (!Number.isFinite(amount) || amount <= 0 || amount > 1000000) return json(res, 400, { ok: false, error: 'Amount must be greater than zero.' });
+      if (payload.file && !/^(?:image\/(?:jpeg|png)|application\/pdf)$/i.test(String(payload.file.type || ''))) return json(res, 400, { ok: false, error: 'Proof must be a JPG, PNG, or PDF.' });
+      let stored = null;
+      let saved = null;
+      try {
+        if (payload.file) stored = await onboarding.savePrivateDocument(payload.file, DATA_DIR, 'claim-proof', PRIVATE_DOCUMENT_STORE, { organizationId: user.organizationId || MAIN_ORG_ID });
+        await mutateLatestData('Add exact customer toll violation or due', async data => {
+          data.claims = Array.isArray(data.claims) ? data.claims : [];
+          const customer = (data.customers || []).find(row => String(row.id || '') === customerId);
+          if (!customer || !rowVisibleToUserOrganization(customer, user)) throw Object.assign(new Error('Customer record was not found.'), { statusCode: 404 });
+          const vehicle = (data.vehicles || []).find(row => String(row.id || '') === String(payload.vehicleId || customer.vehicleId || '')) || null;
+          const now = new Date().toISOString();
+          const id = 'claim-' + crypto.randomUUID();
+          const claim = {
+            id,
+            organizationId: rowOrganizationId(customer),
+            customerId: customer.id,
+            customerAccountId: customer.customerAccountId || '',
+            customer: customer.name || customer.customer || '',
+            vehicleId: vehicle && vehicle.id || customer.vehicleId || '',
+            vehicle: vehicle && vehicleNameFromParts(vehicle) || customer.vehicle || '',
+            vin: vehicle && vehicle.vin || customer.vin || '',
+            plate: vehicle && (vehicle.plate || vehicle.stock || vehicle.tempTag) || customer.licensePlate || '',
+            type: cleanResourceText(payload.type || 'Other due', 120),
+            amount: Math.round(amount * 100) / 100,
+            status: 'Open',
+            provider: 'WheelsonAuto staff',
+            due: cleanResourceText(payload.due, 40),
+            incidentDate: cleanResourceText(payload.incidentDate, 40),
+            reference: cleanResourceText(payload.reference, 240),
+            notes: cleanResourceText(payload.notes, 4000),
+            proofArtifact: stored ? { ...stored, createdAt: now, createdBy: user.name || user.username || 'Staff' } : null,
+            proofFileName: stored && stored.originalName || '',
+            proofUrl: stored ? '/api/claims/' + encodeURIComponent(id) + '/proof' : '',
+            createdAt: now,
+            updatedAt: now,
+            updatedBy: user.name || user.username || 'Staff'
+          };
+          data.claims.unshift(claim);
+          appendAuditLog(data, user, 'Customer due added', [claim.customer, claim.type, moneyText(claim.amount), claim.vehicle || 'No vehicle', stored ? 'Private proof attached' : 'No proof attached']);
+          saved = claim;
+        });
+      } catch (error) {
+        const finalError = stored ? await attachPrivateDocumentRollback(error, stored) : error;
+        return json(res, Number(finalError && finalError.statusCode || 409), { ok: false, error: String(finalError && finalError.message || finalError) });
+      }
+      return json(res, 201, safeResourcePayload({ ok: true, claim: saved, version: await dataVersion() }));
+    }
     if (url.pathname === '/api/claims' && req.method === 'GET') {
       const data = await readViewData();
       const page = paginatedResource(viewResourceRows(data, 'claims', user), url, { searchFields: ['id', 'customer', 'vehicle', 'type', 'status', 'provider', 'notes'], defaultLimit: 100 });
       return json(res, 200, safeResourcePayload({ ok: true, ...page }), { 'Cache-Control': 'private, no-store' });
+    }
+    const claimProofMatch = /^\/api\/claims\/([^/]+)\/proof$/.exec(url.pathname);
+    if (claimProofMatch && req.method === 'GET') {
+      const role = String(user.role || '').toLowerCase();
+      if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'Only an owner or manager can view private due proof.' });
+      const data = await readData();
+      const claim = (data.claims || []).find(row => String(row.id || '') === decodeURIComponent(claimProofMatch[1]));
+      const proof = claim && claim.proofArtifact;
+      if (!claim || !rowVisibleToUserOrganization(claim, user) || !proof || !privateDocumentAvailable(proof)) return send(res, 404, 'Proof not found', 'text/plain; charset=utf-8');
+      try {
+        return send(res, 200, await readPrivateDocumentBytes(proof), proof.contentType || 'application/octet-stream', { 'Cache-Control': 'private, no-store', 'Content-Disposition': 'inline; filename="' + String(proof.originalName || claim.id).replace(/["\r\n]/g, '') + '"', 'X-Robots-Tag': 'noindex, nofollow', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' });
+      } catch {
+        return send(res, 404, 'Proof could not be opened', 'text/plain; charset=utf-8');
+      }
+    }
+    const claimArchiveMatch = /^\/api\/claims\/([^/]+)\/archive$/.exec(url.pathname);
+    if (claimArchiveMatch && req.method === 'POST') {
+      const role = String(user.role || '').toLowerCase();
+      if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'Only an owner or manager can remove a customer due.' });
+      const payload = await readJsonBody(req, 64 * 1024);
+      if (String(payload.confirmation || '') !== 'REMOVE_CUSTOMER_DUE') return json(res, 400, { ok: false, error: 'Confirm the exact customer due before removing it.' });
+      let saved = null;
+      try {
+        await mutateLatestData('Remove exact customer due', async data => {
+          const claim = (data.claims || []).find(row => String(row.id || '') === decodeURIComponent(claimArchiveMatch[1]));
+          if (!claim || !rowVisibleToUserOrganization(claim, user)) throw Object.assign(new Error('Customer due was not found.'), { statusCode: 404 });
+          assertResourceRevision(claim, payload);
+          const now = new Date().toISOString();
+          Object.assign(claim, { status: 'Removed', removedAt: now, removedBy: user.name || user.username || 'Staff', removalReason: cleanResourceText(payload.reason || 'Removed by staff.', 500), updatedAt: now });
+          appendAuditLog(data, user, 'Customer due removed', [claim.customer || claim.customerId, claim.type || 'Due', moneyText(claim.amount), claim.removalReason]);
+          saved = claim;
+        });
+      } catch (error) {
+        return json(res, Number(error && error.statusCode || 409), { ok: false, error: String(error && error.message || error), currentUpdatedAt: error && error.currentUpdatedAt || '' });
+      }
+      return json(res, 200, safeResourcePayload({ ok: true, claim: saved, version: await dataVersion() }));
     }
     const claimMatchCommand = /^\/api\/claims\/([^/]+)\/match$/.exec(url.pathname);
     if (url.pathname.startsWith('/api/claims/') && claimMatchCommand && req.method === 'POST') {
@@ -30077,6 +30342,20 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/account/owner-access/disable-pin' && req.method === 'POST') {
       return json(res, 410, { ok: false, error: 'PIN login has been permanently removed. Every account requires its exact username and password.' });
+    }
+    if (url.pathname === '/api/owner/account-directory' && req.method === 'GET') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner admin can view the account directory.' });
+      const data = await readData();
+      ensureBaseOrganization(data);
+      const staffAccounts = (data.staffAccounts || []).map(staff => {
+        const safe = { ...staff, loginReady: !!(staff.passwordHash && staff.passwordSalt && staffStatusActive(staff)) };
+        delete safe.passwordHash; delete safe.passwordSalt; delete safe.password; delete safe.loginSecurity;
+        return safe;
+      });
+      const customerAccounts = (data.customerAccounts || []).map(safeCustomerAccount);
+      const organizations = (data.organizations || []).map(row => ({ ...row }));
+      const customers = (data.customers || []).map(row => staffCustomerRecord(data, row));
+      return json(res, 200, safeResourcePayload({ ok: true, staffAccounts, customerAccounts, organizations, customers, customerLoginUrl: PUBLIC_BASE_URL + '/customer/login' }), { 'Cache-Control': 'private, no-store' });
     }
     if (url.pathname === '/api/staff-accounts' && req.method === 'POST') {
       if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner admin can manage staff logins.' });

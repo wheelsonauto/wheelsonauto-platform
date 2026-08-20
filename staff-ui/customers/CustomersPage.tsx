@@ -1,13 +1,11 @@
-import { type FormEvent, useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, type FormEvent, useEffect, useMemo, useState } from 'react';
 import {
   CalendarClock,
-  CarFront,
   CircleDollarSign,
   Copy,
   CreditCard,
   ExternalLink,
   FileText,
-  MessageSquareText,
   Plus,
   Send,
   Trash2,
@@ -15,8 +13,10 @@ import {
 } from 'lucide-react';
 import {
   assignCustomerVehicle,
+  archiveCustomer,
   chargeSavedCard,
   createAutopay,
+  createCustomer,
   createPaymentLink,
   createReplacementCardSetup,
   deleteCardSetup,
@@ -36,8 +36,11 @@ import { canonicalCustomerRecords, dateTime, money, normalized, shortDate, statu
 import { useSwipeTabs } from '../useSwipeTabs';
 import { useViewedRecords } from '../useViewedRecords';
 
+const CustomerDuesPanel = lazy(() => import('./CustomerDuesPanel').then(module => ({ default: module.CustomerDuesPanel })));
+const CustomerProfilePanel = lazy(() => import('./CustomerProfilePanel').then(module => ({ default: module.CustomerProfilePanel })));
+
 type Filter = 'active' | 'dues' | 'history';
-type DetailTab = 'customer' | 'payments';
+type DetailTab = 'customer' | 'payments' | 'dues';
 type PaymentAction = 'new' | 'charge' | 'result' | 'link' | 'card' | 'edit' | 'remove' | 'delete' | null;
 
 const filters: readonly Filter[] = ['active', 'dues', 'history'];
@@ -60,6 +63,11 @@ type ActionDraft = {
   confirmed: boolean;
   operationId: string;
 };
+
+function nowLocalInput() {
+  const date = new Date();
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+}
 
 function sameCustomer(row: PaymentRecord | RecurringPaymentRecord, customer: CustomerRecord) {
   if (row.customerId && String(row.customerId) === String(customer.id)) return true;
@@ -155,6 +163,10 @@ export function CustomersPage({ onNavigate, onOpenRental }: { onNavigate: (works
   const [assignmentVehicleId, setAssignmentVehicleId] = useState('');
   const [assignmentReason, setAssignmentReason] = useState('Customer vehicle assignment updated by staff.');
   const [assignmentConfirmed, setAssignmentConfirmed] = useState(false);
+  const [creatingCustomer, setCreatingCustomer] = useState(false);
+  const [archiveEndAt, setArchiveEndAt] = useState(nowLocalInput());
+  const [archiveReason, setArchiveReason] = useState('Customer contract ended and vehicle returned.');
+  const [archiveConfirmed, setArchiveConfirmed] = useState(false);
 
   const refresh = async (signal?: AbortSignal, force = false) => {
     try {
@@ -219,6 +231,10 @@ export function CustomersPage({ onNavigate, onOpenRental }: { onNavigate: (works
   };
   const selectedCustomerPayments = useMemo(() => draft ? payments.filter(row => sameCustomer(row, draft)).sort((a, b) => (Date.parse(b.createdAt || b.date || '') || 0) - (Date.parse(a.createdAt || a.date || '') || 0)) : [], [draft, payments]);
   const selectedCustomerAutopay = useMemo(() => draft ? autopay.filter(row => sameCustomer(row, draft)).sort((a, b) => Number(/failed|declined|not found|review|paused/i.test(b.status || '')) - Number(/failed|declined|not found|review|paused/i.test(a.status || '')) || String(a.nextRun || '').localeCompare(String(b.nextRun || ''))) : [], [draft, autopay]);
+  const selectedClaims = useMemo(() => draft ? claims.filter(row => sameClaim(row, draft)).sort((a, b) => (Date.parse(b.updatedAt || b.createdAt || '') || 0) - (Date.parse(a.updatedAt || a.createdAt || '') || 0)) : [], [claims, draft]);
+  const selectedOpenClaims = selectedClaims.filter(row => !/paid|closed|resolved|dismissed|cancelled|removed/i.test(row.status || '') && Number(row.amount || 0) > 0);
+  const selectedFailedPayments = selectedCustomerPayments.filter(row => /failed|declined|unpaid|past due/i.test(row.status || ''));
+  const selectedDueTotal = draft ? dueAmountFor(draft) : 0;
   const selectedSchedule = selectedCustomerAutopay.find(row => row.id === selectedAutopayId) || selectedCustomerAutopay[0] || null;
 
   useEffect(() => {
@@ -227,11 +243,14 @@ export function CustomersPage({ onNavigate, onOpenRental }: { onNavigate: (works
   }, [selectedCustomerAutopay, selectedAutopayId]);
 
   const closeDetail = () => {
-    setDraft(null); setSelectedId(''); setPaymentAction(null); setPaymentDraft(null); setGeneratedUrl(''); setError(''); setNotice('');
+    setDraft(null); setSelectedId(''); setCreatingCustomer(false); setPaymentAction(null); setPaymentDraft(null); setGeneratedUrl(''); setArchiveConfirmed(false); setError(''); setNotice('');
   };
   const openCustomer = (customer: CustomerRecord) => {
     viewed.markViewed(customer.id);
-    setSelectedId(customer.id); setDraft({ ...customer }); setAssignmentVehicleId(customer.vehicleId || ''); setDetailTab('payments'); setPaymentAction(null); setPaymentDraft(null); setError(''); setNotice('');
+    setSelectedId(customer.id); setDraft({ ...customer }); setCreatingCustomer(false); setAssignmentVehicleId(customer.vehicleId || ''); setDetailTab('payments'); setPaymentAction(null); setPaymentDraft(null); setArchiveEndAt(nowLocalInput()); setArchiveConfirmed(false); setError(''); setNotice('');
+  };
+  const openNewCustomer = () => {
+    setSelectedId(''); setCreatingCustomer(true); setDraft({ id: '', name: '', phone: '', email: '', address: '', city: '', state: 'NJ', postalCode: '', notes: '', status: 'Setup', stage: 'No vehicle assigned' }); setDetailTab('customer'); setPaymentAction(null); setError(''); setNotice('');
   };
   const beginAction = (action: PaymentAction) => {
     if (!draft) return;
@@ -243,8 +262,10 @@ export function CustomersPage({ onNavigate, onOpenRental }: { onNavigate: (works
     if (!draft || saving) return;
     setSaving(true); setError(''); setNotice('');
     try {
-      const result = await updateCustomer(draft.id, { expectedUpdatedAt: draft.updatedAt, phone: draft.phone, email: draft.email, address: draft.address, city: draft.city, state: draft.state, postalCode: draft.postalCode, notes: draft.notes });
-      await refresh(undefined, true); setDraft(result.record); setNotice('Customer contact details updated across exact linked records.');
+      const result = creatingCustomer
+        ? await createCustomer({ name: draft.name, phone: draft.phone, email: draft.email, address: draft.address, city: draft.city, state: draft.state, postalCode: draft.postalCode, notes: draft.notes })
+        : await updateCustomer(draft.id, { expectedUpdatedAt: draft.updatedAt, phone: draft.phone, email: draft.email, address: draft.address, city: draft.city, state: draft.state, postalCode: draft.postalCode, notes: draft.notes });
+      await refresh(undefined, true); setDraft(result.record); setSelectedId(result.record.id); setCreatingCustomer(false); setNotice(creatingCustomer ? 'Customer added. Assign a vehicle when the contract begins.' : 'Customer contact details updated across exact linked records.');
     } catch (requestError) { setError((requestError as Error).message); await refresh(undefined, true); }
     finally { setSaving(false); }
   };
@@ -253,8 +274,20 @@ export function CustomersPage({ onNavigate, onOpenRental }: { onNavigate: (works
     if (!draft || !assignmentVehicleId || !assignmentConfirmed || working) { setError('Choose the exact vehicle and confirm the assignment or swap.'); return; }
     setWorking(true); setError(''); setNotice('');
     try {
-      const result = await assignCustomerVehicle(draft.id, { vehicleId: assignmentVehicleId, expectedUpdatedAt: draft.updatedAt, reason: assignmentReason });
+      const target = vehicles.find(row => row.id === assignmentVehicleId);
+      const replacesExistingCustomer = !!(target?.currentCustomer && normalized(target.currentCustomer) !== normalized(draft.name));
+      const result = await assignCustomerVehicle(draft.id, { vehicleId: assignmentVehicleId, expectedUpdatedAt: draft.updatedAt, reason: assignmentReason, replaceExistingCustomer: replacesExistingCustomer });
       await refresh(undefined, true); setDraft(result.customer); setAssignmentConfirmed(false); setNotice(result.unchanged ? 'That exact vehicle is already assigned.' : `Vehicle assignment updated across ${result.propagated.length} linked records.`);
+    } catch (requestError) { setError((requestError as Error).message); await refresh(undefined, true); }
+    finally { setWorking(false); }
+  };
+
+  const endCustomerContract = async () => {
+    if (!draft || working || !archiveConfirmed) { setError('Confirm the exact customer and contract end date.'); return; }
+    setWorking(true); setError(''); setNotice('');
+    try {
+      await archiveCustomer(draft.id, { expectedUpdatedAt: draft.updatedAt, contractEndedAt: new Date(archiveEndAt).toISOString(), reason: archiveReason });
+      await refresh(undefined, true); closeDetail(); setFilter('history'); setNotice('Customer moved to History. The vehicle returned to In lot and all payment history was preserved.');
     } catch (requestError) { setError((requestError as Error).message); await refresh(undefined, true); }
     finally { setWorking(false); }
   };
@@ -334,6 +367,9 @@ export function CustomersPage({ onNavigate, onOpenRental }: { onNavigate: (works
 
   const filterSwipe = useSwipeTabs(filters, filter, setFilter);
   const availableVehicles = vehicles.filter(vehicle => !/removed|retired|sold/i.test(vehicle.status || '') && (!vehicle.currentCustomer || normalized(vehicle.currentCustomer) === normalized(draft?.name)));
+  const assignmentVehicles = vehicles.filter(vehicle => !/removed|retired|sold/i.test(vehicle.status || ''));
+  const assignmentTarget = assignmentVehicles.find(vehicle => vehicle.id === assignmentVehicleId);
+  const replacesExistingCustomer = !!(assignmentTarget?.currentCustomer && normalized(assignmentTarget.currentCustomer) !== normalized(draft?.name));
 
   const renderPaymentAction = () => {
     if (!paymentAction || !paymentDraft) return null;
@@ -359,7 +395,7 @@ export function CustomersPage({ onNavigate, onOpenRental }: { onNavigate: (works
 
   return <main className={`operations-workspace resource-workspace connected-customer-workspace ${draft ? 'has-detail' : ''}`}>
     <section className="operations-index">
-      <header className="workspace-title"><div><span>One connected customer record</span><h1>Customers</h1></div>{viewed.unreadCount ? <button type="button" className="unread-summary" onClick={viewed.markAllViewed}>{viewed.unreadCount} new</button> : null}</header>
+      <header className="workspace-title"><div><span>One connected customer record</span><h1>Customers</h1></div><div className="workspace-head-actions">{viewed.unreadCount ? <button type="button" className="unread-summary" onClick={viewed.markAllViewed}>{viewed.unreadCount} new</button> : null}<button type="button" className="primary-command compact" onClick={openNewCustomer}><Plus size={15} /> Add customer</button></div></header>
       <div className="customer-filter-swipe swipe-zone" {...filterSwipe}>
         <div className="compact-metrics swipe-tabs" role="tablist" aria-label="Customer status">{filters.map(key => <button type="button" role="tab" aria-selected={filter === key} key={key} className={filter === key ? 'active' : ''} onClick={() => setFilter(key)}><span>{filterLabels[key]}</span><strong>{counts[key]}</strong></button>)}</div>
         <label className="workspace-search"><span aria-hidden="true">/</span><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search customer, vehicle, VIN, tag" /></label>
@@ -371,21 +407,59 @@ export function CustomersPage({ onNavigate, onOpenRental }: { onNavigate: (works
     </section>
 
     <section className="operations-detail">{!draft ? <div className="detail-empty"><strong>Select a customer</strong><span>Customer, vehicle, card, autopay, and transaction history stay in one file.</span></div> : <div className="customer-connected-detail">
-      <header className="detail-header"><button type="button" className="detail-back" onClick={closeDetail}>Back</button><div><span>Connected customer file</span><h2>{draft.name || 'Customer'}</h2></div><em className={`status-chip ${statusTone(draft.status || draft.stage)}`}>{draft.status || draft.stage || 'Active'}</em></header>
+      <header className="detail-header"><button type="button" className="detail-back" onClick={closeDetail}>Back</button><div><span>{creatingCustomer ? 'New customer' : 'Connected customer file'}</span><h2>{draft.name || 'Add customer'}</h2></div><em className={`status-chip ${statusTone(draft.status || draft.stage)}`}>{draft.status || draft.stage || 'Active'}</em></header>
       <div className="detail-scroll">{error ? <div className="inline-alert error">{error}</div> : null}{notice ? <div className="inline-alert">{notice}</div> : null}
-        {detailTab === 'customer' ? <form id="connected-customer-form" onSubmit={submitCustomer}>
-          <section className="identity-summary"><div><span>Vehicle</span><strong>{draft.vehicle || 'Not assigned'}</strong></div><div><span>Next payment</span><strong>{selectedSchedule?.nextRun ? shortDate(selectedSchedule.nextRun) : draft.nextRun ? shortDate(draft.nextRun) : 'Not scheduled'}</strong></div></section>
-          <div className="context-actions">{draft.activeRentalFileId ? <button type="button" className="primary-command compact" onClick={() => onOpenRental(draft.activeRentalFileId || '')}><FileText size={15} /> Rental File</button> : null}<button type="button" className="text-command" onClick={() => onNavigate('messages')}><MessageSquareText size={15} /> Messages</button><button type="button" className="text-command" onClick={() => setDetailTab('payments')}><WalletCards size={15} /> Payments</button></div>
-          <div className="form-grid"><label>Phone<input value={draft.phone || ''} onChange={event => setDraft({ ...draft, phone: event.target.value })} /></label><label>Email<input type="email" value={draft.email || ''} onChange={event => setDraft({ ...draft, email: event.target.value })} /></label><label className="span-2">Address<input value={draft.address || ''} onChange={event => setDraft({ ...draft, address: event.target.value })} /></label><label>City<input value={draft.city || ''} onChange={event => setDraft({ ...draft, city: event.target.value })} /></label><label>State<input value={draft.state || ''} onChange={event => setDraft({ ...draft, state: event.target.value })} /></label><label>Postal code<input value={draft.postalCode || ''} onChange={event => setDraft({ ...draft, postalCode: event.target.value })} /></label><label>VIN<input readOnly value={draft.vin || ''} /></label><label className="span-2">Notes<textarea rows={5} value={draft.notes || ''} onChange={event => setDraft({ ...draft, notes: event.target.value })} /></label></div>
-          <button className="primary-command" disabled={saving}>{saving ? 'Saving...' : 'Save customer details'}</button>
-          <section className="assignment-editor"><header><div><span>Fleet connection</span><strong>{draft.vehicleId ? 'Swap assigned vehicle' : 'Assign a vehicle'}</strong></div><CarFront size={19} /></header><label>Exact vehicle<select value={assignmentVehicleId} onChange={event => { setAssignmentVehicleId(event.target.value); setAssignmentConfirmed(false); }}><option value="">Choose vehicle</option>{availableVehicles.map(vehicle => <option key={vehicle.id} value={vehicle.id}>{[vehicleTitle(vehicle), vehicle.vin && `VIN ${vehicle.vin}`, vehicle.plate || vehicle.stock, vehicle.status, vehicle.currentCustomer].filter(Boolean).join(' | ')}</option>)}</select></label><label>Reason<input value={assignmentReason} onChange={event => setAssignmentReason(event.target.value)} /></label><label className="sensitive-confirmation"><input type="checkbox" checked={assignmentConfirmed} onChange={event => setAssignmentConfirmed(event.target.checked)} /><span><strong>I confirmed the customer and exact vehicle.</strong><small>A swap updates Fleet, recurring payments, the customer file, Rental File, and website availability together.</small></span></label><button type="button" className="secondary-command" disabled={working || !assignmentConfirmed || !assignmentVehicleId} onClick={saveAssignment}>{working ? 'Updating...' : 'Save vehicle assignment'}</button></section>
-        </form> : <section className="customer-payments-detail">
-          <header className="payment-detail-command"><div><span>Payment control</span><strong>{selectedSchedule ? `${money(selectedSchedule.amount)} ${selectedSchedule.frequency || 'Weekly'}` : 'No recurring plan yet'}</strong><small>{selectedSchedule ? `${selectedSchedule.provider || selectedSchedule.paymentProvider || 'Provider'} | Next ${selectedSchedule.nextRun || 'not scheduled'}` : 'Create a secure Stripe setup link to begin.'}</small></div><div className="customer-file-commands"><button type="button" className="secondary-command compact" onClick={() => { setDetailTab('customer'); setPaymentAction(null); setPaymentDraft(null); }}><FileText size={15} /> Edit customer</button><button type="button" className="primary-command compact" onClick={() => beginAction('new')}><Plus size={15} /> Add autopay</button></div></header>
+        {detailTab === 'customer' ? <Suspense fallback={<div className="workspace-loading"><span /><strong>Opening customer file</strong></div>}>
+          <CustomerProfilePanel
+            customer={draft}
+            creating={creatingCustomer}
+            saving={saving}
+            working={working}
+            dueTotal={selectedDueTotal}
+            vehicles={assignmentVehicles}
+            assignmentVehicleId={assignmentVehicleId}
+            assignmentReason={assignmentReason}
+            assignmentConfirmed={assignmentConfirmed}
+            assignmentTarget={assignmentTarget}
+            replacesExistingCustomer={replacesExistingCustomer}
+            archiveEndAt={archiveEndAt}
+            archiveReason={archiveReason}
+            archiveConfirmed={archiveConfirmed}
+            onChange={setDraft}
+            onSubmit={submitCustomer}
+            onOpenRental={onOpenRental}
+            onMessages={() => onNavigate('messages')}
+            onPayments={() => setDetailTab('payments')}
+            onDues={() => setDetailTab('dues')}
+            onAssignmentVehicle={vehicleId => { setAssignmentVehicleId(vehicleId); setAssignmentConfirmed(false); }}
+            onAssignmentReason={setAssignmentReason}
+            onAssignmentConfirmed={setAssignmentConfirmed}
+            onSaveAssignment={saveAssignment}
+            onArchiveEnd={value => { setArchiveEndAt(value); setArchiveConfirmed(false); }}
+            onArchiveReason={setArchiveReason}
+            onArchiveConfirmed={setArchiveConfirmed}
+            onEndContract={endCustomerContract}
+          />
+        </Suspense> : detailTab === 'payments' ? <section className="customer-payments-detail">
+          <header className="payment-detail-command"><div><span>Payment control</span><strong>{selectedSchedule ? `${money(selectedSchedule.amount)} ${selectedSchedule.frequency || 'Weekly'}` : 'No recurring plan yet'}</strong><small>{selectedSchedule ? `${selectedSchedule.provider || selectedSchedule.paymentProvider || 'Provider'} | Next ${selectedSchedule.nextRun || 'not scheduled'}` : 'Create a secure Stripe setup link to begin.'}</small></div><div className="customer-file-commands"><button type="button" className="secondary-command compact" onClick={() => { setDetailTab('customer'); setPaymentAction(null); setPaymentDraft(null); }}><FileText size={15} /> Edit customer</button><button type="button" className="secondary-command compact" onClick={() => setDetailTab('dues')}><CircleDollarSign size={15} /> Dues</button><button type="button" className="primary-command compact" onClick={() => beginAction('new')}><Plus size={15} /> Add autopay</button></div></header>
           {selectedCustomerAutopay.length > 1 ? <label className="schedule-picker">Recurring plan<select value={selectedSchedule?.id || ''} onChange={event => { setSelectedAutopayId(event.target.value); setPaymentAction(null); }} >{selectedCustomerAutopay.map(row => <option key={row.id} value={row.id}>{[money(row.amount), row.frequency || 'Weekly', row.vehicle || 'No vehicle', row.status || 'Setup'].join(' | ')}</option>)}</select></label> : null}
           {selectedSchedule ? <><section className="payment-schedule-summary"><div><span>Status</span><strong>{selectedSchedule.status || 'Setup needed'}</strong></div><div><span>Card</span><strong>{selectedSchedule.cardLabel || (selectedSchedule.cardLast4 ? `Ending ${selectedSchedule.cardLast4}` : selectedSchedule.paymentSetup || 'Setup needed')}</strong></div><div><span>Autocharge</span><strong>{selectedSchedule.autoChargeEnabled ? 'Enabled' : 'Not enabled'}</strong></div><div><span>Vehicle</span><strong>{selectedSchedule.vehicle || 'Not linked'}</strong></div></section><div className="payment-command-row"><button type="button" className="primary-command compact" onClick={() => beginAction('charge')}><CircleDollarSign size={15} /> Charge</button><button type="button" className="secondary-command compact" onClick={() => beginAction('result')}><WalletCards size={15} /> Record result</button><button type="button" className="secondary-command compact" onClick={() => beginAction('link')}><Send size={15} /> Send link</button><button type="button" className="text-command" onClick={() => beginAction('card')}><CreditCard size={15} /> Change card</button><button type="button" className="text-command" onClick={() => beginAction('edit')}><CalendarClock size={15} /> Edit autopay</button>{/setup|waiting/i.test([selectedSchedule.status, selectedSchedule.paymentSetup].join(' ')) ? <button type="button" className="danger-text-command" onClick={() => beginAction('delete')}><Trash2 size={15} /> Delete setup</button> : <button type="button" className="danger-text-command" onClick={() => beginAction('remove')}><Trash2 size={15} /> Remove autopay</button>}</div></> : null}
           {renderPaymentAction()}
           <section className="transaction-history"><header><div><span>History</span><strong>Transactions</strong></div><b>{selectedCustomerPayments.length}</b></header>{selectedCustomerPayments.length ? selectedCustomerPayments.map(payment => <article key={payment.id}><span className={`status-line ${statusTone(payment.status)}`} /><div><strong>{money(payment.amount)} | {payment.status || 'Recorded'}</strong><small>{[payment.vehicle, payment.method || payment.provider, dateTime(payment.createdAt || payment.date)].filter(Boolean).join(' | ')}</small></div>{payment.rentalFileId ? <button type="button" className="text-command" onClick={() => onOpenRental(payment.rentalFileId || '')}><FileText size={14} /> File</button> : null}</article>) : <div className="empty-state compact">No transactions are connected to this customer yet.</div>}</section>
-        </section>}
+        </section> : <Suspense fallback={<div className="workspace-loading"><span /><strong>Opening dues</strong></div>}>
+          <CustomerDuesPanel
+            customer={draft}
+            claims={selectedOpenClaims}
+            failedPayments={selectedFailedPayments}
+            dueTotal={selectedDueTotal}
+            onBack={() => setDetailTab('customer')}
+            onPayments={() => setDetailTab('payments')}
+            onOpenRental={onOpenRental}
+            onRefresh={() => refresh(undefined, true)}
+            onError={setError}
+            onNotice={setNotice}
+          />
+        </Suspense>}
       </div>
     </div>}</section>
   </main>;

@@ -153,6 +153,14 @@ export type CustomerRecord = {
   stage?: string;
   nextRun?: string;
   amount?: number;
+  outstandingBalance?: number;
+  contractStartedAt?: string;
+  contractEndedAt?: string;
+  endDate?: string;
+  contractEndReason?: string;
+  archivedAt?: string;
+  signedAgreementId?: string;
+  signedAgreementUrl?: string;
   notes?: string;
   updatedAt?: string;
 };
@@ -194,6 +202,11 @@ export type ClaimRecord = {
   provider?: string;
   due?: string;
   deadline?: string;
+  incidentDate?: string;
+  reference?: string;
+  proofFileName?: string;
+  proofUrl?: string;
+  removedAt?: string;
   notes?: string;
   createdAt?: string;
   updatedAt?: string;
@@ -423,6 +436,68 @@ export type MaintenanceRecord = {
   createdAt?: string;
   updatedAt?: string;
   updatedBy?: string;
+};
+
+export type StaffAccountRecord = {
+  id: string;
+  name?: string;
+  username?: string;
+  role?: string;
+  organizationId?: string;
+  companyName?: string;
+  phone?: string;
+  email?: string;
+  status?: string;
+  notes?: string;
+  loginReady?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type CustomerAccountRecord = {
+  id: string;
+  customerId?: string;
+  customer?: string;
+  name?: string;
+  username?: string;
+  organizationId?: string;
+  phone?: string;
+  email?: string;
+  status?: string;
+  portalStage?: string;
+  loginReady?: boolean;
+  vehicleId?: string;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type OrganizationRecord = {
+  id: string;
+  name?: string;
+  legalBusinessName?: string;
+  type?: string;
+  status?: string;
+  primaryAdmin?: string;
+  businessPhone?: string;
+  businessEmail?: string;
+  serviceStreet?: string;
+  serviceCity?: string;
+  serviceState?: string;
+  servicePostalCode?: string;
+  plan?: string;
+  dataScope?: string;
+  notes?: string;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type AccountDirectory = {
+  ok: boolean;
+  staffAccounts: StaffAccountRecord[];
+  customerAccounts: CustomerAccountRecord[];
+  organizations: OrganizationRecord[];
+  customers: CustomerRecord[];
+  customerLoginUrl: string;
 };
 
 declare global {

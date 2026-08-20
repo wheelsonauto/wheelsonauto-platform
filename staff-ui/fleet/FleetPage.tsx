@@ -65,7 +65,12 @@ function emptyVehicle(): VehicleRecord {
 }
 
 function emptyService(vehicle: VehicleRecord): MaintenanceRecord {
-  return { id: `mnt-${Date.now()}`, vehicleId: vehicle.id, vehicle: title(vehicle), type: 'Monthly inspection / oil change', issue: 'Monthly inspection / oil change', due: nextMonthKey(), reminder: 'Remind customer when due', notes: '', status: 'Scheduled' };
+  return { id: `mnt-${Date.now()}`, vehicleId: vehicle.id, vehicle: title(vehicle), type: 'Repair job', issue: '', due: todayKey(), reminder: 'Remind customer when due', notes: '', status: 'Scheduled' };
+}
+
+async function photoPayload(file: File) {
+  const dataUrl = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result || '')); reader.onerror = () => reject(new Error('The photo could not be read.')); reader.readAsDataURL(file); });
+  return { name: file.name, type: file.type, size: file.size, dataUrl };
 }
 
 type Filter = 'fleet' | 'lot' | 'service' | 'history';
@@ -94,6 +99,7 @@ export function FleetPage({ role, initialSection = '', onNavigate, onOpenRental 
   const [assignmentConfirmed, setAssignmentConfirmed] = useState(false);
   const [assignmentReason, setAssignmentReason] = useState('Vehicle assigned from Fleet by staff.');
   const [serviceDraft, setServiceDraft] = useState<MaintenanceRecord | null>(null);
+  const [pendingPhotos, setPendingPhotos] = useState<File[]>([]);
 
   useEffect(() => {
     if (initialSection === 'service' || initialSection === 'history') setFilter(initialSection);
@@ -158,7 +164,7 @@ export function FleetPage({ role, initialSection = '', onNavigate, onOpenRental 
   const filterSwipe = useSwipeTabs(filters, filter, setFilter);
 
   const closeDetail = () => {
-    setDraft(null); setSelectedId(''); setCreating(false); setServiceDraft(null); setError(''); setNotice(''); setArchiveConfirmed(false);
+    setDraft(null); setSelectedId(''); setCreating(false); setServiceDraft(null); setPendingPhotos([]); setError(''); setNotice(''); setArchiveConfirmed(false);
   };
 
   const openVehicle = (vehicle: VehicleRecord) => {
@@ -168,7 +174,7 @@ export function FleetPage({ role, initialSection = '', onNavigate, onOpenRental 
   };
 
   const openNew = () => {
-    setSelectedId(''); setDraft(emptyVehicle()); setCreating(true); setPricing({ weeklyPayment: '', downPayment: '' }); setServiceDraft(null); setError(''); setNotice('');
+    setSelectedId(''); setDraft(emptyVehicle()); setCreating(true); setPricing({ weeklyPayment: '', downPayment: '' }); setServiceDraft(null); setPendingPhotos([]); setError(''); setNotice('');
   };
 
   const saveVehicle = async () => {
@@ -177,7 +183,18 @@ export function FleetPage({ role, initialSection = '', onNavigate, onOpenRental 
     try {
       if (creating) {
         const result = await createVehicle({ ...draft, weeklyPayment: Number(pricing.weeklyPayment || 0), downPayment: Number(pricing.downPayment || 0) });
-        await refresh(undefined, true); setSelectedId(result.record.id); setDraft(result.record); setCreating(false); setNotice('Vehicle added to Fleet. Its website listing is ready but remains offline until you publish it.');
+        let savedRecord = result.record;
+        let uploaded = 0;
+        for (const file of pendingPhotos) {
+          try {
+            const upload = await uploadVehiclePhoto(savedRecord.id, { expectedUpdatedAt: savedRecord.updatedAt, file: await photoPayload(file) });
+            savedRecord = upload.record; uploaded += 1;
+          } catch (photoError) {
+            setError(`Vehicle was added, but ${file.name} did not upload: ${(photoError as Error).message}`);
+            break;
+          }
+        }
+        await refresh(undefined, true); setSelectedId(savedRecord.id); setDraft(savedRecord); setCreating(false); setPendingPhotos([]); setNotice(`Vehicle added to Fleet${uploaded ? ` with ${uploaded} photo${uploaded === 1 ? '' : 's'}` : ''}. Its website listing remains offline until you publish it.`);
       } else {
         const result = await updateVehicle(draft.id, {
           expectedUpdatedAt: draft.updatedAt, name: draft.name, year: draft.year, make: draft.make, model: draft.model, vin: draft.vin,
@@ -213,15 +230,22 @@ export function FleetPage({ role, initialSection = '', onNavigate, onOpenRental 
   };
 
   const uploadPhoto = async (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
+    const files = Array.from(event.target.files || []);
     event.target.value = '';
-    if (!draft || !file || saving) return;
-    if (!/^image\/(jpeg|png)$/i.test(file.type) || file.size > 5 * 1024 * 1024) { setError('Choose a JPG or PNG no larger than 5 MB.'); return; }
+    if (!draft || !files.length || saving) return;
+    if (files.some(file => !/^image\/(jpeg|png)$/i.test(file.type) || file.size > 5 * 1024 * 1024)) { setError('Every photo must be a JPG or PNG no larger than 5 MB.'); return; }
+    if (creating) {
+      const next = [...pendingPhotos, ...files].slice(0, 12);
+      setPendingPhotos(next); setError(''); setNotice(`${next.length} photo${next.length === 1 ? '' : 's'} ready to upload with this car.`); return;
+    }
     setSaving(true); setError(''); setNotice('');
     try {
-      const dataUrl = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result || '')); reader.onerror = () => reject(new Error('The photo could not be read.')); reader.readAsDataURL(file); });
-      const result = await uploadVehiclePhoto(draft.id, { expectedUpdatedAt: draft.updatedAt, file: { name: file.name, type: file.type, size: file.size, dataUrl } });
-      await refresh(undefined, true); setDraft(result.record); setNotice('Photo uploaded and connected to this vehicle and its website listing.');
+      let savedRecord = draft;
+      for (const file of files.slice(0, 12)) {
+        const result = await uploadVehiclePhoto(savedRecord.id, { expectedUpdatedAt: savedRecord.updatedAt, file: await photoPayload(file) });
+        savedRecord = result.record;
+      }
+      await refresh(undefined, true); setDraft(savedRecord); setNotice(`${files.length} photo${files.length === 1 ? '' : 's'} uploaded to this vehicle and its website gallery.`);
     } catch (requestError) { setError((requestError as Error).message); await refresh(undefined, true); }
     finally { setSaving(false); }
   };
@@ -247,15 +271,28 @@ export function FleetPage({ role, initialSection = '', onNavigate, onOpenRental 
   };
 
   const markDone = async (job: MaintenanceRecord) => {
-    if (!draft || !job.updatedAt || saving) return;
+    if (!draft || saving) return;
     setSaving(true); setError(''); setNotice('');
     try {
       const result = await completeMaintenance(job.id, {
-        expectedUpdatedAt: job.updatedAt, cost: job.cost, completedAt: todayKey(), odometer: draft.mileage || job.odometer || job.mileageAtService || '',
+        expectedUpdatedAt: job.updatedAt || '', cost: job.cost, completedAt: todayKey(), odometer: draft.mileage || job.odometer || job.mileageAtService || '',
         inspectionCondition: job.inspectionCondition || 'Good', inspectionChecklist: job.inspectionChecklist || [], damageNotes: job.damageNotes || '',
         mechanicSignoff: window.__WOA_STAFF_USER__?.name || window.__WOA_STAFF_USER__?.username || 'WheelsonAuto staff', notes: job.notes || ''
       });
       await refresh(undefined, true); setNotice(result.nextReminder ? `Done. The next monthly inspection is ${shortDate(result.nextReminder.due)}.` : 'Service marked done and saved in maintenance history.');
+    } catch (requestError) { setError((requestError as Error).message); await refresh(undefined, true); }
+    finally { setSaving(false); }
+  };
+
+  const completeMonthlyInspection = async () => {
+    if (!draft || saving) return;
+    const openMonthly = selectedJobs.find(job => !isClosed(job) && /monthly|inspection|oil change/i.test([job.type, job.issue].join(' ')));
+    if (openMonthly) { await markDone(openMonthly); return; }
+    setSaving(true); setError(''); setNotice('');
+    try {
+      const created = await saveMaintenance({ ...emptyService(draft), id: `mnt-inspection-${Date.now()}`, type: 'Monthly inspection / oil change', issue: 'Monthly inspection / oil change', due: todayKey(), vehicleId: draft.id });
+      const result = await completeMaintenance(created.job.id, { expectedUpdatedAt: created.job.updatedAt || '', completedAt: todayKey(), odometer: draft.mileage || '', inspectionCondition: 'Good', inspectionChecklist: [], damageNotes: '', mechanicSignoff: window.__WOA_STAFF_USER__?.name || window.__WOA_STAFF_USER__?.username || 'WheelsonAuto staff', notes: 'Monthly inspection completed from Fleet.' });
+      await refresh(undefined, true); setNotice(`Inspection saved. The next monthly inspection is ${shortDate(result.nextReminder?.due || nextMonthKey())}.`);
     } catch (requestError) { setError((requestError as Error).message); await refresh(undefined, true); }
     finally { setSaving(false); }
   };
@@ -295,14 +332,14 @@ export function FleetPage({ role, initialSection = '', onNavigate, onOpenRental 
           <label>Permanent tag<input disabled={!canManage || isArchived(draft)} value={draft.plate || ''} onChange={event => setDraft({ ...draft, plate: event.target.value })} /></label><label>Stock / temp tag<input disabled={!canManage || isArchived(draft)} value={draft.stock || draft.tempTag || ''} onChange={event => setDraft({ ...draft, stock: event.target.value })} /></label>
           <label>Tracker<input disabled={!canManage || isArchived(draft)} value={draft.tracker || ''} onChange={event => setDraft({ ...draft, tracker: event.target.value })} /></label><label>Mileage<input disabled={!canManage || isArchived(draft)} type="number" min="0" step="1" value={draft.mileage || ''} onChange={event => setDraft({ ...draft, mileage: event.target.value })} /></label>
           <label>Color<input disabled={!canManage || isArchived(draft)} value={draft.color || ''} onChange={event => setDraft({ ...draft, color: event.target.value })} /></label><label>Location<input disabled={!canManage || isArchived(draft)} value={draft.location || ''} onChange={event => setDraft({ ...draft, location: event.target.value })} /></label>
-          {creating ? <><label>Weekly payment<input type="number" min="0" step="0.01" value={pricing.weeklyPayment} onChange={event => setPricing({ ...pricing, weeklyPayment: event.target.value })} /></label><label>Down payment<input type="number" min="0" step="0.01" value={pricing.downPayment} onChange={event => setPricing({ ...pricing, downPayment: event.target.value })} /></label></> : null}
+          {creating ? <><label>Weekly payment<input type="number" min="0" step="0.01" value={pricing.weeklyPayment} onChange={event => setPricing({ ...pricing, weeklyPayment: event.target.value })} /></label><label>Down payment<input type="number" min="0" step="0.01" value={pricing.downPayment} onChange={event => setPricing({ ...pricing, downPayment: event.target.value })} /></label><div className="span-2 vehicle-create-photos"><strong>Vehicle photos</strong><label className="secondary-command"><Camera size={15} /> Choose photos<input hidden multiple type="file" accept="image/jpeg,image/png" onChange={uploadPhoto} /></label>{pendingPhotos.length ? <span>{pendingPhotos.map(file => file.name).join(' | ')}</span> : <small>Add up to 12 JPG or PNG photos now. You can edit the gallery later.</small>}</div></> : null}
           <label className="span-2">Notes<textarea disabled={!canManage || isArchived(draft)} rows={5} value={draft.notes || ''} onChange={event => setDraft({ ...draft, notes: event.target.value })} /></label>
         </div>
 
         {!creating ? <><section className="transaction-history"><header><div><span>Vehicle photos</span><strong>Website and staff gallery</strong></div>{canManage && !isArchived(draft) ? <label className="secondary-command compact"><Camera size={14} /> Upload<input hidden type="file" accept="image/jpeg,image/png" onChange={uploadPhoto} /></label> : null}</header>{activePhotos.length ? <div className="payment-schedule-summary">{activePhotos.map(photo => <div key={photo.url}><img src={photo.url} alt={`${title(draft)} vehicle`} style={{ width: '100%', height: 96, objectFit: 'cover', borderRadius: 5 }} />{canManage && !isArchived(draft) ? <button type="button" className="danger-text-command" onClick={() => deletePhoto(photo.artifact?.id || '', photo.url)}><Trash2 size={13} /> Remove</button> : null}</div>)}</div> : <div className="empty-state compact">No vehicle photos saved yet.</div>}</section>
 
-          <section className="transaction-history"><header><div><span>Maintenance</span><strong>Due work and completed history</strong></div>{!isArchived(draft) ? <button type="button" className="secondary-command compact" onClick={() => setServiceDraft(current => current ? null : emptyService(draft))}><Wrench size={14} /> Schedule</button> : null}</header>
-            {serviceDraft ? <section className="payment-action-sheet"><div className="form-grid compact-action-form"><label>Type<select value={serviceDraft.type || ''} onChange={event => setServiceDraft({ ...serviceDraft, type: event.target.value })}><option>Monthly inspection / oil change</option><option>Repair job</option><option>Future repair note</option></select></label><label>Due date<input type="date" value={serviceDraft.due || ''} onChange={event => setServiceDraft({ ...serviceDraft, due: event.target.value })} /></label><label className="span-2">Needed service<input value={serviceDraft.issue || ''} onChange={event => setServiceDraft({ ...serviceDraft, issue: event.target.value })} /></label><label className="span-2">Mechanic / staff notes<textarea rows={3} value={serviceDraft.notes || ''} onChange={event => setServiceDraft({ ...serviceDraft, notes: event.target.value })} /></label></div><button type="button" className="primary-command full-command" disabled={saving || !serviceDraft.issue?.trim()} onClick={scheduleService}>{saving ? 'Saving...' : 'Save service'}</button></section> : null}
+          <section className="transaction-history"><header><div><span>Maintenance</span><strong>Due work and completed history</strong></div>{!isArchived(draft) ? <div className="maintenance-quick-actions"><button type="button" className="text-command" disabled={saving} onClick={completeMonthlyInspection}>Monthly inspection done</button><button type="button" className="secondary-command compact" onClick={() => setServiceDraft(current => current ? null : emptyService(draft))}><Wrench size={14} /> Add service</button></div> : null}</header>
+            {serviceDraft ? <section className="payment-action-sheet"><div className="form-grid compact-action-form"><label>Due date<input type="date" value={serviceDraft.due || ''} onChange={event => setServiceDraft({ ...serviceDraft, due: event.target.value })} /></label><label>Needed service<input value={serviceDraft.issue || ''} onChange={event => setServiceDraft({ ...serviceDraft, issue: event.target.value })} /></label><label className="span-2">Mechanic / staff notes<textarea rows={3} value={serviceDraft.notes || ''} onChange={event => setServiceDraft({ ...serviceDraft, notes: event.target.value })} /></label></div><button type="button" className="primary-command full-command" disabled={saving || !serviceDraft.issue?.trim()} onClick={scheduleService}>{saving ? 'Saving...' : 'Save needed service'}</button></section> : null}
             {selectedJobs.length ? selectedJobs.map(job => <article key={job.id}><span className={`status-line ${isClosed(job) ? 'good' : (job.due || job.nextDue || '') <= todayKey() ? 'warn' : 'neutral'}`} /><div><strong>{job.issue || job.type || 'Service'}</strong><small>{isClosed(job) ? `Done ${dateTime(job.fixedAt || job.completedAt)}${job.mechanicSignoff ? ` | ${job.mechanicSignoff}` : ''}` : `Due ${shortDate(job.due || job.nextDue)} | ${job.status || 'Scheduled'}`}{job.notes ? ` | ${job.notes}` : ''}</small></div>{!isClosed(job) ? <button type="button" className="text-command" disabled={saving} onClick={() => markDone(job)}>Done</button> : null}</article>) : <div className="empty-state compact">No maintenance history is connected to this car yet.</div>}
           </section>
 

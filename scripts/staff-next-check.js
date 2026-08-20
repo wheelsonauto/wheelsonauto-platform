@@ -9,6 +9,7 @@ const assert = (condition, message) => { if (!condition) throw new Error(message
 
 const server = read('server.js');
 const stateRepository = read('state-repository.js');
+const viteConfig = read('vite.config.ts');
 const api = read('staff-ui/api.ts');
 const shell = read('staff-ui/StaffApp.tsx');
 const messages = read('staff-ui/messages/MessagesPage.tsx');
@@ -20,15 +21,18 @@ const serviceDashboard = read('staff-ui/dashboard/ServiceDashboardPage.tsx');
 const managerReports = read('staff-ui/reports/ManagerReportsPage.tsx');
 const fleet = read('staff-ui/fleet/FleetPage.tsx');
 const customers = read('staff-ui/customers/CustomersPage.tsx');
+const customerProfile = read('staff-ui/customers/CustomerProfilePanel.tsx');
+const customerDues = read('staff-ui/customers/CustomerDuesPanel.tsx');
 const payments = read('staff-ui/payments/PaymentsPage.tsx');
 const applications = read('staff-ui/applications/ApplicationsPage.tsx');
 const rentals = read('staff-ui/rentals/RentalFilePage.tsx');
 const systems = read('staff-ui/systems/SystemsPage.tsx');
 const more = read('staff-ui/more/MorePage.tsx');
+const accounts = read('staff-ui/accounts/AccountsPage.tsx');
 const settings = read('staff-ui/settings/SettingsPage.tsx');
 const swipeTabs = read('staff-ui/useSwipeTabs.ts');
 const css = read('staff-ui/staff-next.css');
-const sourceFiles = [api, shell, messages, dispatch, maintenance, dashboard, managerDashboard, serviceDashboard, managerReports, fleet, customers, payments, applications, rentals, systems, more, settings, swipeTabs];
+const sourceFiles = [api, shell, messages, dispatch, maintenance, dashboard, managerDashboard, serviceDashboard, managerReports, fleet, customers, customerProfile, customerDues, payments, applications, rentals, systems, more, accounts, settings, swipeTabs];
 const dist = path.join(root, 'staff-dist');
 const entryPath = path.join(dist, 'staff-next.js');
 const cssPath = path.join(dist, 'staff-next.css');
@@ -58,6 +62,7 @@ assert(shell.includes("wheelsonauto-staff-theme") && shell.includes('theme-${the
 assert(api.includes("'/api/app-notifications/read'") && api.includes('markNotificationsRead') && shell.includes('notification-panel') && shell.includes('openNotification') && shell.includes('Mark all read'), 'The staff notification command must open, route, and mark real notifications instead of redirecting to Dashboard.');
 assert(shell.includes("document.addEventListener('pointerdown', closeOnOutside)") && shell.includes("event.key === 'Escape'") && css.includes('.notification-panel') && css.includes('100dvh'), 'The staff notification panel is missing reliable dismissal or phone-safe layout.');
 assert(server.includes('generatedStaffChunk') && server.includes("/^staff-dist\\/staff-[a-z0-9_-]+\\.js$/i"), 'Generated React workspace chunks are not safely allowlisted by the server.');
+assert(viteConfig.includes("base: '/staff-dist/'"), 'Lazy staff modules must preload shared CSS and JavaScript from the served staff-dist path.');
 assert(!server.includes('/staff-dist/staff-next.js?v='), 'The staff entry must have one canonical module URL so lazy chunks do not initialize a second React runtime.');
 assert(shell.includes("id: 'dashboard'") && shell.includes("id: 'fleet'") && shell.includes("id: 'customers'") && shell.includes("id: 'messages'") && shell.includes("id: 'more'"), 'The five-item mobile information architecture is incomplete.');
 assert(shell.includes('DesktopNavigation') && shell.includes('MobileNavigation'), 'Desktop rail and mobile bottom navigation must be separate responsive controls.');
@@ -70,7 +75,11 @@ assert(payments.includes('Add autopay') && payments.includes('Create Stripe setu
 assert(api.includes('resourceCache') && api.includes('RESOURCE_CACHE_MS') && api.includes('prewarmStaffFeeds') && api.includes('loadMessageFeed(), loadApplications()') && shell.includes('prewarmStaffFeeds(role)') && shell.includes('loadApplicationsModule()') && shell.includes('loadFleetModule()') && shell.includes('loadAccountingModule()'), 'Shared feed reuse and complete idle workspace prewarming are missing.');
 assert(shell.includes("route.workspace === 'maintenance'") && shell.includes("workspace: 'fleet' as Workspace") && !shell.includes("label: 'Maintenance', icon"), 'Standalone Maintenance must redirect into Fleet service due without remaining as a duplicate navigation item.');
 assert(fleet.includes("fleet: 'Fleet', lot: 'In lot', service: 'Service due', history: 'History'") && fleet.includes('Add car') && fleet.includes('Upload') && fleet.includes('Archive vehicle') && fleet.includes('Done'), 'Fleet must expose the consolidated inventory, lot, service, photo, archive, and inspection controls.');
+assert(fleet.includes('pendingPhotos') && fleet.includes('multiple') && fleet.includes('Monthly inspection done') && fleet.includes("expectedUpdatedAt: job.updatedAt || ''"), 'Fleet creation photos and simplified maintenance completion are incomplete.');
 assert(customers.includes("dues: 'Tolls / violations & dues'") && customers.includes('canonicalCustomerRecords') && customers.includes('hasAssignedVehicle') && customers.includes('openClaimsFor'), 'Customers must be deduplicated and grouped by real vehicle assignment, open dues, and history.');
+assert(customers.includes('CustomerProfilePanel') && customers.includes('CustomerDuesPanel') && customerProfile.includes('End customer contract') && customerProfile.includes('Signed contract') && customerDues.includes('Attach proof') && customerDues.includes('archiveClaim'), 'Customer lifecycle, signed contract, and staff-managed due controls are incomplete.');
+assert(more.includes("id: 'accounts'") && more.includes('AccountsPage') && accounts.includes('Staff logins') && accounts.includes('Customer accounts') && accounts.includes('Companies') && api.includes("'/api/owner/account-directory'"), 'Owner admin must include staff, customer, and company account management.');
+assert(server.includes("url.pathname === '/api/customers' && req.method === 'POST'") && server.includes("String(payload.confirmation || '') !== 'END_CUSTOMER_CONTRACT'") && server.includes("url.pathname === '/api/claims' && req.method === 'POST'") && server.includes("'/proof'"), 'Customer creation/archive and private due-proof APIs are incomplete.');
 assert(server.includes('const VIEW_DATA_CACHE_MS = 15 * 1000') && server.includes('if (viewDataRead) return viewDataRead') && server.includes('invalidateViewDataCache();'), 'The server-side shared view snapshot and write invalidation are incomplete.');
 assert(['customers', 'vehicles', 'payments', 'recurringPayments', 'tasks', 'maintenance'].every(key => server.includes(`viewResourceRows(data, '${key}', user)`)) && server.includes("url.pathname === '/api/messages/feed'") && server.includes('const data = await readViewData();'), 'Heavy staff feeds are not consistently using the shared read snapshot.');
 assert(stateRepository.includes("SELECT version, checksum FROM woa_state WHERE organization_id = $1"), 'PostgreSQL version checks must not load the full JSONB state.');
@@ -112,9 +121,9 @@ const totalJs = jsFiles.reduce((sum, file) => sum + fs.statSync(path.join(dist, 
 assert(chunkFiles.length >= 9, 'Expected lazy workspace chunks were not generated.');
 assert(fs.statSync(entryPath).size < 230 * 1024, 'React staff entry exceeds the 230 KB uncompressed shell budget.');
 assert(chunkFiles.every(file => fs.statSync(path.join(dist, file)).size < 30 * 1024), 'A lazy workspace exceeds the 30 KB uncompressed module budget.');
-assert(totalJs < 380 * 1024, 'Total React staff JavaScript exceeds the 380 KB uncompressed product budget.');
+assert(totalJs < 420 * 1024, 'Total React staff JavaScript exceeds the 420 KB uncompressed account-and-lifecycle product budget.');
 assert(css.includes('.staff-app-shell.theme-light') && css.includes('.theme-toggle-row'), 'The staff light appearance is missing complete shell and toggle styling.');
 assert(css.includes('.theme-light .resource-workspace:not(.has-detail) .operations-index{background:#f8f9fa}'), 'The wide resource list must not retain its dark background in light appearance.');
-assert(fs.statSync(cssPath).size < 58 * 1024, 'React staff CSS exceeds the 58 KB uncompressed multi-workspace, messaging coach, notification, and dual-theme budget.');
+assert(fs.statSync(cssPath).size < 64 * 1024, 'React staff CSS exceeds the 64 KB uncompressed multi-workspace, account, lifecycle, messaging, notification, and dual-theme budget.');
 
 console.log('Staff-next check passed: role-scoped workspaces, manager reports, mechanic read-only vehicle files, scoped APIs, live events, mobile detail flow, safe generated assets, and product bundle budgets are verified.');
