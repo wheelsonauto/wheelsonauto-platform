@@ -16,7 +16,7 @@ const ACTION_TOOLS = Object.freeze({
   payment_self_service: Object.freeze({ access: 'draft', autoSendEligible: true, approvalRequired: false, description: 'Explain how the customer can make their own secure payment in the WheelsonAuto app without moving money.' }),
   send_payment_link: Object.freeze({ access: 'draft_link', autoSendEligible: true, approvalRequired: false, description: 'Prepare a secure customer-paid payment link without charging a saved card.' }),
   send_card_setup: Object.freeze({ access: 'draft_link', autoSendEligible: true, approvalRequired: false, description: 'Prepare a secure card setup/change link without exposing card details.' }),
-  maintenance_schedule: Object.freeze({ access: 'draft', autoSendEligible: true, approvalRequired: false, description: 'Draft service scheduling guidance; staff workflow owns the appointment.' }),
+  maintenance_schedule: Object.freeze({ access: 'schedule', autoSendEligible: true, approvalRequired: false, description: 'Give calm mechanical guidance and create an exact service appointment; same-day is reserved for urgent safety concerns.' }),
   portal_login_help: Object.freeze({ access: 'draft', autoSendEligible: false, approvalRequired: false, description: 'Draft login guidance without resetting credentials or impersonating the customer.' }),
   charge_saved_card: Object.freeze({ access: 'approval', autoSendEligible: false, approvalRequired: true, description: 'Prepare a saved-card charge request; owner executes it in Payments.' }),
   change_autopay_date: Object.freeze({ access: 'approval', autoSendEligible: false, approvalRequired: true, description: 'Prepare a schedule-change request; owner confirms the exact plan and date.' }),
@@ -68,6 +68,8 @@ function enforcePlanPolicy(plan = {}) {
       ? 'Owner executes the exact scoped workflow; Star never moves money or changes the account.'
       : tool.access === 'human'
         ? 'Staff review only.'
+      : tool.access === 'schedule'
+        ? 'May create an exact service appointment and urgent staff alert; it cannot move money or change the customer account.'
         : 'Message or secure-link draft only.'
   };
   return safe;

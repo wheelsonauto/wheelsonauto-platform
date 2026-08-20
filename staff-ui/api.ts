@@ -1,4 +1,4 @@
-import type { ApplicationFeed, CustomerRecord, MaintenanceRecord, MessageFeed, MessageRecord, NotificationFeed, PagedFeed, PaymentRecord, ProviderRecord, RecurringPaymentRecord, RentalDetail, RentalRecord, StarCoachState, TaskRecord, VehicleRecord } from './types';
+import type { ApplicationFeed, CustomerRecord, DashboardPriorityFeed, MaintenanceRecord, MessageFeed, MessageRecord, NotificationFeed, PagedFeed, PaymentRecord, ProviderRecord, RecurringPaymentRecord, RentalDetail, RentalRecord, StarCoachState, TaskRecord, VehicleRecord } from './types';
 
 async function parseJson<T>(response: Response): Promise<T> {
   const payload = await response.json().catch(() => ({}));
@@ -81,6 +81,17 @@ export async function sendMessage(input: SendMessageInput): Promise<{ ok: boolea
   return result;
 }
 
+export async function sendMessageAttachment(input: Omit<SendMessageInput, 'channel'> & { file: { name: string; type: string; size: number; dataUrl: string } }): Promise<{ ok: boolean; sent: boolean; warning?: string; message: MessageRecord }> {
+  const response = await fetch('/api/messages/attachment', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify(input)
+  });
+  const result = await parseJson<{ ok: boolean; sent: boolean; warning?: string; message: MessageRecord }>(response);
+  invalidateCachedPaths('/api/messages/feed', '/api/app-notifications');
+  return result;
+}
+
 export async function draftStarReply(message: MessageRecord): Promise<{ ok: boolean; draft: MessageRecord; plan?: { reply?: string; approvalRequired?: boolean; needsHuman?: boolean; canAutoSend?: boolean }; autoSend?: { attempted: boolean; sent: boolean; message?: MessageRecord; warning?: string } }> {
   const response = await fetch('/api/messages/ai-reply', {
     method: 'POST',
@@ -151,6 +162,10 @@ export function loadCustomers(signal?: AbortSignal, force = false): Promise<Page
 
 export function loadPayments(signal?: AbortSignal, force = false): Promise<PagedFeed<PaymentRecord>> {
   return loadPaged<PaymentRecord>('/api/payments?limit=200', signal, force);
+}
+
+export function loadDashboardPriority(signal?: AbortSignal, force = false): Promise<DashboardPriorityFeed> {
+  return loadCachedJson<DashboardPriorityFeed>('/api/dashboard/priority-feed', signal, force);
 }
 
 export function loadAutopay(signal?: AbortSignal, force = false): Promise<PagedFeed<RecurringPaymentRecord>> {

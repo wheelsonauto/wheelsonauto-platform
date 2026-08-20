@@ -421,7 +421,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260727-interactions-notifications-355';
+const ASSET_VERSION = 'platform-20260820-priority-service-files-356';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -4330,6 +4330,7 @@ function scheduleCustomerPortalMessageFollowUp(messageId) {
 	        }
 	      }, { fastMessagingWrite: true, organizationId: message.organizationId });
       const existingMessageIds = new Set((data.messages || []).map(row => String(row.id || '')));
+      const existingMaintenanceIds = new Set((data.maintenance || []).map(row => String(row.id || '')));
       const baseState = data && data[STATE_READ_META] && data[STATE_READ_META].baseState || {};
       const settings = messageSettings(data);
       if (settings.aiEnabled && settings.aiDrafts) {
@@ -4368,6 +4369,7 @@ function scheduleCustomerPortalMessageFollowUp(messageId) {
         }
       }
       const starAdditions = (data.messages || []).filter(row => row && row.id && !existingMessageIds.has(String(row.id)));
+      const serviceAdditions = (data.maintenance || []).filter(row => row && row.id && !existingMaintenanceIds.has(String(row.id)));
       const replaceQueuedStarDraft = starAdditions.length > 0;
       const afterStarMessageIds = new Set((data.messages || []).map(row => String(row.id || '')));
       const starCompletedAt = new Date().toISOString();
@@ -4376,6 +4378,9 @@ function scheduleCustomerPortalMessageFollowUp(messageId) {
         latest.messages = Array.isArray(latest.messages) ? latest.messages : [];
         const additionIds = new Set(starAdditions.map(row => String(row.id || '')));
         latest.messages = starAdditions.concat(latest.messages.filter(row => !additionIds.has(String(row && row.id || '')) && (!replaceQueuedStarDraft || !queuedStarDraftId || String(row && row.id || '') !== queuedStarDraftId)));
+        latest.maintenance = Array.isArray(latest.maintenance) ? latest.maintenance : [];
+        const serviceIds = new Set(serviceAdditions.map(row => String(row.id || '')));
+        latest.maintenance = serviceAdditions.concat(latest.maintenance.filter(row => !serviceIds.has(String(row && row.id || ''))));
         const latestMessage = latest.messages.find(row => String(row.id || '') === String(messageId || ''));
         if (latestMessage) {
           if (replaceQueuedStarDraft) latestMessage.portalQueuedStarDraftId = '';
@@ -4815,6 +4820,76 @@ function recurringDueOrTouchedToday(row = {}, dateKeyValue = localDateKey()) {
   return recurringDateKey(row) === dateKeyValue ||
     String(row.lastAutoChargeDate || row.lastAutoChargeAttemptDate || '') === dateKeyValue ||
     /fail|not found|retry|contact/i.test(String(row.status || ''));
+}
+function uniqueOperationalRecurringRows(rows = []) {
+  const seen = new Set();
+  return rows.filter(row => {
+    if (!row) return false;
+    const key = String(row.id || row.cloverSubscriptionId || [row.customer, row.vehicleId || row.vehicle, row.amount, row.nextRun].join('|')).trim();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+function dashboardPriorityFeed(data = {}, dateKeyValue = localDateKey()) {
+  const recurringRows = uniqueOperationalRecurringRows(allRecurringRows(data)).filter(recurringEligibleForToday);
+  const recurringItem = row => ({
+    id: row.id || row.cloverSubscriptionId || '',
+    customer: row.customer || 'Customer',
+    vehicle: row.vehicle || '',
+    vehicleId: row.vehicleId || '',
+    amount: Number(row.amount || row.weeklyAmount || 0),
+    nextRun: recurringDateKey(row) || row.nextRun || '',
+    chargeTime: row.chargeTime || row.paymentTime || '',
+    status: closeoutRecurringState(row, dateKeyValue),
+    retryCount: Math.max(Number(row.retryCount || 0), Number(row.failedAttempts || 0)),
+    paymentProvider: normalizedPaymentProvider(row.paymentProvider || row.provider || 'clover')
+  });
+  const failedTwice = recurringRows
+    .filter(row => closeoutRecurringState(row, dateKeyValue) === 'Failed twice')
+    .map(recurringItem);
+  const failedIds = new Set(failedTwice.map(row => String(row.id || '')));
+  const todayDue = recurringRows
+    .filter(row => recurringDateKey(row) === dateKeyValue)
+    .filter(row => !['Paid', 'History / removed'].includes(closeoutRecurringState(row, dateKeyValue)))
+    .filter(row => !failedIds.has(String(row.id || row.cloverSubscriptionId || '')))
+    .map(recurringItem);
+  const serviceNeeded = (data.maintenance || [])
+    .filter(row => {
+      const status = String(row && row.status || '').toLowerCase();
+      if (/complete|closed|fixed|done|cancel/.test(status)) return false;
+      if (/scheduled|appointment|confirmed/.test(status) && !/urgent|unsafe|do not drive|staff contact/.test(status)) return false;
+      return /need|due|request|urgent|unsafe|do not drive|staff contact|open/.test(status)
+        || (!!(row && (row.due || row.nextDue)) && String(row.due || row.nextDue) <= dateKeyValue);
+    })
+    .map(row => ({
+      id: row.id || '',
+      customer: row.customer || '',
+      vehicle: row.vehicle || 'Vehicle service',
+      vehicleId: row.vehicleId || '',
+      issue: row.issue || row.type || 'Service needed',
+      due: row.due || row.nextDue || '',
+      status: row.status || 'Needs service'
+    }))
+    .sort((left, right) => Number(/urgent|unsafe|do not drive/i.test(right.status)) - Number(/urgent|unsafe|do not drive/i.test(left.status)) || String(left.due || '').localeCompare(String(right.due || '')));
+  const paidToday = uniqueCloseoutPayments((data.payments || []).filter(payment => {
+    return payment.controlledStripePilotTest !== true
+      && recordDateKey(payment.createdAt || payment.date) === dateKeyValue
+      && closeoutPaymentPaid(payment);
+  }));
+  return {
+    today: dateKeyValue,
+    summary: {
+      collectedAmount: paidToday.reduce((sum, payment) => sum + Number(payment.amount || 0), 0),
+      collectedCount: paidToday.length,
+      dueCount: todayDue.length,
+      failedTwiceCount: failedTwice.length,
+      serviceNeededCount: serviceNeeded.length
+    },
+    todayDue,
+    failedTwice,
+    serviceNeeded
+  };
 }
 function isStaleAutopaySchedule(row = {}, dateKeyValue = localDateKey()) {
   const due = recurringDateKey(row) || recordDateKey(row.nextPaymentDate || row.nextRunDate || row.adminNextRun || '');
@@ -6194,6 +6269,108 @@ function messageContextFields(context = {}, payload = {}) {
     frequency: payload.frequency || recurring.frequency || ''
   };
 }
+function mechanicalMessageAssessment(body = '') {
+  const text = String(body || '').toLowerCase();
+  const mechanical = /service|maintenance|mechanic|repair|oil|engine|brake|tire|wheel|steer|battery|start|stall|noise|sound|leak|smoke|overheat|temperature|warning light|check engine|transmission|tow|drive the car|drivable|driveable/.test(text);
+  const urgent = mechanical && /no brakes|brake(?:s)? (?:failed|not working)|cannot steer|can'?t steer|steering (?:locked|failed)|smoke|fire|strong (?:gas|fuel) smell|fuel leak|overheat|temperature (?:is )?(?:red|high)|oil pressure|flashing check engine|stalled? in traffic|cannot drive|can'?t drive|won'?t drive|not drivable|undriveable|unsafe to drive/.test(text);
+  const scheduleRequested = mechanical && /schedule|appointment|book|bring (?:it|the car) in|come in|drop (?:it|the car) off|when can i|what time can i/.test(text);
+  return { mechanical, urgent, scheduleRequested };
+}
+function nextServiceBusinessDate(dateKeyValue, includeCurrent = false) {
+  let candidate = validCalendarDateKey(dateKeyValue) || localDateKey();
+  if (!includeCurrent) candidate = addDaysToDateKey(candidate, 1);
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    if (new Date(candidate + 'T12:00:00Z').getUTCDay() !== 0) return candidate;
+    candidate = addDaysToDateKey(candidate, 1);
+  }
+  return candidate;
+}
+function serviceDateFromMessage(body = '', urgent = false) {
+  const text = String(body || '').toLowerCase();
+  const today = localDateKey();
+  let requested = validCalendarDateKey((text.match(/\b\d{4}-\d{2}-\d{2}\b/) || [])[0] || '');
+  const shortDate = text.match(/\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/);
+  if (!requested && shortDate) {
+    const year = shortDate[3] ? Number(shortDate[3]) + (shortDate[3].length === 2 ? 2000 : 0) : Number(today.slice(0, 4));
+    requested = validCalendarDateKey([year, String(Number(shortDate[1])).padStart(2, '0'), String(Number(shortDate[2])).padStart(2, '0')].join('-'));
+  }
+  if (!requested && /\btoday\b/.test(text)) requested = today;
+  if (!requested && /\btomorrow\b/.test(text)) requested = addDaysToDateKey(today, 1);
+  if (!requested) {
+    const weekdays = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+    const wanted = weekdays.findIndex(day => new RegExp('\\b' + day + '\\b').test(text));
+    if (wanted >= 0) {
+      const current = new Date(today + 'T12:00:00Z').getUTCDay();
+      let distance = (wanted - current + 7) % 7;
+      if (distance === 0 && !urgent) distance = 7;
+      requested = addDaysToDateKey(today, distance);
+    }
+  }
+  if (!requested) requested = nextServiceBusinessDate(today, urgent);
+  if (!urgent && requested <= today) requested = nextServiceBusinessDate(today);
+  if (new Date(requested + 'T12:00:00Z').getUTCDay() === 0) requested = addDaysToDateKey(requested, 1);
+  return requested;
+}
+function serviceTimeFromMessage(body = '') {
+  const text = String(body || '').toLowerCase();
+  const match = text.match(/\b(1[0-2]|[1-9])(?::([0-5]\d))?\s*(am|pm)\b/);
+  if (!match) return '11:30 AM';
+  let hour = Number(match[1]) % 12 + (match[3] === 'pm' ? 12 : 0);
+  const minute = Number(match[2] || 0);
+  if (hour < 11 || hour > 16 || hour === 16 && minute > 30) return '11:30 AM';
+  return String(hour > 12 ? hour - 12 : hour || 12) + ':' + String(minute).padStart(2, '0') + (hour >= 12 ? ' PM' : ' AM');
+}
+function prepareStarServiceAppointment(data, plan, context, payload = {}) {
+  if (!plan || plan.actionType !== 'maintenance_schedule') return plan;
+  const body = String(payload.body || payload.message || payload.text || '');
+  const assessment = mechanicalMessageAssessment(body);
+  if (!assessment.mechanical || !assessment.scheduleRequested && !assessment.urgent) return plan;
+  data.maintenance = Array.isArray(data.maintenance) ? data.maintenance : [];
+  const sourceMessageId = String(payload.messageId || payload.externalId || '').trim();
+  let service = sourceMessageId && data.maintenance.find(row => String(row.sourceMessageId || '') === sourceMessageId);
+  if (!service) {
+    const date = serviceDateFromMessage(body, assessment.urgent);
+    const time = serviceTimeFromMessage(body);
+    const fields = messageContextFields(context, payload);
+    service = {
+      id: 'mnt-star-' + Date.now() + '-' + crypto.randomBytes(4).toString('hex'),
+      organizationId: fields.organizationId || MAIN_ORG_ID,
+      customer: fields.customer || context.customerName || 'Customer',
+      phone: fields.phone || '',
+      email: fields.email || '',
+      vehicle: fields.vehicle || context.vehicleName || 'Vehicle not linked',
+      vehicleId: fields.vehicleId || '',
+      vin: fields.vin || '',
+      licensePlate: fields.licensePlate || '',
+      plate: fields.plate || '',
+      tracker: fields.tracker || '',
+      type: assessment.urgent ? 'Urgent mechanical concern' : 'Customer-requested service',
+      issue: body.slice(0, 600),
+      due: date,
+      nextDue: date,
+      appointmentTime: time,
+      status: assessment.urgent ? 'Urgent - staff contact now' : 'Appointment scheduled',
+      tone: assessment.urgent ? 'bad' : 'good',
+      source: 'Star customer message scheduling',
+      sourceMessageId,
+      customerAccountId: fields.customerAccountId || '',
+      notes: assessment.urgent
+        ? 'Star identified an undriveable or serious safety symptom. Contact the customer now and confirm towing/service handling.'
+        : 'Star scheduled the next available service appointment from the customer conversation.',
+      createdAt: new Date().toISOString()
+    };
+    data.maintenance.unshift(service);
+  }
+  plan.related = { ...(plan.related || {}), maintenanceId: service.id, appointmentDate: service.due, appointmentTime: service.appointmentTime, serviceUrgent: assessment.urgent };
+  if (assessment.urgent) {
+    plan.reply = 'Hi ' + aiCustomerFirstName(plan.customer || context.customerName) + ', thanks for telling us. Please park somewhere safe, turn on your hazard lights, and do not keep driving the car. WheelsonAuto has been alerted and will contact you about the safest next step. If anyone is in immediate danger, call 911.';
+    plan.summary = 'Urgent mechanical alert for ' + (plan.customer || context.customerName || 'customer');
+  } else {
+    plan.reply = String(plan.reply || '').trim() + ' I scheduled you for ' + service.due + ' at ' + service.appointmentTime + '. If that time does not work, reply here and we will move it.';
+    plan.summary = 'Service appointment scheduled for ' + (plan.customer || context.customerName || 'customer');
+  }
+  return plan;
+}
 function aiPlanRules(data, payload = {}, context = null) {
   const ctx = context || aiFindCustomerContext(data, payload);
   const body = String(payload.body || payload.message || payload.text || '').trim();
@@ -6215,12 +6392,22 @@ function aiPlanRules(data, payload = {}, context = null) {
   let confidence = 0.72;
   let reply = 'Hi ' + first + ', this is WheelsonAuto. I can help with that. Let me pull up your account and we will follow up shortly.';
   const reasons = [];
+  const mechanical = mechanicalMessageAssessment(body);
   if (!body) {
     needsHuman = true;
     actionType = 'human_review';
     intent = 'empty_message';
     reply = 'Hi ' + first + ', this is WheelsonAuto. I got your message, but I need a little more detail so we can help you.';
     reasons.push('No customer message body was provided.');
+  } else if (mechanical.mechanical) {
+    actionType = 'maintenance_schedule';
+    intent = mechanical.urgent ? 'urgent_mechanical_safety' : 'maintenance_or_schedule';
+    tone = mechanical.urgent ? 'warn' : 'good';
+    confidence = mechanical.urgent ? 0.94 : 0.86;
+    reply = mechanical.urgent
+      ? 'Hi ' + first + ', thanks for telling us. Please park somewhere safe, turn on your hazard lights, and do not keep driving the car. WheelsonAuto has been alerted and will contact you about the safest next step. If anyone is in immediate danger, call 911.'
+      : 'Hi ' + first + ', thanks for letting us know' + vehicleText + '. If you have a flashing warning light, unsafe brakes or steering, smoke, overheating, a strong fuel smell, or an active leak, park safely and do not keep driving. Otherwise, avoid hard driving and send us a clear photo of what you are seeing.' + (mechanical.scheduleRequested ? '' : ' If you want, tell me what day works and I can schedule service.');
+    reasons.push(mechanical.urgent ? 'Serious or undriveable symptom requires a calm stop-driving instruction and immediate staff alert.' : 'Mechanical question can receive calm safety guidance without guessing a diagnosis.');
   } else if (aiContains(lower, humanWords)) {
     needsHuman = true;
     actionType = 'human_review';
@@ -6308,13 +6495,6 @@ function aiPlanRules(data, payload = {}, context = null) {
     confidence = 0.84;
     reply = 'Hi ' + first + ', I see you want to change your autopay date. I am sending that request to the office for approval so the schedule is updated correctly.' + dueText;
     reasons.push('Autopay date/time/frequency changes require admin approval.');
-  } else if (aiContains(lower, ['maintenance', 'oil change', 'inspection', 'service', 'appointment', 'schedule', 'what time', 'time do i come', 'come in'])) {
-    actionType = 'maintenance_schedule';
-    intent = 'maintenance_or_schedule';
-    tone = 'good';
-    confidence = 0.8;
-    reply = 'Hi ' + first + ', we can help schedule that' + vehicleText + '. What day and time works best for you?';
-    reasons.push('Normal scheduling/service conversation can be answered by AI.');
   } else if (aiContains(lower, ['paid', 'i paid', 'already paid', 'cash', 'zelle', 'outside app'])) {
     actionType = 'paid_outside_review';
     intent = 'paid_outside_app';
@@ -6425,7 +6605,7 @@ async function openAiReplyPlan(data, payload, context, fallback) {
   const input = [
     {
       role: 'developer',
-      content: 'You are Star AI, the built-in WheelsonAuto AI manager. Write concise, natural SMS replies that sound like a helpful human office assistant. Follow the ownerReplyGuidance unless it conflicts with a safety or approval rule. Use the platform context only, including customer, vehicle, VIN/tag, tracker, payment state, portal, documents, applications, service, tolls/claims, tasks, recent messages, launch readiness gaps, and iFleet coverage gaps. If readiness or coverage says a workflow is blocked, say it needs office review instead of pretending it is complete. For payment-how-to questions, direct customers to Payments > Make a payment in their WheelsonAuto app before offering office help. Never promise a charge, refund, autopay change, cancellation, removal, toll charge, saved-card action, password reset, receipt, payoff, or contract/e-sign send has happened unless an admin approved it. Return only JSON with fields: reply, intent, actionType, approvalRequired, needsHuman, canAutoSend, confidence, tone, reasons.'
+      content: 'You are Star AI, the built-in WheelsonAuto AI manager. Write concise, calm, natural replies that sound like a helpful human office assistant. Follow the ownerReplyGuidance unless it conflicts with a safety or approval rule. Use the platform context only, including customer, vehicle, VIN/tag, tracker, payment state, portal, documents, applications, service, tolls/claims, tasks, recent messages, launch readiness gaps, and iFleet coverage gaps. If readiness or coverage says a workflow is blocked, say it needs office review instead of pretending it is complete. For mechanical questions, do not guess a diagnosis or frighten the customer: give practical low-risk guidance; tell them to park and stop driving only for serious symptoms such as failed brakes/steering, smoke/fire, fuel leak, overheating, oil-pressure warning, flashing check-engine light, or an undriveable vehicle. For a requested service appointment, use maintenance_schedule; WheelsonAuto schedules Monday through Saturday and never same-day unless the issue is urgent. For payment-how-to questions, direct customers to Payments > Make a payment in their WheelsonAuto app before offering office help. Never promise a charge, refund, autopay change, cancellation, removal, toll charge, saved-card action, password reset, receipt, payoff, or contract/e-sign send has happened unless an admin approved it. Return only JSON with fields: reply, intent, actionType, approvalRequired, needsHuman, canAutoSend, confidence, tone, reasons.'
     },
     {
       role: 'user',
@@ -6585,7 +6765,7 @@ function appendLinkToReply(reply, label, url) {
   if (!url || String(reply || '').includes(url)) return reply;
   return String(reply || '').trim() + '\n\n' + label + ': ' + url;
 }
-function prepareAiSafeLink(data, plan, context) {
+function prepareAiSafeLink(data, plan, context, payload = {}) {
   if (!plan || plan.needsHuman || plan.approvalRequired) return plan;
   const recurring = context.recurring || {};
   if (plan.actionType === 'send_payment_link') {
@@ -6652,7 +6832,7 @@ function prepareAiSafeLink(data, plan, context) {
     plan.reply = appendLinkToReply(plan.reply, 'Secure card setup link', setup.request.url);
     plan.summary = 'Secure card setup link ready for ' + (plan.customer || context.customerName || 'customer');
   }
-  return plan;
+  return prepareStarServiceAppointment(data, plan, context, payload);
 }
 function starPreparedAction(data, plan = {}, context = {}, payload = {}) {
   const recurring = context.recurring || {};
@@ -6723,6 +6903,19 @@ async function createAiMessageDraft(data, payload = {}, options = {}) {
   const existing = duplicateKey && data.messages.find(item => item.aiSourceMessageId === duplicateKey && /AI draft|AI action/i.test(String(item.direction || '')));
   if (existing && !options.forceNew) return { plan: existing.aiPlan || fallback, draft: existing, existing: true };
   let plan = await openAiReplyPlan(data, payload, context, fallback);
+  if (fallback.actionType === 'maintenance_schedule') {
+    plan = sanitizeAiPlan({
+      ...plan,
+      intent: fallback.intent,
+      actionType: 'maintenance_schedule',
+      approvalRequired: false,
+      needsHuman: false,
+      canAutoSend: true,
+      tone: fallback.tone,
+      related: { ...(fallback.related || {}), ...(plan.related || {}) },
+      reasons: [...(plan.reasons || []), ...(fallback.reasons || [])].slice(0, 6)
+    }, fallback);
+  }
   const ownerGuidance = starOwnerGuidance(data);
   if (ownerGuidance.length && plan.provider !== 'openai') {
     plan.needsHuman = true;
@@ -6730,7 +6923,7 @@ async function createAiMessageDraft(data, payload = {}, options = {}) {
     plan.status = 'Human needed';
     plan.reasons = [...(plan.reasons || []), 'Saved owner wording guidance could not be verified because Star used the rules fallback.'];
   }
-  plan = prepareAiSafeLink(data, plan, context);
+  plan = prepareAiSafeLink(data, plan, context, payload);
   plan.preparedAction = starPreparedAction(data, plan, context, payload);
   const messageFields = messageContextFields(context, { ...payload, customer: plan.customer || context.customerName });
   const stamp = new Date();
@@ -8689,6 +8882,70 @@ async function readPrivateDocumentBytes(record = {}) {
     throw error;
   }
   return fs.readFile(filePath);
+}
+async function saveConversationAttachment(data, file, fields = {}, actor = 'customer') {
+  if (!file) {
+    const error = new Error('Choose a JPG, PNG, or PDF to attach.');
+    error.statusCode = 400;
+    throw error;
+  }
+  if (WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED && !PRIVATE_DOCUMENT_STORE.isConfigured()) {
+    const error = new Error(PRIVATE_DOCUMENT_STORE.status().message);
+    error.statusCode = 503;
+    throw error;
+  }
+  const organizationId = fields.organizationId || MAIN_ORG_ID;
+  const stored = await onboarding.savePrivateDocument(file, DATA_DIR, 'doc-message-attachment', PRIVATE_DOCUMENT_STORE, { organizationId });
+  const document = {
+    id: stored.id,
+    organizationId,
+    customer: fields.customer || 'Customer',
+    phone: fields.phone || '',
+    email: fields.email || '',
+    vehicle: fields.vehicle || '',
+    vehicleId: fields.vehicleId || '',
+    vin: fields.vin || '',
+    licensePlate: fields.licensePlate || fields.plate || '',
+    plate: fields.plate || fields.licensePlate || '',
+    tracker: fields.tracker || '',
+    type: 'Conversation attachment',
+    title: stored.originalName || 'Conversation attachment',
+    kind: 'Message attachment',
+    status: 'Shared in conversation',
+    tone: 'blue',
+    originalName: stored.originalName || '',
+    contentType: stored.contentType || '',
+    size: stored.size || 0,
+    sha256: stored.sha256 || '',
+    storagePath: stored.storagePath || '',
+    storageKey: stored.storageKey || '',
+    storageProvider: stored.storageProvider || '',
+    storageSecurity: stored.storageSecurity || (stored.encryption ? 'encrypted' : ''),
+    encryption: stored.encryption || {},
+    date: localDateKey(),
+    createdAt: new Date().toISOString(),
+    source: actor === 'staff' ? 'WheelsonAuto staff conversation' : 'Customer portal conversation',
+    visibility: 'Customer portal',
+    customerVisible: true,
+    portalVisible: true,
+    requiresVerification: false,
+    customerAccountId: fields.customerAccountId || '',
+    recurringPaymentId: fields.recurringPaymentId || ''
+  };
+  data.documents = Array.isArray(data.documents) ? data.documents : [];
+  data.documents.unshift(document);
+  return {
+    stored,
+    document,
+    attachment: {
+      documentId: document.id,
+      name: document.originalName,
+      contentType: document.contentType,
+      size: document.size,
+      customerUrl: '/customer/documents/' + encodeURIComponent(document.id),
+      staffUrl: '/api/onboarding/documents/' + encodeURIComponent(document.id)
+    }
+  };
 }
 function redactPrivateDocumentMetadata(record = {}) {
   const safe = { ...record, privateFileAvailable: privateDocumentAvailable(record) };
@@ -14256,6 +14513,7 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     route('GET', '/customer', 'Customer self-service portal'),
     route('POST', '/api/customer-accounts/assist', 'Open an audited owner-only customer assistance session'),
     route('POST', '/customer/message', 'Customer portal inbound message'),
+    route('POST', '/customer/message-attachment', 'Customer portal private message attachment'),
     route('POST', '/customer/account-payment', 'Customer advance, partial, or catch-up payment'),
     route('POST', '/customer/payment-date-change', 'Customer payment date change with verified fee'),
     route('POST', '/customer/swap-request', 'Customer vehicle swap request with term acknowledgement'),
@@ -14288,6 +14546,7 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     route('GET', '/api/messages/feed', 'Fast role-scoped live message feed'),
     route('POST', '/api/messages/delivery-sync', 'Refresh final SMS carrier delivery results'),
     route('POST', '/api/messages/send', 'Deliver secure customer-app messages or send optional email/SMS'),
+    route('POST', '/api/messages/attachment', 'Staff private message attachment'),
     route('POST', '/api/messages/delivery-review', 'Owner review for confirmation-pending SMS delivery'),
     route('POST', '/api/messages/ai-reply', 'Star AI reply/action planner'),
     route('POST', '/api/messages/ai-action', 'Approve or send Star AI drafts'),
@@ -18805,6 +19064,8 @@ async function completeStripeCardSetup(data, request, sessionInput) {
       stripeCardAuthenticationError: '',
       lastStripeAuthenticationResolvedAt: completedAt,
       lastStripeAuthenticationResolution: request.cardOnlyUpdate ? 'Customer completed secure Stripe card update.' : row.lastStripeAuthenticationResolution || '',
+      stripeChargeAttempt: {},
+      lastStripeChargeAttemptStatus: '',
       notes: [row.notes, 'Customer authorized a Stripe card through WheelsonAuto secure checkout.'].filter(Boolean).join('\n'),
       updatedAt: completedAt
     });
@@ -18942,6 +19203,62 @@ function allRecurringRows(data) {
 function findRecurringRow(data, id) {
   const rows = allRecurringRows(data);
   return rows.find(row => row && row.id === id) || rows.find(row => row && row.cloverSubscriptionId && row.cloverSubscriptionId === id) || null;
+}
+function refreshLatestStripeCardBinding(data, recurring) {
+  if (!recurring || normalizedPaymentProvider(recurring.paymentProvider || recurring.provider || '') !== 'stripe') return recurring;
+  const identifiers = new Set(recurringPlanIdentifiers(recurring));
+  const setupRequestId = String(recurring.cardSetupRequestId || '').trim();
+  const completed = (data.cardSetupRequests || []).filter(request => {
+    if (!request || normalizedPaymentProvider(request.paymentProvider || '') !== 'stripe' || !cardSetupRequestCompleted(request)) return false;
+    if (!request.stripeCustomerId || !request.stripePaymentMethodId) return false;
+    return (setupRequestId && String(request.id || '') === setupRequestId)
+      || identifiers.has(String(request.recurringPaymentId || '').trim());
+  }).sort((left, right) => new Date(right.completedAt || right.stripeCardSavedAt || right.createdAt || 0).getTime() - new Date(left.completedAt || left.stripeCardSavedAt || left.createdAt || 0).getTime());
+  const latest = completed[0];
+  if (!latest) return recurring;
+  const savedAt = latest.completedAt || latest.stripeCardSavedAt || latest.createdAt || new Date().toISOString();
+  const latestSavedMs = new Date(savedAt).getTime() || 0;
+  const currentSavedMs = new Date(recurring.stripeCardSavedAt || recurring.cardSavedAt || 0).getTime() || 0;
+  const bindingChanged = String(recurring.stripeCustomerId || '') !== String(latest.stripeCustomerId || '')
+    || String(recurring.stripePaymentMethodId || '') !== String(latest.stripePaymentMethodId || '')
+    || String(recurring.cardSetupRequestId || '') !== String(latest.id || '')
+    || latestSavedMs > currentSavedMs;
+  if (!bindingChanged) return recurring;
+  const rows = resolveCardSetupPlanRows(data, {
+    recurringPaymentId: recurring.id || recurring.cloverSubscriptionId,
+    cardSetupRequestId: latest.id,
+    customer: recurring.customer
+  }, { allowNameFallback: false });
+  const targets = rows.length ? rows : [recurring];
+  targets.forEach(row => Object.assign(row, {
+    stripeCustomerId: latest.stripeCustomerId,
+    stripePaymentMethodId: latest.stripePaymentMethodId,
+    stripeSetupIntentId: latest.stripeSetupIntentId || row.stripeSetupIntentId || '',
+    stripeCardBrand: latest.stripeCardBrand || row.stripeCardBrand || '',
+    stripeCardLast4: latest.stripeCardLast4 || row.stripeCardLast4 || '',
+    stripeCardSavedAt: savedAt,
+    stripeLivemode: latest.stripeLivemode === true,
+    cardSetupRequestId: latest.id,
+    cardSetupUrl: latest.url || row.cardSetupUrl || '',
+    cardLabel: latest.stripeCardBrand || row.cardLabel || '',
+    cardLast4: latest.stripeCardLast4 || row.cardLast4 || '',
+    cardSavedAt: savedAt,
+    paymentSetup: 'Stripe card saved and chargeable',
+    status: 'Active',
+    tone: 'good',
+    stripeCardSetupStatus: 'Saved',
+    stripeCardSetupError: '',
+    stripeCardSetupCustomerMessage: '',
+    cardSetupCustomerMessage: '',
+    stripeCardAuthenticationSetupNeeded: false,
+    stripeCardAuthenticationRequiredAt: '',
+    stripeCardAuthenticationPaymentIntentId: '',
+    stripeCardAuthenticationError: '',
+    stripeChargeAttempt: {},
+    lastStripeChargeAttemptStatus: '',
+    updatedAt: savedAt
+  }));
+  return findRecurringRow(data, recurring.id || recurring.cloverSubscriptionId) || recurring;
 }
 function updateRecurringChargeState(data, id, patch) {
   const local = (data.recurringPayments || []).find(row => row.id === id || row.cloverSubscriptionId === id);
@@ -19991,8 +20308,9 @@ async function chargeStripeSavedCard(data, recurring, payload = {}) {
   return { charge: intent, payment, recurring };
 }
 async function chargeSavedRecurringCard(data, payload, req) {
-  const recurring = findRecurringRow(data, payload.recurringPaymentId || payload.id);
+  let recurring = findRecurringRow(data, payload.recurringPaymentId || payload.id);
   if (!recurring) throw new Error('Recurring customer was not found. Sync payment customers and try again.');
+  recurring = refreshLatestStripeCardBinding(data, recurring);
   const provider = normalizedPaymentProvider(recurring.paymentProvider || recurring.provider || 'clover');
   if (provider === 'stripe') return chargeStripeSavedCard(data, recurring, payload);
   if (provider !== 'clover') throw new Error('Unsupported saved-card provider: ' + paymentProviderLabel(provider) + '.');
@@ -24672,6 +24990,65 @@ const server = http.createServer(async (req, res) => {
       await writeData(data);
       return send(res, 303, '', 'text/plain', { Location: settingsReturnPath, 'Cache-Control': 'no-store' });
     }
+    if (url.pathname === '/customer/message-attachment' && req.method === 'POST') {
+      const customerUser = customerSessionUser(req);
+      if (!customerUser) return json(res, 401, { ok: false, error: 'Customer login required.' });
+      const messageRate = await publicActionLimit(req, 'customer-portal-message-attachment', 12, 10 * 60 * 1000);
+      if (!messageRate.allowed) return json(res, 429, { ok: false, error: 'Too many attachments were submitted. Wait a moment and try again.' });
+      const payload = await readJsonBody(req, 8 * 1024 * 1024);
+      const data = await readData();
+      const account = activeCustomerSessionAccount(data, customerUser);
+      if (!account) return json(res, 401, { ok: false, error: 'Customer account is not active.' });
+      const deliveryId = String(payload.deliveryId || '').trim().slice(0, 180);
+      const duplicate = deliveryId && (data.messages || []).find(row => row.customerAccountId === account.id && row.providerIdempotencyKey === deliveryId);
+      if (duplicate) return json(res, 200, { ok: true, duplicate: true, message: stripCustomerPortalMessage(duplicate) });
+      const scopedData = dataScopedToOrganization(data, account.organizationId || MAIN_ORG_ID);
+      const context = aiFindCustomerContext(scopedData, { customer: account.customer || account.name, phone: account.phone, email: account.email, recurringPaymentId: account.recurringPaymentId, id: account.recurringPaymentId });
+      const fields = messageContextFields(context, { customerAccountId: account.id, organizationId: account.organizationId || MAIN_ORG_ID });
+      let savedAttachment = null;
+      try {
+        savedAttachment = await saveConversationAttachment(data, payload.file, fields, 'customer');
+        const body = String(payload.body || '').trim().slice(0, 1200);
+        const message = {
+          id: 'msg-customer-attachment-' + Date.now() + '-' + crypto.randomBytes(4).toString('hex'),
+          date: new Date().toLocaleString('en-US'),
+          createdAt: new Date().toISOString(),
+          organizationId: account.organizationId || MAIN_ORG_ID,
+          customer: fields.customer || account.customer || account.name || 'Customer',
+          phone: fields.phone || account.phone || '',
+          email: fields.email || account.email || '',
+          direction: 'Inbound',
+          channel: 'Customer portal',
+          template: 'Conversation attachment',
+          subject: 'Customer shared a file',
+          status: 'Delivered in app',
+          tone: 'blue',
+          body: body || 'Shared ' + savedAttachment.attachment.name,
+          source: 'Customer portal',
+          providerIdempotencyKey: deliveryId,
+          customerAccountId: account.id,
+          customerId: fields.customerId || account.customerId || '',
+          contractId: fields.contractId || account.contractId || '',
+          recurringPaymentId: fields.recurringPaymentId || account.recurringPaymentId || '',
+          vehicleId: fields.vehicleId || account.vehicleId || '',
+          vehicle: fields.vehicle || '',
+          vin: fields.vin || '',
+          plate: fields.plate || '',
+          tracker: fields.tracker || '',
+          attachment: savedAttachment.attachment
+        };
+        data.messages = Array.isArray(data.messages) ? data.messages : [];
+        data.messages.unshift(message);
+        appendCustomerPortalAudit(data, account, 'Customer shared conversation attachment', [message.customer, savedAttachment.attachment.name, message.vehicle || 'No vehicle linked']);
+        await protectConcurrentLocalWrites(data, { preferIncoming: true, reason: 'customer conversation attachment' });
+        await writeData(data);
+        if (body) scheduleCustomerPortalMessageFollowUp(message.id);
+        return json(res, 201, { ok: true, message: stripCustomerPortalMessage(message) });
+      } catch (error) {
+        if (savedAttachment && savedAttachment.stored) await attachPrivateDocumentRollback(error, savedAttachment.stored);
+        return json(res, Number(error && error.statusCode || 400), { ok: false, error: String(error && error.message || error) });
+      }
+    }
     if (url.pathname === '/customer/message' && req.method === 'POST') {
       const wantsJson = /application\/json/i.test(String(req.headers['content-type'] || '')) || /application\/json/i.test(String(req.headers.accept || ''));
       const customerUser = customerSessionUser(req);
@@ -27428,6 +27805,13 @@ const server = http.createServer(async (req, res) => {
       const page = paginatedResource(viewResourceRows(data, 'payments', user), url, { searchFields: ['id', 'customer', 'vehicle', 'vin', 'plate', 'method', 'source', 'status', 'cloverPaymentId', 'stripePaymentIntentId', 'providerPaymentId'], defaultLimit: 75 });
       return json(res, 200, safeResourcePayload({ ok: true, ...page }), { 'Cache-Control': 'private, no-store' });
     }
+    if (url.pathname === '/api/dashboard/priority-feed' && req.method === 'GET') {
+      const role = String(user.role || '').toLowerCase();
+      if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'This dashboard feed is available to owner and manager accounts.' });
+      const data = await readViewData();
+      const scoped = isOwnerUser(user) ? data : dataScopedToOrganization(data, userOrganizationId(user));
+      return json(res, 200, safeResourcePayload({ ok: true, ...dashboardPriorityFeed(scoped) }), { 'Cache-Control': 'private, no-store' });
+    }
     if (url.pathname === '/api/recurring-payments' && req.method === 'GET') {
       if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can view recurring payment schedules.' });
       const data = await readViewData();
@@ -28304,6 +28688,64 @@ const server = http.createServer(async (req, res) => {
         return json(res, 200, { ok: true, payment });
       } catch (err) {
         return json(res, err.status || 400, { ok: false, error: String(err && err.message || err) });
+      }
+    }
+    if (url.pathname === '/api/messages/attachment' && req.method === 'POST') {
+      const payload = await readJsonBody(req, 8 * 1024 * 1024);
+      const data = await readData();
+      const account = (data.customerAccounts || []).find(row => row.id === payload.customerAccountId && staffStatusActive(row));
+      if (!account || !rowVisibleToUserOrganization(account, user)) return json(res, 404, { ok: false, error: 'The exact active customer account was not found.' });
+      const deliveryId = String(payload.deliveryId || '').trim().slice(0, 180);
+      const duplicate = deliveryId && (data.messages || []).find(row => row.customerAccountId === account.id && row.providerIdempotencyKey === deliveryId);
+      if (duplicate) return json(res, 200, { ok: true, duplicate: true, message: safeResourcePayload(duplicate) });
+      const context = aiFindCustomerContext(dataScopedToOrganization(data, account.organizationId || MAIN_ORG_ID), { customer: account.customer || account.name, phone: account.phone, email: account.email, recurringPaymentId: account.recurringPaymentId, id: account.recurringPaymentId }, user);
+      const fields = messageContextFields(context, { customerAccountId: account.id, organizationId: account.organizationId || MAIN_ORG_ID });
+      let savedAttachment = null;
+      try {
+        savedAttachment = await saveConversationAttachment(data, payload.file, fields, 'staff');
+        const body = String(payload.body || '').trim().slice(0, 4000);
+        const settings = messageSettings(data);
+        const message = {
+          id: 'msg-staff-attachment-' + Date.now() + '-' + crypto.randomBytes(4).toString('hex'),
+          date: new Date().toLocaleString('en-US'),
+          createdAt: new Date().toISOString(),
+          organizationId: account.organizationId || MAIN_ORG_ID,
+          customer: fields.customer || account.customer || account.name || 'Customer',
+          phone: fields.phone || account.phone || '',
+          email: fields.email || account.email || '',
+          direction: 'Outbound',
+          channel: 'Customer portal',
+          template: 'Conversation attachment',
+          subject: 'WheelsonAuto shared a file',
+          status: 'Delivered in app',
+          tone: 'good',
+          body: body || 'Shared ' + savedAttachment.attachment.name,
+          provider: 'wheelsonauto',
+          providerIdempotencyKey: deliveryId,
+          source: 'WheelsonAuto customer app',
+          customerAccountId: account.id,
+          customerId: fields.customerId || account.customerId || '',
+          contractId: fields.contractId || account.contractId || '',
+          recurringPaymentId: fields.recurringPaymentId || account.recurringPaymentId || '',
+          vehicleId: fields.vehicleId || account.vehicleId || '',
+          vehicle: fields.vehicle || '',
+          vin: fields.vin || '',
+          plate: fields.plate || '',
+          tracker: fields.tracker || '',
+          attachment: savedAttachment.attachment,
+          notificationEmailStatus: settings.emailEnabled && account.email ? 'Queued' : '',
+          notificationEmailSent: false
+        };
+        data.messages = Array.isArray(data.messages) ? data.messages : [];
+        data.messages.unshift(message);
+        appendAuditLog(data, user, 'Conversation attachment sent', [message.customer, savedAttachment.attachment.name, message.vehicle || 'No vehicle linked']);
+        await protectConcurrentLocalWrites(data, { preferIncoming: true, reason: 'staff conversation attachment' });
+        await writeData(data);
+        if (message.notificationEmailStatus === 'Queued') scheduleCustomerPortalEmailNotification(message.id);
+        return json(res, 201, { ok: true, sent: true, message: safeResourcePayload(message) });
+      } catch (error) {
+        if (savedAttachment && savedAttachment.stored) await attachPrivateDocumentRollback(error, savedAttachment.stored);
+        return json(res, Number(error && error.statusCode || 400), { ok: false, error: String(error && error.message || error) });
       }
     }
     if (url.pathname === '/api/messages/delivery-review' && req.method === 'POST') {
@@ -30652,6 +31094,10 @@ module.exports = {
   nextFutureRecurringRun,
   recurringBillingPeriodKey,
   allRecurringRows,
+  dashboardPriorityFeed,
+  mechanicalMessageAssessment,
+  prepareStarServiceAppointment,
+  refreshLatestStripeCardBinding,
   cardSetupPlanReview,
   findRecurringRow,
   successfulRecurringPaymentEvidence,

@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { draftStarReply, loadMessageFeed, sendMessage, sendStarInstruction, type SendMessageInput } from '../api';
+import { Paperclip } from 'lucide-react';
+import { draftStarReply, loadMessageFeed, sendMessage, sendMessageAttachment, sendStarInstruction, type SendMessageInput } from '../api';
 import type { MessageRecord, MessageThread, StarCoachState } from '../types';
 
 function timeValue(message: MessageRecord): number {
@@ -113,6 +114,17 @@ function availableChannels(thread: MessageThread): SendMessageInput['channel'][]
   return channels.length ? channels : ['Customer portal'];
 }
 
+function messageFilePayload(file: File) {
+  return new Promise<{ name: string; type: string; size: number; dataUrl: string }>((resolve, reject) => {
+    if (file.size > 5 * 1024 * 1024) return reject(new Error('The file must be 5 MB or smaller.'));
+    if (!['image/jpeg', 'image/png', 'application/pdf'].includes(file.type)) return reject(new Error('Choose a JPG, PNG, or PDF.'));
+    const reader = new FileReader();
+    reader.onload = () => resolve({ name: file.name, type: file.type, size: file.size, dataUrl: String(reader.result || '') });
+    reader.onerror = () => reject(new Error('The selected file could not be read.'));
+    reader.readAsDataURL(file);
+  });
+}
+
 export function MessagesPage() {
   const [messages, setMessages] = useState<MessageRecord[]>([]);
   const [selectedKey, setSelectedKey] = useState('');
@@ -130,6 +142,8 @@ export function MessagesPage() {
   const [notice, setNotice] = useState('');
   const feedRevision = useRef('');
   const messageEnd = useRef<HTMLDivElement>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [attachment, setAttachment] = useState<File | null>(null);
 
   const refresh = async (signal?: AbortSignal, force = false) => {
     try {
@@ -202,8 +216,9 @@ export function MessagesPage() {
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (!selected || !body.trim() || sending) return;
+    if (!selected || (!body.trim() && !attachment) || sending) return;
     const text = body.trim();
+    const selectedAttachment = attachment;
     const deliveryId = crypto.randomUUID();
     const optimisticId = `sending-${deliveryId}`;
     const optimistic: MessageRecord = {
@@ -217,26 +232,22 @@ export function MessagesPage() {
       channel,
       body: text,
       status: 'Sending',
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
+      attachment: selectedAttachment ? { documentId: '', name: selectedAttachment.name, contentType: selectedAttachment.type, size: selectedAttachment.size } : undefined
     };
-    setSending(true); setError(''); setNotice(''); setBody('');
+    setSending(true); setError(''); setNotice(''); setBody(''); setAttachment(null);
     setMessages(current => [...current, optimistic]);
     try {
-      const result = await sendMessage({
-        customer: selected.customer,
-        customerId: selected.latest.customerId,
-        customerAccountId: selected.customerAccountId,
-        phone: selected.phone,
-        email: selected.email,
-        channel,
-        body: text,
-        deliveryId
-      });
+      const base = { customer: selected.customer, customerId: selected.latest.customerId, customerAccountId: selected.customerAccountId, phone: selected.phone, email: selected.email, body: text, deliveryId };
+      const result = selectedAttachment
+        ? await sendMessageAttachment({ ...base, file: await messageFilePayload(selectedAttachment) })
+        : await sendMessage({ ...base, channel });
       setMessages(current => current.map(message => message.id === optimisticId ? result.message : message));
       setNotice(result.sent ? 'Message sent' : result.warning || 'Message saved');
     } catch (requestError) {
       setMessages(current => current.filter(message => message.id !== optimisticId));
       setBody(current => current || text);
+      setAttachment(current => current || selectedAttachment);
       setError((requestError as Error).message);
     } finally {
       setSending(false);
@@ -331,6 +342,7 @@ export function MessagesPage() {
             const star = /star|ai/i.test([message.channel, message.direction, message.provider].join(' '));
             return <article key={message.id} className={`bubble ${inbound ? 'inbound' : 'outbound'} ${star ? 'star' : ''}`}>
               <p>{message.body || message.subject || 'No message text saved'}</p>
+              {message.attachment ? <a className="message-attachment" href={message.attachment.staffUrl || `/api/onboarding/documents/${encodeURIComponent(message.attachment.documentId)}`} target="_blank" rel="noreferrer">{message.attachment.contentType.startsWith('image/') && message.attachment.documentId ? <img src={message.attachment.staffUrl || `/api/onboarding/documents/${encodeURIComponent(message.attachment.documentId)}`} alt={message.attachment.name} /> : null}<span>{message.attachment.name}</span></a> : null}
               <footer><time>{shortTime(message)}</time><span>{message.status || message.channel || ''}</span></footer>
             </article>;
           })}
@@ -342,9 +354,12 @@ export function MessagesPage() {
           <div className="channel-control" aria-label="Delivery channel">
             {availableChannels(selected).map(option => <button type="button" key={option} className={channel === option ? 'active' : ''} onClick={() => setChannel(option)}>{option === 'Customer portal' ? 'App' : option}</button>)}
           </div>
+          {attachment ? <span className="selected-attachment">{attachment.name}<button type="button" onClick={() => setAttachment(null)} aria-label="Remove attachment">x</button></span> : null}
           <div className="compose-row">
+            <input ref={fileInput} type="file" accept="image/jpeg,image/png,application/pdf" hidden onChange={event => setAttachment(event.target.files?.[0] || null)} />
+            <button className="attachment-button" type="button" title="Attach photo or PDF" aria-label="Attach photo or PDF" onClick={() => fileInput.current?.click()}><Paperclip size={17} /></button>
             <textarea value={body} onChange={event => setBody(event.target.value)} placeholder={`Message ${selected.customer}`} rows={1} maxLength={4000} />
-            <button className="send-button" disabled={!body.trim() || sending}>{sending ? 'Sending' : 'Send'}</button>
+            <button className="send-button" disabled={(!body.trim() && !attachment) || sending}>{sending ? 'Sending' : 'Send'}</button>
           </div>
         </form>
       </>}

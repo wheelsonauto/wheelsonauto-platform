@@ -58,10 +58,25 @@ const starReadiness = finalFunctionSlice(app, 'starReadinessPanel') + finalFunct
 const starHealth = finalFunctionSlice(app, 'starSystemHealthPanelFresh') || finalFunctionSlice(app, 'starSystemHealthPanel');
 const starQaManager = (finalFunctionSlice(app, 'starQaManagerPanel') || '') + (finalFunctionSlice(app, 'starQaManagerPanelFresh') || '');
 const starActions = finalFunctionSlice(app, 'starAiActions');
+const mechanicalAssessment = finalFunctionSlice(server, 'mechanicalMessageAssessment');
+const serviceAppointment = finalFunctionSlice(server, 'prepareStarServiceAppointment');
 
 if (!aiRules || !sanitize || !openAiPlan || !safeLinks || !aiDraft || !aiFindContext || !aiContext || !aiHealth || !approve || !apiAllowed || !starPanel || !starReadiness || !starHealth || !starQaManager || !starActions) {
   fail('Missing Star AI frontend/backend safety functions.');
 }
+
+[
+  'unsafe to drive',
+  'scheduleRequested'
+].forEach(text => requireText('Mechanical message assessment', mechanicalAssessment, text));
+[
+  'Appointment scheduled',
+  'Urgent - staff contact now',
+  'do not keep driving',
+  'sourceMessageId'
+].forEach(text => requireText('Star service scheduling', serviceAppointment, text));
+requireText('Star service persistence', server, 'latest.maintenance = serviceAdditions.concat');
+requireText('Star mechanical model override', aiDraft, "fallback.actionType === 'maintenance_schedule'");
 
 [
   'charge_saved_card',

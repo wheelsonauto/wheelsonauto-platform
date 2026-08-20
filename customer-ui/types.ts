@@ -56,6 +56,7 @@ export type PortalRecord = {
   availability?: string;
   onlineVehicleId?: string;
   slug?: string;
+  attachment?: { documentId: string; name: string; contentType: string; size: number; customerUrl?: string; staffUrl?: string };
 };
 
 export type CustomerPortal = {

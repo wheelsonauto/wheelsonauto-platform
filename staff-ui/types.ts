@@ -32,6 +32,7 @@ export type MessageRecord = {
   starReview?: boolean;
   starReviewReason?: string;
   starReviewAction?: string;
+  attachment?: { documentId: string; name: string; contentType: string; size: number; customerUrl?: string; staffUrl?: string };
 };
 
 export type MessageFeed = {
@@ -198,6 +199,38 @@ export type RecurringPaymentRecord = {
   notes?: string;
   createdAt?: string;
   updatedAt?: string;
+};
+
+export type DashboardPaymentItem = {
+  id: string;
+  customer: string;
+  vehicle?: string;
+  vehicleId?: string;
+  amount: number;
+  nextRun?: string;
+  chargeTime?: string;
+  status: string;
+  retryCount: number;
+  paymentProvider?: string;
+};
+
+export type DashboardServiceItem = {
+  id: string;
+  customer?: string;
+  vehicle: string;
+  vehicleId?: string;
+  issue: string;
+  due?: string;
+  status: string;
+};
+
+export type DashboardPriorityFeed = {
+  ok: boolean;
+  today: string;
+  summary: { collectedAmount: number; collectedCount: number; dueCount: number; failedTwiceCount: number; serviceNeededCount: number };
+  todayDue: DashboardPaymentItem[];
+  failedTwice: DashboardPaymentItem[];
+  serviceNeeded: DashboardServiceItem[];
 };
 
 export type RentalRecord = {

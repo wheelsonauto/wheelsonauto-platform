@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from 'react';
-import { loadCustomerMessages, loadCustomerNotifications, loadCustomerPortal, markCustomerNotificationsRead, sendCustomerMessage, uploadCustomerDocument } from './api';
+import { Paperclip } from 'lucide-react';
+import { loadCustomerMessages, loadCustomerNotifications, loadCustomerPortal, markCustomerNotificationsRead, sendCustomerMessage, sendCustomerMessageAttachment, uploadCustomerDocument } from './api';
 import type { CustomerNotification, CustomerPortal, PortalRecord } from './types';
 import { useSwipeTabs } from '../staff-ui/useSwipeTabs';
 
@@ -142,12 +143,14 @@ function MessagesPage({ portal, onPortal, onBack }: { portal: CustomerPortal; on
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
   const historyRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [attachment, setAttachment] = useState<File | null>(null);
   const rows = useMemo(() => portal.messages.slice().sort((a, b) => messageTime(a) - messageTime(b)), [portal.messages]);
   useEffect(() => { historyRef.current?.scrollTo({ top: historyRef.current.scrollHeight }); }, [rows.length]);
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     const text = body.trim();
-    if (!text || sending) return;
+    if (!text && !attachment || sending) return;
     const deliveryId = `customer-next-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const optimistic: PortalRecord = {
       id: `sending-${deliveryId}`,
@@ -155,16 +158,21 @@ function MessagesPage({ portal, onPortal, onBack }: { portal: CustomerPortal; on
       direction: 'Inbound',
       channel: 'Customer portal',
       status: 'Sending',
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
+      attachment: attachment ? { documentId: '', name: attachment.name, contentType: attachment.type, size: attachment.size } : undefined
     };
-    setSending(true); setError(''); setBody('');
+    const selectedAttachment = attachment;
+    setSending(true); setError(''); setBody(''); setAttachment(null);
 	    onPortal(current => ({ ...current, messages: [optimistic, ...current.messages.filter(row => row.id !== optimistic.id)] }));
 	    try {
-	      const result = await sendCustomerMessage(text, deliveryId);
+	      const result = selectedAttachment
+          ? await sendCustomerMessageAttachment(text, deliveryId, await filePayload(selectedAttachment))
+          : await sendCustomerMessage(text, deliveryId);
 	      onPortal(current => ({ ...current, messages: [result.message, ...current.messages.filter(row => row.id !== optimistic.id && row.id !== result.message.id)] }));
 	    } catch (reason) {
 	      onPortal(current => ({ ...current, messages: current.messages.filter(row => row.id !== optimistic.id) }));
       setBody(current => current || text);
+      setAttachment(current => current || selectedAttachment);
       setError(reason instanceof Error ? reason.message : 'Message could not be sent.');
     } finally { setSending(false); }
   };
@@ -172,9 +180,10 @@ function MessagesPage({ portal, onPortal, onBack }: { portal: CustomerPortal; on
     <header><button className="customer-message-back" onClick={onBack} aria-label="Back to account">&lt;</button><div className="customer-avatar">WOA</div><div><strong>WheelsonAuto</strong><span>Office conversation</span></div><i>Secure</i></header>
     <div className="customer-message-history" ref={historyRef}>{rows.length ? rows.map((row, index) => {
       const mine = /inbound|customer action/i.test(String(row.direction || ''));
-      return <article key={row.id || index} className={mine ? 'mine' : 'office'}><p>{row.body || row.subject || 'Message update'}</p><footer>{mine ? 'You' : 'WheelsonAuto'} - {shortDate(row.createdAt || row.date)}{row.status ? ` - ${row.status}` : ''}</footer></article>;
+      const file = row.attachment;
+      return <article key={row.id || index} className={mine ? 'mine' : 'office'}><p>{row.body || row.subject || 'Message update'}</p>{file ? <a className="customer-message-attachment" href={file.customerUrl || `/customer/documents/${encodeURIComponent(file.documentId)}`} target="_blank" rel="noreferrer">{file.contentType.startsWith('image/') && file.documentId ? <img src={file.customerUrl || `/customer/documents/${encodeURIComponent(file.documentId)}`} alt={file.name} /> : null}<span>{file.name}</span></a> : null}<footer>{mine ? 'You' : 'WheelsonAuto'} - {shortDate(row.createdAt || row.date)}{row.status ? ` - ${row.status}` : ''}</footer></article>;
     }) : <Empty>Start a conversation with WheelsonAuto.</Empty>}</div>
-    <form className="customer-composer" onSubmit={submit}>{error ? <span className="composer-error">{error}</span> : null}<div><textarea value={body} onChange={event => setBody(event.target.value)} placeholder="Message WheelsonAuto" maxLength={1200} rows={1} /><button disabled={!body.trim() || sending} aria-label="Send message">{sending ? '...' : 'Send'}</button></div></form>
+    <form className="customer-composer" onSubmit={submit}>{error ? <span className="composer-error">{error}</span> : null}{attachment ? <span className="selected-attachment">{attachment.name}<button type="button" onClick={() => setAttachment(null)} aria-label="Remove attachment">x</button></span> : null}<div><input ref={fileInputRef} type="file" accept="image/jpeg,image/png,application/pdf" hidden onChange={event => setAttachment(event.target.files?.[0] || null)} /><button className="attachment-command" type="button" title="Attach photo or PDF" aria-label="Attach photo or PDF" onClick={() => fileInputRef.current?.click()}><Paperclip size={17} /></button><textarea value={body} onChange={event => setBody(event.target.value)} placeholder="Message WheelsonAuto" maxLength={1200} rows={1} /><button disabled={(!body.trim() && !attachment) || sending} aria-label="Send message">{sending ? '...' : 'Send'}</button></div></form>
   </main>;
 }
 

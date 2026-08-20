@@ -39,6 +39,15 @@ export async function sendCustomerMessage(body: string, deliveryId: string): Pro
   return parseJson(response);
 }
 
+export async function sendCustomerMessageAttachment(body: string, deliveryId: string, file: { name: string; type: string; size: number; dataUrl: string }): Promise<{ ok: boolean; duplicate?: boolean; message: PortalRecord }> {
+  const response = await fetch('/customer/message-attachment', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ body, deliveryId, file })
+  });
+  return parseJson(response);
+}
+
 export type CustomerDocumentInput = {
   type: string;
   provider: string;

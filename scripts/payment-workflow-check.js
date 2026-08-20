@@ -303,6 +303,13 @@ requireText('Fallback transaction report possible match note', app, "customer===
   'Card linked',
   'Pending today'
 ].forEach(text => requireText('Saved-card/manual charge backend', server, text));
+[
+  'function refreshLatestStripeCardBinding',
+  'cardSetupRequestCompleted(request)',
+  'bindingChanged',
+  'stripeChargeAttempt: {}',
+  'recurring = refreshLatestStripeCardBinding(data, recurring)'
+].forEach(text => requireText('Stripe replacement-card charge binding', server, text));
 
 [
   '/api/payments/manual-result',

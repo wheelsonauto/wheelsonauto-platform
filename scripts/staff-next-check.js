@@ -33,6 +33,11 @@ const dist = path.join(root, 'staff-dist');
 const entryPath = path.join(dist, 'staff-next.js');
 const cssPath = path.join(dist, 'staff-next.css');
 
+assert(api.includes("loadCachedJson<DashboardPriorityFeed>('/api/dashboard/priority-feed'"), 'Dashboard must load the dedicated operational priority feed.');
+assert(dashboard.includes('priority.failedTwice') && dashboard.includes('priority.todayDue') && dashboard.includes('priority.serviceNeeded'), 'Dashboard priority queue must contain only failed-twice payments, today dues, and unscheduled service needs.');
+assert(dashboard.includes('Today & failed twice') && !dashboard.includes('pickupRows'), 'Dashboard payment summary must focus on today and failed-twice accounts without pickup rows.');
+assert(server.includes('function dashboardPriorityFeed(data = {}, dateKeyValue = localDateKey())') && server.includes('/complete|closed|fixed|done|cancel/') && server.includes('/scheduled|appointment|confirmed/'), 'Backend dashboard feed must exclude scheduled or completed service work.');
+
 assert(fs.existsSync(entryPath) && fs.existsSync(cssPath), 'Build the React staff module before running this check.');
 assert(server.includes("(url.pathname === '/' || url.pathname === '/staff-next')") && server.includes('staffNextHtml(user)'), 'The authenticated staff root is not cut over to the new role workspace.');
 assert(server.includes("url.pathname === '/staff-legacy'") && server.includes('Only the owner can open the emergency legacy workspace.'), 'The guarded owner-only emergency legacy route is missing.');
