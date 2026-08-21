@@ -291,7 +291,8 @@ function paginatedResource(rows, url, options = {}) {
   filtered.sort((left, right) => resourceTimestamp(right) - resourceTimestamp(left) || String(left && (left.name || left.customer || left.id) || '').localeCompare(String(right && (right.name || right.customer || right.id) || '')));
   const requestedLimit = Number(url.searchParams.get('limit') || options.defaultLimit || 50);
   const requestedPage = Number(url.searchParams.get('page') || 1);
-  const limit = Math.max(1, Math.min(200, Number.isFinite(requestedLimit) ? Math.floor(requestedLimit) : 50));
+  const maxLimit = Math.max(1, Number(options.maxLimit || 200));
+  const limit = Math.max(1, Math.min(maxLimit, Number.isFinite(requestedLimit) ? Math.floor(requestedLimit) : 50));
   const page = Math.max(1, Number.isFinite(requestedPage) ? Math.floor(requestedPage) : 1);
   const total = filtered.length;
   const pages = Math.max(1, Math.ceil(total / limit));
@@ -421,7 +422,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260820-owner-lifecycle-358';
+const ASSET_VERSION = 'platform-20260820-transactions-359';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -14504,7 +14505,8 @@ function assertStripeLiveResult(livemode, label) {
   });
 }
 function isStripeLaunchGuardError(error) {
-  return ['stripe_card_preparation_not_live', 'stripe_money_actions_not_armed', 'stripe_live_result_required'].includes(String(error && error.code || ''));
+  const code = String(error && error.code || '');
+  return ['controlled_stripe_pilot_required', 'stripe_card_preparation_not_live', 'stripe_money_actions_not_armed', 'stripe_live_result_required'].includes(code) || /^stripe_pilot_/.test(code);
 }
 function systemReadiness(data, user = { role: 'Owner' }) {
   const scopedSource = isOwnerUser(user) ? data : dataScopedToOrganization(data, userOrganizationId(user));
@@ -20117,7 +20119,8 @@ async function completeStripeRecurringChargeClaim(scope, key, response = {}, cla
 async function chargeStripeSavedCard(data, recurring, payload = {}) {
   const amount = Number(payload.amount || recurring.amount || 0);
   if (!amount || amount <= 0) throw new Error('Enter a valid amount before charging.');
-  assertStripeGeneralMoneyActionAllowed(data, 'charging a saved card or running Stripe autopay');
+  if (payload.automatic === true) assertStripeGeneralMoneyActionAllowed(data, 'running Stripe autopay');
+  else assertStripeMoneyActionsArmed();
   assertStripeLiveResult(recurring.stripeLivemode, 'Saved Stripe card');
   const chargeGuard = assertRecurringChargeAllowed(data, recurring, payload, 'stripe');
   const customerId = String(recurring.stripeCustomerId || '').trim();
@@ -28251,7 +28254,7 @@ const server = http.createServer(async (req, res) => {
       const role = String(user.role || '').toLowerCase();
       if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'Mechanic accounts do not have access to payment records.' });
       const data = await readViewData();
-      const page = paginatedResource(viewResourceRows(data, 'payments', user), url, { searchFields: ['id', 'customer', 'vehicle', 'vin', 'plate', 'method', 'source', 'status', 'cloverPaymentId', 'stripePaymentIntentId', 'providerPaymentId'], defaultLimit: 75 });
+      const page = paginatedResource(viewResourceRows(data, 'payments', user), url, { searchFields: ['id', 'customer', 'vehicle', 'vin', 'plate', 'method', 'source', 'status', 'createdAt', 'date', 'cloverPaymentId', 'stripePaymentIntentId', 'providerPaymentId'], defaultLimit: 75, maxLimit: 5000 });
       return json(res, 200, safeResourcePayload({ ok: true, ...page }), { 'Cache-Control': 'private, no-store' });
     }
     if (url.pathname === '/api/dashboard/priority-feed' && req.method === 'GET') {
@@ -31112,6 +31115,7 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true, paymentProvider: target, recurring: findRecurringRow(data, recurring.id || recurring.cloverSubscriptionId) });
     }
     if ((url.pathname === '/api/integrations/clover/manual-charge' || url.pathname === '/api/integrations/payments/manual-charge') && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can manually charge a saved customer card.' });
       const payload = await readJsonBody(req);
       const data = await readData();
       try {

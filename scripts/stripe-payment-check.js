@@ -158,6 +158,11 @@ async function run() {
     'Stripe 5xx responses must remain tied to the original idempotency key for safe reconciliation.'
   );
 
+  const savedCardChargeSource = server.slice(server.indexOf('async function chargeStripeSavedCard'), server.indexOf('async function chargeCloverSavedCard'));
+  assert(savedCardChargeSource.includes("if (payload.automatic === true) assertStripeGeneralMoneyActionAllowed(data, 'running Stripe autopay');") && savedCardChargeSource.includes('else assertStripeMoneyActionsArmed();'), 'Owner manual charges must use hardened production readiness while unattended Stripe autopay retains the approved-pilot gate.');
+  assert(server.includes("/^stripe_pilot_/.test(code)") && server.includes("'controlled_stripe_pilot_required'"), 'Stripe pilot policy blocks must be classified as provider safeguards instead of customer card failures.');
+  assert(server.includes("Only the owner can manually charge a saved customer card."), 'Manual saved-card charges must require an owner session.');
+
   [
     'STRIPE_SECRET_KEY',
     'STRIPE_WEBHOOK_SECRET',

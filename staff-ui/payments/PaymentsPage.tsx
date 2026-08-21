@@ -44,6 +44,16 @@ function scheduleDate(row: RecurringPaymentRecord) {
   return [row.nextRun, row.chargeTime].filter(Boolean).join(' ') || 'After card setup';
 }
 
+function transactionDateKey(payment: PaymentRecord) {
+  const value = String(payment.createdAt || payment.date || '').trim();
+  const exact = value.match(/^\d{4}-\d{2}-\d{2}/);
+  if (exact) return exact[0];
+  const parsed = new Date(value);
+  if (!Number.isFinite(parsed.getTime())) return '';
+  const local = new Date(parsed.getTime() - parsed.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 10);
+}
+
 export function PaymentsPage({ onOpenRental }: { onOpenRental: (rentalId: string) => void }) {
   const owner = String(window.__WOA_STAFF_USER__?.role || '').toLowerCase() === 'owner';
   const [payments, setPayments] = useState<PaymentRecord[]>([]);
@@ -56,6 +66,8 @@ export function PaymentsPage({ onOpenRental }: { onOpenRental: (rentalId: string
   const [draft, setDraft] = useState<AutopayDraft | null>(null);
   const [setupUrl, setSetupUrl] = useState('');
   const [query, setQuery] = useState('');
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
   const [transactionFilter, setTransactionFilter] = useState<TransactionFilter>('all');
   const [autopayFilter, setAutopayFilter] = useState<AutopayFilter>('all');
   const [loading, setLoading] = useState(true);
@@ -102,11 +114,14 @@ export function PaymentsPage({ onOpenRental }: { onOpenRental: (rentalId: string
   const orderedPayments = useMemo(() => payments.slice().sort((a, b) => (Date.parse(b.createdAt || b.date || '') || 0) - (Date.parse(a.createdAt || a.date || '') || 0)), [payments]);
   const visiblePayments = useMemo(() => orderedPayments.filter(payment => {
     const status = String(payment.status || '').toLowerCase();
+    const date = transactionDateKey(payment);
     if (transactionFilter === 'paid' && !/paid|succeeded|complete/.test(status)) return false;
     if (transactionFilter === 'attention' && !/failed|declined|pending|not found|review/.test(status)) return false;
     if (transactionFilter === 'unmatched' && !/unmatched|unknown/.test([payment.customer, status].join(' ').toLowerCase())) return false;
-    return wordsMatch(query, [payment.customer, payment.vehicle, payment.vin, payment.plate, payment.method, payment.source, payment.status, payment.id]);
-  }), [orderedPayments, query, transactionFilter]);
+    if (fromDate && (!date || date < fromDate)) return false;
+    if (toDate && (!date || date > toDate)) return false;
+    return wordsMatch(query, [payment.customer, payment.vehicle, payment.vin, payment.plate, payment.method, payment.source, payment.status, payment.id, payment.createdAt, payment.date, dateTime(payment.createdAt || payment.date)]);
+  }), [orderedPayments, query, transactionFilter, fromDate, toDate]);
 
   const orderedAutopay = useMemo(() => autopay.slice().sort((a, b) => {
     const attentionA = /failed|declined|not found|review/i.test(a.status || '') ? 0 : /setup|waiting/i.test(a.status || '') ? 1 : 2;
@@ -228,7 +243,8 @@ export function PaymentsPage({ onOpenRental }: { onOpenRental: (rentalId: string
       {owner ? <div className="workspace-view-switch swipe-tabs" role="tablist" aria-label="Payment view" {...viewSwipe}>{paymentViews.map(key => <button type="button" role="tab" aria-selected={view === key} key={key} className={view === key ? 'active' : ''} onClick={() => { closeDetail(); setView(key); }}>{key === 'transactions' ? 'Transactions' : 'Autopay'}</button>)}</div> : null}
       <div className="payment-filter-swipe-zone swipe-zone" {...(view === 'transactions' ? transactionSwipe : autopaySwipe)}>
       {view === 'transactions' ? <div className="compact-metrics four swipe-tabs" role="tablist" aria-label="Transaction status">{transactionFilters.map(key => <button type="button" role="tab" aria-selected={transactionFilter === key} key={key} className={transactionFilter === key ? 'active' : ''} onClick={() => setTransactionFilter(key)}><span>{key[0].toUpperCase() + key.slice(1)}</span><strong>{transactionCounts[key]}</strong></button>)}</div> : <div className="compact-metrics four swipe-tabs" role="tablist" aria-label="Autopay status">{autopayFilters.map(key => <button type="button" role="tab" aria-selected={autopayFilter === key} key={key} className={autopayFilter === key ? 'active' : ''} onClick={() => setAutopayFilter(key)}><span>{key[0].toUpperCase() + key.slice(1)}</span><strong>{autopayCounts[key]}</strong></button>)}</div>}
-      <label className="workspace-search"><span aria-hidden="true">/</span><input value={query} onChange={event => setQuery(event.target.value)} placeholder={view === 'autopay' ? 'Search customer, vehicle, VIN, tag, tracker' : 'Search name, vehicle, VIN, tag, transaction'} /></label>
+      <label className="workspace-search"><span aria-hidden="true">/</span><input value={query} onChange={event => setQuery(event.target.value)} placeholder={view === 'autopay' ? 'Search customer, vehicle, VIN, tag, tracker' : 'Search name, date, vehicle, reference'} /></label>
+      {view === 'transactions' ? <div className="transaction-date-range" aria-label="Transaction date range"><label><span>From</span><input type="date" value={fromDate} max={toDate || undefined} onChange={event => setFromDate(event.target.value)} /></label><label><span>To</span><input type="date" value={toDate} min={fromDate || undefined} onChange={event => setToDate(event.target.value)} /></label>{fromDate || toDate ? <button type="button" className="text-command" onClick={() => { setFromDate(''); setToDate(''); }}>Clear dates</button> : null}</div> : null}
       {error && !hasDetail ? <div className="inline-alert error">{error}</div> : null}
       {view === 'transactions' ? <div className="record-list payment-records">
         {loading ? <div className="empty-state">Loading transactions...</div> : null}

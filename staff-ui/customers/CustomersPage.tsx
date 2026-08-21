@@ -38,13 +38,14 @@ import { useViewedRecords } from '../useViewedRecords';
 
 const CustomerDuesPanel = lazy(() => import('./CustomerDuesPanel').then(module => ({ default: module.CustomerDuesPanel })));
 const CustomerProfilePanel = lazy(() => import('./CustomerProfilePanel').then(module => ({ default: module.CustomerProfilePanel })));
+const CustomerTransactionsPanel = lazy(() => import('./CustomerTransactionsPanel').then(module => ({ default: module.CustomerTransactionsPanel })));
 
-type Filter = 'active' | 'dues' | 'history';
+type Filter = 'active' | 'dues' | 'history' | 'transactions';
 type DetailTab = 'customer' | 'payments' | 'dues';
 type PaymentAction = 'new' | 'charge' | 'result' | 'link' | 'card' | 'edit' | 'remove' | 'delete' | null;
 
-const filters: readonly Filter[] = ['active', 'dues', 'history'];
-const filterLabels: Record<Filter, string> = { active: 'Active', dues: 'Tolls / violations & dues', history: 'History' };
+const filters: readonly Filter[] = ['active', 'dues', 'history', 'transactions'];
+const filterLabels: Record<Filter, string> = { active: 'Active', dues: 'Tolls / violations & dues', history: 'History', transactions: 'Transactions' };
 
 type ActionDraft = {
   amount: string;
@@ -227,7 +228,8 @@ export function CustomersPage({ onNavigate, onOpenRental }: { onNavigate: (works
   const counts = {
     active: customerRows.filter(hasAssignedVehicle).length,
     dues: customerRows.filter(hasDues).length,
-    history: customerRows.filter(row => !hasAssignedVehicle(row)).length
+    history: customerRows.filter(row => !hasAssignedVehicle(row)).length,
+    transactions: payments.length
   };
   const selectedCustomerPayments = useMemo(() => draft ? payments.filter(row => sameCustomer(row, draft)).sort((a, b) => (Date.parse(b.createdAt || b.date || '') || 0) - (Date.parse(a.createdAt || a.date || '') || 0)) : [], [draft, payments]);
   const selectedCustomerAutopay = useMemo(() => draft ? autopay.filter(row => sameCustomer(row, draft)).sort((a, b) => Number(/failed|declined|not found|review|paused/i.test(b.status || '')) - Number(/failed|declined|not found|review|paused/i.test(a.status || '')) || String(a.nextRun || '').localeCompare(String(b.nextRun || ''))) : [], [draft, autopay]);
@@ -395,15 +397,13 @@ export function CustomersPage({ onNavigate, onOpenRental }: { onNavigate: (works
 
   return <main className={`operations-workspace resource-workspace connected-customer-workspace ${draft ? 'has-detail' : ''}`}>
     <section className="operations-index">
-      <header className="workspace-title"><div><span>One connected customer record</span><h1>Customers</h1></div><div className="workspace-head-actions">{viewed.unreadCount ? <button type="button" className="unread-summary" onClick={viewed.markAllViewed}>{viewed.unreadCount} new</button> : null}<button type="button" className="primary-command compact" onClick={openNewCustomer}><Plus size={15} /> Add customer</button></div></header>
+      <header className="workspace-title"><div><span>{filter === 'transactions' ? 'Current and historical payment ledger' : 'One connected customer record'}</span><h1>{filter === 'transactions' ? 'Transactions' : 'Customers'}</h1></div><div className="workspace-head-actions">{filter !== 'transactions' && viewed.unreadCount ? <button type="button" className="unread-summary" onClick={viewed.markAllViewed}>{viewed.unreadCount} new</button> : null}{filter !== 'transactions' ? <button type="button" className="primary-command compact" onClick={openNewCustomer}><Plus size={15} /> Add customer</button> : null}</div></header>
       <div className="customer-filter-swipe swipe-zone" {...filterSwipe}>
         <div className="compact-metrics swipe-tabs" role="tablist" aria-label="Customer status">{filters.map(key => <button type="button" role="tab" aria-selected={filter === key} key={key} className={filter === key ? 'active' : ''} onClick={() => setFilter(key)}><span>{filterLabels[key]}</span><strong>{counts[key]}</strong></button>)}</div>
-        <label className="workspace-search"><span aria-hidden="true">/</span><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search customer, vehicle, VIN, tag" /></label>
+        {filter !== 'transactions' ? <label className="workspace-search"><span aria-hidden="true">/</span><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search customer, vehicle, VIN, tag" /></label> : null}
       </div>
       {error && !draft ? <div className="inline-alert error">{error}</div> : null}
-      <div className="record-list">{loading ? <div className="empty-state">Loading connected customer files...</div> : null}{!loading && !visible.length ? <div className="empty-state">No customers match this view.</div> : null}
-        {visible.map(customer => { const paymentCount = paymentCountFor(customer); const attention = paymentAttentionFor(customer); const claimCount = openClaimsFor(customer).length; const dueAmount = dueAmountFor(customer); return <button type="button" key={customer.id} className={`${customer.id === selectedId ? 'record-row active' : 'record-row'}${viewed.unreadIds.has(customer.id) ? ' unread-record' : ''}`} onClick={() => openCustomer(customer)} aria-label={`Open ${customer.name || 'customer'} file`}>{viewed.unreadIds.has(customer.id) ? <span className="record-unread-dot" aria-label="Unviewed" /> : <span className={`status-line ${filter === 'dues' ? 'warn' : statusTone(customer.status || customer.stage)}`} />}<span className="record-main"><strong>{customer.name || 'Unnamed customer'}</strong><span>{customer.vehicle || customer.email || customer.phone || 'Customer file'}</span></span><span className="record-side"><b>{filter === 'dues' ? [claimCount ? `${claimCount} toll / violation` : '', attention ? `${attention} payment issue` : ''].filter(Boolean).join(' | ') : hasAssignedVehicle(customer) ? 'Active rental' : 'History'}</b><time>{filter === 'dues' ? `${money(dueAmount)} due` : customer.nextRun ? `Due ${shortDate(customer.nextRun)}` : paymentCount ? `${paymentCount} payment record${paymentCount === 1 ? '' : 's'}` : ''}</time></span></button>; })}
-      </div>
+      {filter === 'transactions' ? <Suspense fallback={<div className="workspace-loading"><span /><strong>Opening transactions</strong></div>}><CustomerTransactionsPanel payments={payments} customers={customerRows} loading={loading} onOpenCustomer={customer => { openCustomer(customer); setDetailTab('payments'); }} onOpenRental={onOpenRental} /></Suspense> : <div className="record-list">{loading ? <div className="empty-state">Loading connected customer files...</div> : null}{!loading && !visible.length ? <div className="empty-state">No customers match this view.</div> : null}{visible.map(customer => { const paymentCount = paymentCountFor(customer); const attention = paymentAttentionFor(customer); const claimCount = openClaimsFor(customer).length; const dueAmount = dueAmountFor(customer); return <button type="button" key={customer.id} className={`${customer.id === selectedId ? 'record-row active' : 'record-row'}${viewed.unreadIds.has(customer.id) ? ' unread-record' : ''}`} onClick={() => openCustomer(customer)} aria-label={`Open ${customer.name || 'customer'} file`}>{viewed.unreadIds.has(customer.id) ? <span className="record-unread-dot" aria-label="Unviewed" /> : <span className={`status-line ${filter === 'dues' ? 'warn' : statusTone(customer.status || customer.stage)}`} />}<span className="record-main"><strong>{customer.name || 'Unnamed customer'}</strong><span>{customer.vehicle || customer.email || customer.phone || 'Customer file'}</span></span><span className="record-side"><b>{filter === 'dues' ? [claimCount ? `${claimCount} toll / violation` : '', attention ? `${attention} payment issue` : ''].filter(Boolean).join(' | ') : hasAssignedVehicle(customer) ? 'Active rental' : 'History'}</b><time>{filter === 'dues' ? `${money(dueAmount)} due` : customer.nextRun ? `Due ${shortDate(customer.nextRun)}` : paymentCount ? `${paymentCount} payment record${paymentCount === 1 ? '' : 's'}` : ''}</time></span></button>; })}</div>}
     </section>
 
     <section className="operations-detail">{!draft ? <div className="detail-empty"><strong>Select a customer</strong><span>Customer, vehicle, card, autopay, and transaction history stay in one file.</span></div> : <div className="customer-connected-detail">

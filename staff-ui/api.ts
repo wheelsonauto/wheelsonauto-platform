@@ -161,7 +161,7 @@ export function loadCustomers(signal?: AbortSignal, force = false): Promise<Page
 }
 
 export function loadPayments(signal?: AbortSignal, force = false): Promise<PagedFeed<PaymentRecord>> {
-  return loadPaged<PaymentRecord>('/api/payments?limit=200', signal, force);
+  return loadPaged<PaymentRecord>('/api/payments?limit=5000', signal, force);
 }
 
 export function loadClaims(signal?: AbortSignal, force = false): Promise<PagedFeed<ClaimRecord>> {
