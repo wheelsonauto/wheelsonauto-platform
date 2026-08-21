@@ -16,7 +16,7 @@ const dashboardData = {
     { id: 'failed-twice', customer: 'Call Now', amount: 250, nextRun: '2026-01-01', status: 'Failed - contact', failedAttempts: 2, paymentProvider: 'stripe' },
     { id: 'already-paid', customer: 'Already Paid', amount: 200, nextRun: today, status: 'Active', lastAutoChargeDate: today, paymentProvider: 'stripe' }
   ],
-  payments: [{ id: 'paid-today', customer: 'Already Paid', amount: 200, status: 'Paid', createdAt: new Date().toISOString() }],
+  payments: [{ id: 'paid-today', customer: 'Already Paid', amount: 200, status: 'Paid', date: today }],
   maintenance: [
     { id: 'scheduled', customer: 'Scheduled Customer', status: 'Appointment scheduled', due: today },
     { id: 'complete', customer: 'Complete Customer', status: 'Completed', due: today },
