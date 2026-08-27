@@ -424,7 +424,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260827-stripe-ledger-reconcile-376';
+const ASSET_VERSION = 'platform-20260827-autopay-complete-state-377';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -19969,7 +19969,8 @@ function wheelsonAutoAutopayEligibility(row, dateKey = localDateKey(), now = new
   const rapid = rapidAutopayIntervalMs(row) > 0;
   const nowAt = now instanceof Date ? now : new Date(now);
   const migrationDateKey = rapid && occurrence ? localDateKey(new Date(occurrence)) : dateKey;
-  const blocked = (reason, nextAttemptAt = '') => ({ eligible: false, reason, occurrence, nextAttemptAt, provider });
+  const blocked = (reason, nextAttemptAt = '') => ({ eligible: false, completed: false, reason, occurrence, nextAttemptAt, provider });
+  if (status === 'rapid test passed') return { eligible: false, completed: true, reason: '', occurrence, nextAttemptAt: '', provider };
   if (attempts >= 2) return blocked('Two automatic attempts failed. Contact the customer before another charge.');
   if (status !== 'active' && !status.includes('1x failed') && !status.includes('confirmation pending')) return blocked('Autopay status is ' + (row && row.status || 'not active') + '.');
   if (!row || !row.autoChargeEnabled) return blocked('Automatic charging is turned off.');
@@ -19993,7 +19994,7 @@ function wheelsonAutoAutopayEligibility(row, dateKey = localDateKey(), now = new
       const last = new Date(String(row.lastAutoChargeAttemptAt || row.lastFailedAt || ''));
       return blocked('Waiting for the protected one-hour retry.', Number.isFinite(last.getTime()) ? new Date(last.getTime() + 60 * 60 * 1000).toISOString() : '');
     }
-    return { eligible: true, reason: 'Due now.', occurrence, nextAttemptAt: occurrence, provider };
+    return { eligible: true, completed: false, reason: 'Due now.', occurrence, nextAttemptAt: occurrence, provider };
   }
   const dueKey = recurringDateKey(row);
   if (!dueKey) return blocked('The next charge date is missing or invalid.');
@@ -20004,7 +20005,7 @@ function wheelsonAutoAutopayEligibility(row, dateKey = localDateKey(), now = new
     return blocked('Waiting for the protected one-hour retry.', Number.isFinite(last.getTime()) ? new Date(last.getTime() + 60 * 60 * 1000).toISOString() : '');
   }
   if (String(row.lastAutoChargeDate || '') === dateKey) return blocked('Today\'s automatic charge was already processed.');
-  return { eligible: true, reason: 'Due now.', occurrence: dueKey, nextAttemptAt: dueKey, provider };
+  return { eligible: true, completed: false, reason: 'Due now.', occurrence: dueKey, nextAttemptAt: dueKey, provider };
 }
 function isDueForWheelsonAutoAutopay(row, dateKey = localDateKey(), now = new Date()) {
   return wheelsonAutoAutopayEligibility(row, dateKey, now).eligible;
@@ -29138,7 +29139,13 @@ const server = http.createServer(async (req, res) => {
       const now = new Date();
       const records = viewResourceRows(data, 'recurringPayments', user).map(row => {
         const eligibility = wheelsonAutoAutopayEligibility(row, localDateKey(now), now);
-        return { ...row, autopayEligible: eligibility.eligible, autopayBlockedReason: eligibility.eligible ? '' : eligibility.reason, autopayNextAttemptAt: eligibility.nextAttemptAt || '' };
+        return {
+          ...row,
+          autopayEligible: eligibility.eligible,
+          autopayComplete: !!eligibility.completed,
+          autopayBlockedReason: eligibility.eligible || eligibility.completed ? '' : eligibility.reason,
+          autopayNextAttemptAt: eligibility.nextAttemptAt || ''
+        };
       });
       const page = paginatedResource(records, url, {
         searchFields: ['id', 'customer', 'phone', 'email', 'vehicle', 'vin', 'licensePlate', 'plate', 'tracker', 'status', 'provider', 'paymentProvider', 'paymentSetup', 'nextRun'],
@@ -31674,6 +31681,10 @@ const server = http.createServer(async (req, res) => {
         ? payload.autoChargeEnabled === true || String(payload.autoChargeEnabled).toLowerCase() === 'true'
         : (Object.prototype.hasOwnProperty.call(recurring, 'autoChargeEnabled') ? !!recurring.autoChargeEnabled : hasWheelsonAutoSavedCard(recurring));
       if (/removed|history|ended|stopped/i.test(status)) enableWheelsonAutoCharge = false;
+      const completedRapidReactivated = /^rapid test passed$/i.test(String(recurring.status || ''))
+        && billingAnchorChanged
+        && enableWheelsonAutoCharge;
+      if (completedRapidReactivated) status = 'Active';
       const patch = {
         nextRun,
         adminNextRun: nextRun,
@@ -31731,7 +31742,9 @@ const server = http.createServer(async (req, res) => {
         lastAutoChargeError: '',
         lastAutoChargeResult: 'Schedule updated - waiting for due time',
         scheduleStateResetAt: updatedAt,
-        scheduleStateResetReason: 'Billing date or frequency changed by admin'
+        scheduleStateResetReason: completedRapidReactivated
+          ? 'Completed rapid test converted to an active recurring schedule by admin'
+          : 'Billing date or frequency changed by admin'
       });
       if (retryReset) Object.assign(patch, {
         retryResetAt: updatedAt,

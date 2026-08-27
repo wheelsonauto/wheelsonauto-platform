@@ -466,6 +466,26 @@ async function main() {
     assert(rapidRestartRow.autoChargeEnabled === false && rapidRestartRow.status === 'Rapid test passed', 'Completed-pickup recovery must not reactivate a one-shot rapid test after its provider result.');
     assert(saved.payments.filter(payment => payment.stripePaymentIntentId === rapidPaid.stripePaymentIntentId).length === 1, 'Paid Stripe reconciliation must leave exactly one authoritative transaction for a PaymentIntent.');
     assert(saved.payments.find(payment => payment.stripePaymentIntentId === rapidPaid.stripePaymentIntentId).status === 'Paid', 'The authoritative Stripe PaymentIntent must remain paid after contradiction cleanup.');
+    const recurringView = await request(server, 'GET', '/api/recurring-payments', { cookie });
+    const rapidViewRow = recurringView.json.records.find(row => row.id === 'rec-rapid-minute-1');
+    assert(recurringView.status === 200 && rapidViewRow.autopayComplete === true && rapidViewRow.autopayBlockedReason === '' && rapidViewRow.autopayNextAttemptAt === '', 'A passed one-shot rapid test must be exposed as completed, never as blocked or awaiting another attempt.');
+    const regularNextRun = localDateKey(14);
+    const regularActivation = await request(server, 'POST', '/api/recurring-payments/update', {
+      cookie,
+      json: {
+        recurringPaymentId: 'rec-rapid-minute-1',
+        amount: 1,
+        frequency: 'Weekly',
+        nextRun: regularNextRun,
+        chargeTime: '18:00',
+        status: 'Rapid test passed',
+        autoChargeEnabled: true
+      }
+    });
+    assert(regularActivation.status === 200 && regularActivation.json.status === 'Active' && regularActivation.json.autoChargeEnabled === true, 'Converting a completed rapid test to an enabled weekly schedule must reactivate it instead of preserving a terminal test status.');
+    const regularView = await request(server, 'GET', '/api/recurring-payments', { cookie });
+    const regularViewRow = regularView.json.records.find(row => row.id === 'rec-rapid-minute-1');
+    assert(regularViewRow.status === 'Active' && regularViewRow.frequency === 'Weekly' && regularViewRow.nextRun === regularNextRun && regularViewRow.autopayComplete === false && /^Waiting for/.test(regularViewRow.autopayBlockedReason), 'The converted weekly schedule must enter the shared normal scheduler and wait for its exact future due date.');
 
     console.log('Autopay restart check passed: all schedule cadences, Stripe success authority, contradiction cleanup, attempt keys, one-hour delay, one-shot rapid provider testing, retry success, and restart recovery are protected.');
   } finally {

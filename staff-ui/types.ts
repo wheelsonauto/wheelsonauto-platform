@@ -255,6 +255,7 @@ export type RecurringPaymentRecord = {
   autoChargeEnabled?: boolean;
   autopayManagedBy?: string;
   autopayEligible?: boolean;
+  autopayComplete?: boolean;
   autopayBlockedReason?: string;
   autopayNextAttemptAt?: string;
   cardSetupUrl?: string;
