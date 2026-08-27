@@ -424,7 +424,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260827-autopay-state-reset-373';
+const ASSET_VERSION = 'platform-20260827-autopay-frequency-repair-374';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -12149,27 +12149,32 @@ function repairCompletedPickupAutopayStates(data = {}) {
     const depositRequired = Number(application.pricingSnapshot && application.pricingSnapshot.downPayment || 0) > 0;
     if ((depositRequired && !nativePaymentPaid(deposit)) || !nativePaymentPaid(firstWeek)) return;
     const anchor = validCalendarDateKey(appointment.actualPickupDate || appointment.date || recurring.autopayAnchorDate);
-    const firstRecurringDate = addDaysToDateKey(anchor, 7);
-    if (!anchor || !firstRecurringDate) return;
-    const currentNextRun = recurringDateKey(recurring);
-    const nextRun = !currentNextRun || currentNextRun <= anchor ? firstRecurringDate : currentNextRun;
-    const weekday = onboarding.pickupWeekday(anchor);
+    if (!anchor) return;
+    const rapidInterval = rapidAutopayIntervalMs(recurring);
+    const firstRecurringDate = rapidInterval ? '' : nextRecurringOccurrence(recurring, anchor);
+    const currentNextRun = rapidInterval ? validRecurringInstant(recurring.nextRun) : recurringDateKey(recurring);
+    const nextRun = rapidInterval
+      ? (currentNextRun || normalizedRapidAutopayNextRun(recurring.frequency, recurring.nextRun))
+      : (!currentNextRun || currentNextRun <= anchor ? firstRecurringDate : currentNextRun);
+    if (!nextRun) return;
+    const weeklySchedule = /week/i.test(String(recurring.frequency || 'Weekly'));
+    const weekday = weeklySchedule ? calendarDayName(nextRun) : '';
     const patch = {
       applicationId: application.id,
       onboardingSessionId: session.id,
       pickupAppointmentId: appointment.id,
       autopayAnchorDate: anchor,
       firstWeekCoverageStarts: anchor,
-      paymentDay: weekday,
-      chargeDay: weekday,
-      autopayWeekday: weekday,
       nextRun,
       adminNextRun: nextRun,
-      chargeTime: recurring.chargeTime || '18:00',
+      paymentDay: rapidInterval ? '' : (weeklySchedule ? weekday : recurring.paymentDay || ''),
+      chargeDay: rapidInterval ? '' : (weeklySchedule ? weekday : recurring.chargeDay || recurring.paymentDay || ''),
+      autopayWeekday: rapidInterval ? '' : (weeklySchedule ? weekday : recurring.autopayWeekday || ''),
+      chargeTime: rapidInterval ? '' : (recurring.chargeTime || '18:00'),
       autopayManagedBy: 'WheelsonAuto',
       pickupCompletedAt: appointment.completedAt || recurring.pickupCompletedAt || ''
     };
-    if (!issueState) Object.assign(patch, { status: 'Active', tone: 'good', autoChargeEnabled: true });
+    if (!issueState && !rapidInterval) Object.assign(patch, { status: 'Active', tone: 'good', autoChargeEnabled: true });
     const changed = Object.entries(patch).some(([key, value]) => String(recurring[key] == null ? '' : recurring[key]) !== String(value == null ? '' : value));
     if (!changed) return;
     patch.updatedAt = new Date().toISOString();
@@ -21446,6 +21451,8 @@ async function runWheelsonAutoAutopay(options = {}) {
       failed: result.failed,
       providerBlocked: result.providerBlocked,
       duplicateBlocked: result.duplicateBlocked,
+      pickupSchedulesRecovered: result.pickupSchedulesRecovered,
+      rapidSchedulesRepaired: result.rapidSchedulesRepaired,
       blockedReasons: result.blockedReasons
     }));
     return { ok: result.errors.length === 0, skipped: false, ...result, status: woaAutopayStatus };

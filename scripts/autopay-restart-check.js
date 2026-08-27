@@ -98,6 +98,16 @@ function loadServer() {
   return require('../server.js').server;
 }
 
+function addUtcMonths(dateKey, months) {
+  const source = new Date(dateKey + 'T12:00:00Z');
+  const preferredDay = source.getUTCDate();
+  const month = source.getUTCMonth() + months;
+  const year = source.getUTCFullYear() + Math.floor(month / 12);
+  const normalizedMonth = ((month % 12) + 12) % 12;
+  const lastDay = new Date(Date.UTC(year, normalizedMonth + 1, 0, 12)).getUTCDate();
+  return new Date(Date.UTC(year, normalizedMonth, Math.min(preferredDay, lastDay), 12)).toISOString().slice(0, 10);
+}
+
 async function ownerCookie(server) {
   const login = await request(server, 'POST', '/login', { form: { username: 'owner', password: 'AutopayRestartOwner123!' } });
   const cookie = String(login.cookie).split(';')[0];
@@ -241,6 +251,14 @@ async function main() {
 
   try {
     let server = loadServer();
+    const scheduler = require('../server.js');
+    assert(scheduler.nextRecurringOccurrence({ frequency: 'Daily' }, today) === localDateKey(1), 'Daily autopay must advance one calendar day.');
+    assert(scheduler.nextRecurringOccurrence({ frequency: 'Weekly' }, today) === localDateKey(7), 'Weekly autopay must advance seven calendar days.');
+    assert(scheduler.nextRecurringOccurrence({ frequency: 'Bi-weekly' }, today) === localDateKey(14), 'Bi-weekly autopay must advance fourteen calendar days.');
+    assert(scheduler.nextRecurringOccurrence({ frequency: 'Monthly' }, today) === addUtcMonths(today, 1), 'Monthly autopay must advance one calendar month without drifting at month end.');
+    const rapidHourDue = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+    const rapidHourNext = scheduler.nextFutureRecurringRun({ frequency: 'Every hour', nextRun: rapidHourDue }, new Date(), rapidHourDue);
+    assert(Date.parse(rapidHourNext) === Date.parse(rapidHourDue) + 60 * 60 * 1000, 'Hourly autopay must advance by exactly one hour after a due occurrence.');
     let cookie = await ownerCookie(server);
 
     const firstRun = await request(server, 'POST', '/api/woa-autopay/run', { cookie, json: {} });
@@ -318,6 +336,9 @@ async function main() {
     const rapidDueAt = new Date(Date.now() - 2 * 60 * 1000).toISOString();
     saved.recurringPayments.push({
       id: 'rec-rapid-minute-1',
+      applicationId: 'app-rapid-minute-1',
+      onboardingSessionId: 'onboard-rapid-minute-1',
+      pickupAppointmentId: 'pickup-rapid-minute-1',
       customer: 'Rapid Minute Customer',
       amount: 1,
       customerPortalCreditBalance: 50,
@@ -337,6 +358,43 @@ async function main() {
       paymentSetup: 'Card saved through WheelsonAuto',
       organizationId: 'org-wheelsonauto'
     });
+    saved.applications.push({
+      id: 'app-rapid-minute-1',
+      recurringPaymentId: 'rec-rapid-minute-1',
+      name: 'Rapid Minute Customer',
+      pricingSnapshot: { downPayment: 0 },
+      organizationId: 'org-wheelsonauto'
+    });
+    saved.onboardingSessions.push({
+      id: 'onboard-rapid-minute-1',
+      applicationId: 'app-rapid-minute-1',
+      recurringPaymentId: 'rec-rapid-minute-1',
+      paymentProvider: 'stripe',
+      organizationId: 'org-wheelsonauto'
+    });
+    saved.pickupAppointments.push({
+      id: 'pickup-rapid-minute-1',
+      applicationId: 'app-rapid-minute-1',
+      onboardingSessionId: 'onboard-rapid-minute-1',
+      recurringPaymentId: 'rec-rapid-minute-1',
+      date: localDateKey(-7),
+      actualPickupDate: localDateKey(-7),
+      status: 'Picked up',
+      completedAt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
+      organizationId: 'org-wheelsonauto'
+    });
+    saved.paymentRequests.push({
+      id: 'payment-request-rapid-minute-1',
+      applicationId: 'app-rapid-minute-1',
+      onboardingSessionId: 'onboard-rapid-minute-1',
+      recurringPaymentId: 'rec-rapid-minute-1',
+      paymentType: 'First weekly payment',
+      paymentProvider: 'stripe',
+      amount: 1,
+      status: 'Paid',
+      paidAt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
+      organizationId: 'org-wheelsonauto'
+    });
     await fs.writeFile(path.join(dataDir, 'data.json'), JSON.stringify(saved, null, 2));
 
     server = loadServer();
@@ -347,6 +405,8 @@ async function main() {
     saved = await readSaved(dataDir);
     const rapidRow = saved.recurringPayments.find(row => row.id === 'rec-rapid-minute-1');
     assert(rapidRow.status === 'Rapid test passed' && rapidRow.frequency === 'Every minute' && rapidRow.autoChargeEnabled === false, 'A successful rapid charge must preserve its test frequency and turn rapid autocharge off after one provider result.');
+    assert(rapidRun.json.pickupSchedulesRecovered === 1, 'The regression fixture must exercise completed-pickup autopay recovery before the rapid charge.');
+    assert(rapidRun.json.rapidSchedulesRepaired === 0, 'Completed-pickup recovery must preserve the exact rapid instant instead of rewriting it into a date-only weekly anchor.');
     assert(Date.parse(rapidRow.nextRun) > Date.parse(rapidDueAt) && rapidRow.lastAutoChargeOccurrenceKey === rapidDueAt, 'A successful rapid charge must advance beyond the processed minute and preserve the exact occurrence.');
     assert(rapidRow.customerPortalCreditBalance === 50, 'A rapid Stripe verification must not consume customer account credit instead of testing the saved card.');
     assert(rapidRow.lastAutoChargeResult === 'Paid - rapid Stripe test complete', 'A rapid success must leave an explicit provider-test result on the recurring plan.');
@@ -355,6 +415,9 @@ async function main() {
     cookie = await ownerCookie(server);
     const rapidRestartRun = await request(server, 'POST', '/api/woa-autopay/run', { cookie, json: {} });
     assert(rapidRestartRun.status === 200 && rapidRestartRun.json.charged === 0 && chargeRequests.length === 3, 'Restarting after a rapid success must not charge the same minute twice.');
+    saved = await readSaved(dataDir);
+    const rapidRestartRow = saved.recurringPayments.find(row => row.id === 'rec-rapid-minute-1');
+    assert(rapidRestartRow.autoChargeEnabled === false && rapidRestartRow.status === 'Rapid test passed', 'Completed-pickup recovery must not reactivate a one-shot rapid test after its provider result.');
 
     console.log('Autopay restart check passed: Stripe attempt keys, one-hour delay, safe schedule edits, one-shot rapid provider testing, retry success, and restart recovery are protected.');
   } finally {
