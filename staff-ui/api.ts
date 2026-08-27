@@ -218,7 +218,15 @@ export async function createAutopay(input: CreateAutopayInput): Promise<{ ok: bo
   return result;
 }
 
-export async function chargeSavedCard(input: { recurringPaymentId: string; amount: number; nextRun?: string; note?: string }): Promise<{ ok: boolean; payment: PaymentRecord; charge?: Record<string, unknown> }> {
+export async function chargeSavedCard(input: {
+  recurringPaymentId: string;
+  amount: number;
+  chargePurpose: 'one_time' | 'dues';
+  reason?: string;
+  note?: string;
+  operationId: string;
+  allowAdditionalManualCharge: true;
+}): Promise<{ ok: boolean; payment: PaymentRecord; charge?: Record<string, unknown> }> {
   const response = await fetch('/api/integrations/payments/manual-charge', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
