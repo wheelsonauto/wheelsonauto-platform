@@ -28,6 +28,9 @@ export type MessageRecord = {
   source?: string;
   vehicleId?: string;
   recurringPaymentId?: string;
+  staffReadAt?: string;
+  staffReadBy?: string;
+  staffUnread?: boolean;
   aiPlan?: { approvalRequired?: boolean; needsHuman?: boolean };
   starReview?: boolean;
   starReviewReason?: string;
@@ -251,6 +254,9 @@ export type RecurringPaymentRecord = {
   cardLast4?: string;
   autoChargeEnabled?: boolean;
   autopayManagedBy?: string;
+  autopayEligible?: boolean;
+  autopayBlockedReason?: string;
+  autopayNextAttemptAt?: string;
   cardSetupUrl?: string;
   notes?: string;
   createdAt?: string;
@@ -268,6 +274,8 @@ export type DashboardPaymentItem = {
   status: string;
   retryCount: number;
   paymentProvider?: string;
+  daysLate?: number;
+  customerNotified?: boolean;
 };
 
 export type DashboardServiceItem = {
@@ -278,15 +286,69 @@ export type DashboardServiceItem = {
   issue: string;
   due?: string;
   status: string;
+  daysLate?: number;
+};
+
+export type DashboardDueItem = {
+  id: string;
+  customer: string;
+  vehicle?: string;
+  vehicleId?: string;
+  amount: number;
+  due: string;
+  daysLate: number;
+  status: string;
+  kind: string;
+};
+
+export type DashboardAppointmentItem = {
+  id: string;
+  customer: string;
+  vehicle: string;
+  vehicleId?: string;
+  date: string;
+  time?: string;
+  status: string;
+  address?: string;
+  method?: string;
+};
+
+export type DashboardTransactionItem = {
+  id: string;
+  customer: string;
+  vehicle?: string;
+  vehicleId?: string;
+  amount: number;
+  status: string;
+  method?: string;
+  date?: string;
+  reason?: string;
+};
+
+export type DashboardCompletedItem = {
+  id: string;
+  title: string;
+  detail?: string;
+  status: string;
+  vehicleId?: string;
 };
 
 export type DashboardPriorityFeed = {
   ok: boolean;
   today: string;
-  summary: { collectedAmount: number; collectedCount: number; dueCount: number; failedTwiceCount: number; serviceNeededCount: number };
+  summary: { collectedAmount: number; collectedCount: number; dueCount: number; priorDueCount: number; failedOnceCount: number; failedTwiceCount: number; serviceNeededCount: number; overdueDuesCount: number; inspectionDueCount: number; lateInspectionCount: number; pickupsTodayCount: number; returnsTodayCount: number };
   todayDue: DashboardPaymentItem[];
+  priorDue: DashboardPaymentItem[];
+  failedOnce: DashboardPaymentItem[];
   failedTwice: DashboardPaymentItem[];
+  towCandidates: DashboardPaymentItem[];
+  overdueDues: DashboardDueItem[];
   serviceNeeded: DashboardServiceItem[];
+  inspections: DashboardServiceItem[];
+  pickups: DashboardAppointmentItem[];
+  returns: DashboardAppointmentItem[];
+  transactionsToday: DashboardTransactionItem[];
+  completedToday: DashboardCompletedItem[];
 };
 
 export type RentalRecord = {

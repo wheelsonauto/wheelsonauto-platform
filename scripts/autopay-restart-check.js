@@ -307,7 +307,44 @@ async function main() {
     const completedRestartRun = await request(server, 'POST', '/api/woa-autopay/run', { cookie, json: {} });
     assert(completedRestartRun.status === 200 && completedRestartRun.json.charged === 0 && chargeRequests.length === 2, 'A restart after success must not charge the completed billing date again.');
 
-    console.log('Autopay restart check passed: Clover attempt keys, one-hour delay, safe schedule edits, retry success, and completed-period restart recovery are protected.');
+    saved = await readSaved(dataDir);
+    const rapidDueAt = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+    saved.recurringPayments.push({
+      id: 'rec-rapid-minute-1',
+      customer: 'Rapid Minute Customer',
+      amount: 1,
+      frequency: 'Every minute',
+      nextRun: rapidDueAt,
+      chargeTime: '',
+      status: 'Active',
+      tone: 'good',
+      autoChargeEnabled: true,
+      autopayManagedBy: 'WheelsonAuto',
+      paymentProvider: 'clover',
+      provider: 'Clover',
+      cloverCustomerId: 'clover_rapid_customer_1',
+      cardSavedAt: new Date().toISOString(),
+      paymentSetup: 'Card saved through WheelsonAuto',
+      organizationId: 'org-wheelsonauto'
+    });
+    await fs.writeFile(path.join(dataDir, 'data.json'), JSON.stringify(saved, null, 2));
+
+    server = loadServer();
+    cookie = await ownerCookie(server);
+    const rapidRun = await request(server, 'POST', '/api/woa-autopay/run', { cookie, json: {} });
+    assert(rapidRun.status === 200 && rapidRun.json.charged === 1, 'A due every-minute schedule must charge on the next autopay worker run.');
+    assert(chargeRequests.length === 3 && chargeRequests[2].idempotencyKey.includes('rec-rapid-minute-1'), 'The rapid charge must use its own protected recurring occurrence key.');
+    saved = await readSaved(dataDir);
+    const rapidRow = saved.recurringPayments.find(row => row.id === 'rec-rapid-minute-1');
+    assert(rapidRow.status === 'Active' && rapidRow.frequency === 'Every minute', 'A successful rapid charge must preserve the every-minute frequency.');
+    assert(Date.parse(rapidRow.nextRun) > Date.now() && rapidRow.lastAutoChargeOccurrenceKey === rapidDueAt, 'A successful rapid charge must advance to the next future minute and preserve the processed occurrence.');
+
+    server = loadServer();
+    cookie = await ownerCookie(server);
+    const rapidRestartRun = await request(server, 'POST', '/api/woa-autopay/run', { cookie, json: {} });
+    assert(rapidRestartRun.status === 200 && rapidRestartRun.json.charged === 0 && chargeRequests.length === 3, 'Restarting after a rapid success must not charge the same minute twice.');
+
+    console.log('Autopay restart check passed: Clover attempt keys, one-hour delay, safe schedule edits, rapid interval charging, retry success, and restart recovery are protected.');
   } finally {
     global.fetch = originalFetch;
     await fs.rm(dataDir, { recursive: true, force: true });

@@ -9,11 +9,17 @@ const today = new Intl.DateTimeFormat('en-CA', {
   month: '2-digit',
   day: '2-digit'
 }).format(new Date());
+const shiftDay = days => {
+  const date = new Date(today + 'T12:00:00Z');
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+};
 
 const dashboardData = {
   recurringPayments: [
     { id: 'due-today', customer: 'Due Today', amount: 225, nextRun: today, status: 'Active', paymentProvider: 'stripe' },
     { id: 'failed-twice', customer: 'Call Now', amount: 250, nextRun: '2026-01-01', status: 'Failed - contact', failedAttempts: 2, paymentProvider: 'stripe' },
+    { id: 'failed-once', customer: 'Retry Customer', amount: 210, nextRun: today, status: '1x failed - retrying', failedAttempts: 1, paymentProvider: 'stripe' },
     { id: 'already-paid', customer: 'Already Paid', amount: 200, nextRun: today, status: 'Active', lastAutoChargeDate: today, paymentProvider: 'stripe' }
   ],
   payments: [{ id: 'paid-today', customer: 'Already Paid', amount: 200, status: 'Paid', date: today }],
@@ -21,7 +27,15 @@ const dashboardData = {
     { id: 'scheduled', customer: 'Scheduled Customer', status: 'Appointment scheduled', due: today },
     { id: 'complete', customer: 'Complete Customer', status: 'Completed', due: today },
     { id: 'needed', customer: 'Service Customer', status: 'Service needed', due: today },
-    { id: 'urgent', customer: 'Urgent Customer', status: 'Urgent - staff contact now', due: today }
+    { id: 'urgent', customer: 'Urgent Customer', status: 'Urgent - staff contact now', due: today },
+    { id: 'late-inspection', customer: 'Inspection Customer', vehicle: '2018 Test Car', type: 'Monthly inspection', status: 'Due', due: shiftDay(-15) },
+    { id: 'completed-service', vehicle: '2019 Test Car', issue: 'Oil change', status: 'Completed', completedAt: today }
+  ],
+  claims: [{ id: 'late-toll', customer: 'Toll Customer', type: 'E-ZPass toll', amount: 18.25, status: 'Open', due: shiftDay(-3) }],
+  pickupAppointments: [{ id: 'pickup-today', customer: 'Pickup Customer', vehicle: '2020 Test Car', requestedPickupDate: today, requestedPickupTime: '1:00 PM', status: 'Confirmed' }],
+  tasks: [
+    { id: 'return-today', customer: 'Return Customer', vehicle: '2021 Test Car', type: 'Vehicle return', due: today, returnMethod: 'Customer drop-off', status: 'Scheduled' },
+    { id: 'done-task', title: 'Called customer', status: 'Done', doneAt: today }
   ],
   integrations: { clover: { recurringPlanMembers: [] } }
 };
@@ -29,7 +43,13 @@ const dashboardData = {
 const feed = server.dashboardPriorityFeed(dashboardData, today);
 assert.deepStrictEqual(feed.todayDue.map(row => row.id), ['due-today']);
 assert.deepStrictEqual(feed.failedTwice.map(row => row.id), ['failed-twice']);
+assert.deepStrictEqual(feed.failedOnce.map(row => row.id), ['failed-once']);
 assert.deepStrictEqual(feed.serviceNeeded.map(row => row.id).sort(), ['needed', 'urgent']);
+assert.deepStrictEqual(feed.overdueDues.map(row => row.id), ['late-toll']);
+assert.deepStrictEqual(feed.inspections.map(row => row.id), ['late-inspection']);
+assert.deepStrictEqual(feed.pickups.map(row => row.id), ['pickup-today']);
+assert.deepStrictEqual(feed.returns.map(row => row.id), ['return-today']);
+assert(feed.completedToday.some(row => row.id === 'done-task') && feed.completedToday.some(row => row.id === 'completed-service'));
 assert.strictEqual(feed.summary.collectedAmount, 200);
 
 const serviceData = { maintenance: [] };

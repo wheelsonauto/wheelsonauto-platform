@@ -211,7 +211,9 @@ function platformMessageRevision(rows = []) {
     row && (row.createdAt || row.date),
     row && row.status,
     row && row.body,
-    row && row.notificationEmailStatus
+    row && row.notificationEmailStatus,
+    row && row.staffReadAt,
+    row && row.staffUnread
   ].map(value => String(value || '')).join('\u001f')).join('\u001e')).digest('hex').slice(0, 20);
 }
 
@@ -422,7 +424,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260827-billing-control-361';
+const ASSET_VERSION = 'platform-20260827-autopay-closeout-362';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -464,6 +466,8 @@ const woaAutopayStatus = {
   fatalError: '',
   lastResult: null
 };
+let rapidAutopayWakeupTimer = null;
+let rapidAutopayWakeupAt = '';
 const twilioInboundPollStatus = {
   inFlight: false,
   lastCheckedAt: '',
@@ -4143,6 +4147,26 @@ async function completeProviderEmailDelivery(repository, provider, idempotencyKe
     throw error;
   }
 }
+function emailEscapeHtml(value) {
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+function brandedEmailHtml(subject, body) {
+  const message = emailEscapeHtml(body).replace(/\r?\n/g, '<br>');
+  const title = emailEscapeHtml(subject || 'WheelsonAuto update');
+  return '<!doctype html><html><body style="margin:0;background:#0b0c0f;color:#f3f3ef;font-family:Arial,Helvetica,sans-serif">'
+    + '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#0b0c0f;padding:24px 12px"><tr><td align="center">'
+    + '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:620px;border:1px solid #2c2d2f;background:#121317">'
+    + '<tr><td style="padding:22px 24px 18px;border-bottom:1px solid #2c2d2f"><img src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" width="180" alt="WheelsonAuto" style="display:block;max-width:180px;height:auto"></td></tr>'
+    + '<tr><td style="padding:26px 24px"><h1 style="margin:0 0 16px;color:#f4f1e7;font-size:21px;line-height:1.25;font-weight:700">' + title + '</h1>'
+    + '<div style="color:#d2d3d5;font-size:15px;line-height:1.65">' + message + '</div></td></tr>'
+    + '<tr><td style="padding:16px 24px;border-top:1px solid #2c2d2f;color:#8f9298;font-size:12px;line-height:1.5">WheelsonAuto<br>5150 NJ-42, Blackwood, NJ 08012</td></tr>'
+    + '</table></td></tr></table></body></html>';
+}
 async function sendProviderEmail(to, subject, body, meta = {}, options = {}) {
   const provider = String(WOA_EMAIL_PROVIDER || 'not_configured').toLowerCase();
   const repository = options.repository || STATE_REPOSITORY;
@@ -4155,7 +4179,7 @@ async function sendProviderEmail(to, subject, body, meta = {}, options = {}) {
   const recipient = String(to).trim();
   const ownerCopy = meta.ownerCopy === false || !WOA_EMAIL_OWNER_NOTIFY || WOA_EMAIL_OWNER_NOTIFY.toLowerCase() === recipient.toLowerCase() ? '' : WOA_EMAIL_OWNER_NOTIFY;
   if (provider === 'resend' && RESEND_API_KEY) {
-    const emailPayload = { from: WOA_EMAIL_FROM, to: [recipient], subject: safeSubject, text: body };
+    const emailPayload = { from: WOA_EMAIL_FROM, to: [recipient], subject: safeSubject, text: body, html: brandedEmailHtml(safeSubject, body) };
     if (WOA_EMAIL_REPLY_TO) emailPayload.reply_to = WOA_EMAIL_REPLY_TO;
     if (ownerCopy) emailPayload.bcc = [ownerCopy];
     const idempotencyKey = emailDeliveryIdempotencyKey(emailPayload, meta);
@@ -4195,7 +4219,7 @@ async function sendProviderEmail(to, subject, body, meta = {}, options = {}) {
     });
   }
   if (provider === 'sendgrid' && SENDGRID_API_KEY) {
-    const emailPayload = { from: WOA_EMAIL_FROM, to: [recipient], subject: safeSubject, text: body };
+    const emailPayload = { from: WOA_EMAIL_FROM, to: [recipient], subject: safeSubject, text: body, html: brandedEmailHtml(safeSubject, body) };
     if (WOA_EMAIL_REPLY_TO) emailPayload.reply_to = WOA_EMAIL_REPLY_TO;
     if (ownerCopy) emailPayload.bcc = [ownerCopy];
     const idempotencyKey = emailDeliveryIdempotencyKey(emailPayload, meta);
@@ -4227,7 +4251,7 @@ async function sendProviderEmail(to, subject, body, meta = {}, options = {}) {
           from: { email: WOA_EMAIL_FROM },
           reply_to: WOA_EMAIL_REPLY_TO ? { email: WOA_EMAIL_REPLY_TO } : undefined,
           subject: safeSubject,
-          content: [{ type: 'text/plain', value: body }]
+          content: [{ type: 'text/plain', value: body }, { type: 'text/html', value: emailPayload.html }]
         })
       });
       const text = await response.text().catch(() => '');
@@ -4241,6 +4265,40 @@ async function sendProviderEmail(to, subject, body, meta = {}, options = {}) {
     });
   }
   return { sent: false, status: 'Email draft', provider, channel: 'Email', message: 'Email provider is not connected yet. Email saved in WheelsonAuto.' };
+}
+async function sendPaymentOutcomeEmail(recurring = {}, payment = {}, providerError = '') {
+  const email = String(payment.email || recurring.email || '').trim();
+  if (!email) return { sent: false, status: 'Needs email' };
+  const status = String(payment.status || 'Payment update');
+  const paid = /paid|succeeded|complete/i.test(status) && !/failed|declined|not found/i.test(status);
+  const subject = paid ? 'WheelsonAuto payment receipt' : 'WheelsonAuto payment attempt update';
+  const body = [
+    'Hi ' + String(payment.customer || recurring.customer || 'there').split(/\s+/)[0] + ',',
+    '',
+    paid ? 'Your WheelsonAuto payment was completed.' : 'Your WheelsonAuto payment attempt did not complete.',
+    'Status: ' + status,
+    'Amount: ' + moneyText(payment.amount || recurring.amount || 0),
+    payment.reason || payment.paymentType ? 'For: ' + String(payment.reason || payment.paymentType) : '',
+    payment.vehicle || recurring.vehicle ? 'Vehicle: ' + String(payment.vehicle || recurring.vehicle) : '',
+    payment.date || payment.createdAt ? 'Date: ' + String(payment.date || payment.createdAt) : '',
+    payment.id ? 'Receipt/reference: ' + String(payment.id) : '',
+    providerError && !paid ? 'Provider message: ' + String(providerError).slice(0, 400) : '',
+    '',
+    paid ? 'Keep this email with your payment records.' : 'You can update your saved card or contact WheelsonAuto from your customer app if you need help.'
+  ].filter(value => value !== '').join('\n');
+  return sendProviderEmail(email, subject, body, {
+    organizationId: payment.organizationId || recurring.organizationId || MAIN_ORG_ID,
+    deliveryId: 'payment-outcome-' + String(payment.id || payment.providerPaymentId || payment.createdAt || Date.now()),
+    ownerCopy: false
+  });
+}
+function schedulePaymentOutcomeEmail(recurring = {}, payment = {}, providerError = '', route = '') {
+  setImmediate(() => {
+    void sendPaymentOutcomeEmail(recurring, payment, providerError).catch(emailError => reportBackgroundTaskFailure('payment-outcome-email', emailError, {
+      route,
+      paymentId: payment && payment.id || ''
+    }, 'Payment outcome email'));
+  });
 }
 async function queueEmailNotification(data, payload = {}) {
   data.messages = Array.isArray(data.messages) ? data.messages : [];
@@ -4832,6 +4890,38 @@ function uniqueOperationalRecurringRows(rows = []) {
     return true;
   });
 }
+function dashboardDayDistance(fromKey, toKey) {
+  const from = Date.parse(String(fromKey || '') + 'T12:00:00Z');
+  const to = Date.parse(String(toKey || '') + 'T12:00:00Z');
+  return Number.isFinite(from) && Number.isFinite(to) ? Math.round((to - from) / 86400000) : 0;
+}
+function dashboardRecordDate(row = {}, fields = []) {
+  for (const field of fields) {
+    const value = row[field];
+    const key = value ? recordDateKey(value) : '';
+    if (key) return key;
+  }
+  return '';
+}
+function dashboardCustomerWasNotified(data = {}, recurring = {}, dateKeyValue = localDateKey()) {
+  const accountId = String(recurring.customerAccountId || '').trim();
+  const customer = normKey(recurring.customer);
+  return (data.messages || []).some(message => {
+    if (dashboardRecordDate(message, ['createdAt', 'date']) !== dateKeyValue) return false;
+    if (!/outbound|star|ai/i.test(String([message.direction, message.channel, message.source].filter(Boolean).join(' ')))) return false;
+    if (!/payment|card|charge|past due|failed/i.test(String([message.subject, message.template, message.body].filter(Boolean).join(' ')))) return false;
+    return accountId && String(message.customerAccountId || '') === accountId || customer && normKey(message.customer) === customer;
+  });
+}
+function dashboardPaidForRecurringDue(data = {}, recurring = {}, dueKey = '') {
+  return (data.payments || []).some(payment => {
+    if (!closeoutPaymentPaid(payment) || !closeoutPaymentStronglyMatchesRecurring(data, payment, recurring)) return false;
+    const periodKey = String(payment.billingPeriodKey || payment.scheduledDueDate || payment.dueDate || '').slice(0, 10);
+    if (periodKey) return periodKey === dueKey;
+    const paidKey = dashboardRecordDate(payment, ['createdAt', 'date', 'paidAt']);
+    return !!paidKey && paidKey >= dueKey;
+  });
+}
 function dashboardPriorityFeed(data = {}, dateKeyValue = localDateKey()) {
   const recurringRows = uniqueOperationalRecurringRows(allRecurringRows(data)).filter(recurringEligibleForToday);
   const recurringItem = row => ({
@@ -4844,20 +4934,34 @@ function dashboardPriorityFeed(data = {}, dateKeyValue = localDateKey()) {
     chargeTime: row.chargeTime || row.paymentTime || '',
     status: closeoutRecurringState(row, dateKeyValue),
     retryCount: Math.max(Number(row.retryCount || 0), Number(row.failedAttempts || 0)),
-    paymentProvider: normalizedPaymentProvider(row.paymentProvider || row.provider || 'clover')
+    paymentProvider: normalizedPaymentProvider(row.paymentProvider || row.provider || 'clover'),
+    daysLate: Math.max(0, dashboardDayDistance(recurringDateKey(row), dateKeyValue)),
+    customerNotified: dashboardCustomerWasNotified(data, row, dateKeyValue)
   });
+  const failedOnce = recurringRows
+    .filter(row => closeoutRecurringState(row, dateKeyValue) === 'Failed once')
+    .map(recurringItem);
   const failedTwice = recurringRows
     .filter(row => closeoutRecurringState(row, dateKeyValue) === 'Failed twice')
     .map(recurringItem);
-  const failedIds = new Set(failedTwice.map(row => String(row.id || '')));
+  const failedIds = new Set(failedTwice.concat(failedOnce).map(row => String(row.id || '')));
   const todayDue = recurringRows
     .filter(row => recurringDateKey(row) === dateKeyValue)
     .filter(row => !['Paid', 'History / removed'].includes(closeoutRecurringState(row, dateKeyValue)))
     .filter(row => !failedIds.has(String(row.id || row.cloverSubscriptionId || '')))
     .map(recurringItem);
+  const priorDue = recurringRows
+    .filter(row => recurringDateKey(row) && recurringDateKey(row) < dateKeyValue)
+    .filter(row => !dashboardPaidForRecurringDue(data, row, recurringDateKey(row)))
+    .map(recurringItem)
+    .sort((left, right) => right.daysLate - left.daysLate || right.retryCount - left.retryCount);
+  const towCandidates = priorDue
+    .filter(row => row.retryCount >= 2 || row.status === 'Failed twice')
+    .map(row => ({ ...row, status: 'Tow review' }));
   const serviceNeeded = (data.maintenance || [])
     .filter(row => {
       const status = String(row && row.status || '').toLowerCase();
+      if (/inspection|monthly/i.test(String([row && row.type, row && row.issue, row && row.title].filter(Boolean).join(' ')))) return false;
       if (/complete|closed|fixed|done|cancel/.test(status)) return false;
       if (/scheduled|appointment|confirmed/.test(status) && !/urgent|unsafe|do not drive|staff contact/.test(status)) return false;
       return /need|due|request|urgent|unsafe|do not drive|staff contact|open/.test(status)
@@ -4873,23 +4977,95 @@ function dashboardPriorityFeed(data = {}, dateKeyValue = localDateKey()) {
       status: row.status || 'Needs service'
     }))
     .sort((left, right) => Number(/urgent|unsafe|do not drive/i.test(right.status)) - Number(/urgent|unsafe|do not drive/i.test(left.status)) || String(left.due || '').localeCompare(String(right.due || '')));
-  const paidToday = uniqueCloseoutPayments((data.payments || []).filter(payment => {
-    return payment.controlledStripePilotTest !== true
-      && recordDateKey(payment.createdAt || payment.date) === dateKeyValue
-      && closeoutPaymentPaid(payment);
-  }));
+  const inspections = (data.maintenance || []).filter(row => {
+    if (!/inspection|monthly/i.test(String([row.type, row.issue, row.title].filter(Boolean).join(' ')))) return false;
+    if (/complete|closed|fixed|done|cancel/i.test(String(row.status || ''))) return false;
+    const due = dashboardRecordDate(row, ['due', 'nextDue']);
+    return !!due && due <= dateKeyValue;
+  }).map(row => {
+    const due = dashboardRecordDate(row, ['due', 'nextDue']);
+    const daysLate = Math.max(0, dashboardDayDistance(due, dateKeyValue));
+    return {
+      id: row.id || '', customer: row.customer || '', vehicle: row.vehicle || 'Vehicle', vehicleId: row.vehicleId || '',
+      issue: row.issue || row.type || 'Monthly inspection', due, daysLate,
+      status: daysLate >= 14 ? 'Inspection overdue' : 'Inspection due'
+    };
+  }).sort((left, right) => right.daysLate - left.daysLate);
+  const overdueDues = (data.claims || []).filter(row => {
+    if (/paid|closed|resolved|cancel|removed/i.test(String(row.status || ''))) return false;
+    const amount = Number(row.remainingAmount != null ? row.remainingAmount : row.amount || 0);
+    const due = dashboardRecordDate(row, ['due', 'deadline', 'createdAt', 'date']);
+    return amount > 0 && !!due && due < dateKeyValue;
+  }).map(row => {
+    const due = dashboardRecordDate(row, ['due', 'deadline', 'createdAt', 'date']);
+    return {
+      id: row.id || '', customer: row.customer || 'Customer', vehicle: row.vehicle || '', vehicleId: row.vehicleId || '',
+      amount: Number(row.remainingAmount != null ? row.remainingAmount : row.amount || 0), due,
+      daysLate: Math.max(0, dashboardDayDistance(due, dateKeyValue)),
+      status: row.status || 'Past due', kind: row.type || row.issue || 'Toll, violation, or fee'
+    };
+  }).sort((left, right) => right.daysLate - left.daysLate);
+  const appointmentItem = row => {
+    const date = dashboardRecordDate(row, ['requestedPickupDate', 'pickupDate', 'date', 'due']);
+    return {
+      id: row.id || '', customer: row.customer || row.customerName || 'Customer', vehicle: row.vehicle || row.vehicleName || 'Vehicle',
+      vehicleId: row.vehicleId || '', date, time: row.requestedPickupTime || row.pickupTime || row.time || '',
+      status: row.status || 'Scheduled', address: row.address || row.pickupAddress || '5150 NJ-42, Blackwood, NJ 08012',
+      method: row.method || row.returnMethod || 'Customer pickup'
+    };
+  };
+  const pickups = (data.pickupAppointments || [])
+    .filter(row => !/cancel|picked up|complete|closed/i.test(String(row.status || '')))
+    .map(appointmentItem)
+    .filter(row => row.date && dashboardDayDistance(dateKeyValue, row.date) >= 0 && dashboardDayDistance(dateKeyValue, row.date) <= 7)
+    .sort((left, right) => String(left.date + left.time).localeCompare(String(right.date + right.time)));
+  const returns = (data.tasks || [])
+    .filter(row => /vehicle return|return vehicle|drop.?off|vehicle recovery/i.test(String([row.type, row.title].filter(Boolean).join(' '))))
+    .filter(row => !/complete|done|closed|cancel/i.test(String(row.status || '')))
+    .map(appointmentItem)
+    .filter(row => row.date && dashboardDayDistance(dateKeyValue, row.date) >= 0 && dashboardDayDistance(dateKeyValue, row.date) <= 7)
+    .sort((left, right) => String(left.date + left.time).localeCompare(String(right.date + right.time)));
+  const transactionsToday = uniqueCloseoutPayments((data.payments || []).filter(payment => payment.controlledStripePilotTest !== true && dashboardRecordDate(payment, ['createdAt', 'date', 'paidAt', 'failedAt']) === dateKeyValue))
+    .map(payment => ({
+      id: payment.id || payment.providerPaymentId || '', customer: payment.customer || 'Customer', vehicle: payment.vehicle || '', vehicleId: payment.vehicleId || '',
+      amount: Number(payment.amount || 0), status: payment.status || 'Recorded', method: payment.method || payment.paymentProvider || payment.provider || '',
+      date: payment.createdAt || payment.date || '', reason: payment.reason || payment.paymentType || payment.source || ''
+    }))
+    .sort((left, right) => Date.parse(right.date || 0) - Date.parse(left.date || 0));
+  const paidToday = transactionsToday.filter(payment => closeoutPaymentPaid(payment));
+  const completedToday = [
+    ...transactionsToday.filter(closeoutPaymentPaid).map(row => ({ ...row, title: 'Payment completed', detail: [row.customer, moneyText(row.amount), row.reason].filter(Boolean).join(' - '), status: 'Done' })),
+    ...(data.maintenance || []).filter(row => /complete|closed|fixed|done/i.test(String(row.status || '')) && dashboardRecordDate(row, ['completedAt', 'doneAt', 'updatedAt']) === dateKeyValue).map(row => ({ id: row.id || '', title: 'Service completed', detail: [row.vehicle, row.issue || row.type].filter(Boolean).join(' - '), status: 'Done', vehicleId: row.vehicleId || '' })),
+    ...(data.tasks || []).filter(row => /complete|done|closed/i.test(String(row.status || '')) && dashboardRecordDate(row, ['doneAt', 'completedAt', 'updatedAt']) === dateKeyValue).map(row => ({ id: row.id || '', title: row.title || row.type || 'Task completed', detail: [row.customer, row.vehicle].filter(Boolean).join(' - '), status: 'Done' }))
+  ].slice(0, 40);
   return {
     today: dateKeyValue,
     summary: {
       collectedAmount: paidToday.reduce((sum, payment) => sum + Number(payment.amount || 0), 0),
       collectedCount: paidToday.length,
       dueCount: todayDue.length,
+      priorDueCount: priorDue.length,
+      failedOnceCount: failedOnce.length,
       failedTwiceCount: failedTwice.length,
-      serviceNeededCount: serviceNeeded.length
+      serviceNeededCount: serviceNeeded.length,
+      overdueDuesCount: overdueDues.length,
+      inspectionDueCount: inspections.length,
+      lateInspectionCount: inspections.filter(row => row.daysLate >= 14).length,
+      pickupsTodayCount: pickups.filter(row => row.date === dateKeyValue).length,
+      returnsTodayCount: returns.filter(row => row.date === dateKeyValue).length
     },
     todayDue,
+    priorDue,
+    failedOnce,
     failedTwice,
-    serviceNeeded
+    towCandidates,
+    overdueDues,
+    serviceNeeded,
+    inspections,
+    pickups,
+    returns,
+    transactionsToday,
+    completedToday
   };
 }
 function isStaleAutopaySchedule(row = {}, dateKeyValue = localDateKey()) {
@@ -11063,6 +11239,11 @@ function customerPortalState(data, account) {
     .slice(0, 100);
   const paymentRequests = (scopedData.paymentRequests || []).filter(row => isOpenCustomerPaymentRequest(row) && customerPortalRecordMatches(row, identity, 'paymentRequest')).slice(0, 10);
   const cardSetupRequests = (scopedData.cardSetupRequests || []).filter(row => isOpenCardSetupRequest(row) && customerPortalRecordMatches(row, identity, 'cardSetup')).slice(0, 10);
+  const returnAppointments = (scopedData.tasks || [])
+    .filter(row => /vehicle return|return vehicle|drop.?off|vehicle recovery/i.test(String([row.type, row.title].filter(Boolean).join(' '))))
+    .filter(row => customerPortalRecordMatches(row, identity, 'task'))
+    .sort((left, right) => Date.parse(right.updatedAt || right.createdAt || 0) - Date.parse(left.updatedAt || left.createdAt || 0))
+    .slice(0, 10);
   const documents = customerPortalDocuments(scopedData, identity, payments);
   const primaryRecurring = recurringPayments.find(row => portalAccount.recurringPaymentId && row.id === portalAccount.recurringPaymentId)
     || recurringPayments.find(row => application.id && row.applicationId === application.id)
@@ -11097,6 +11278,7 @@ function customerPortalState(data, account) {
     documents: documents.map(stripPrivateCustomerFields),
     paymentRequests: paymentRequests.map(stripPrivateCustomerFields),
     cardSetupRequests: cardSetupRequests.map(stripPrivateCustomerFields),
+    returnAppointments: returnAppointments.map(stripPrivateCustomerFields),
     generatedAt: new Date().toISOString()
   };
 }
@@ -14595,6 +14777,7 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     route('POST', '/customer/receipt-request', 'Customer portal receipt request'),
     route('POST', '/customer/paid-outside', 'Customer portal paid-outside-app report'),
     route('POST', '/customer/service-request', 'Customer portal maintenance/service request'),
+    route('POST', '/customer/return-request', 'Customer portal vehicle return scheduling'),
     route('POST', '/customer/issue-report', 'Customer portal toll/claim/issue report'),
     route('POST', '/customer/document-update', 'Customer portal document and verification update'),
     route('POST', '/customer/card-change', 'Customer portal card-on-file change request'),
@@ -14617,6 +14800,7 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     route('POST', '/api/payment-links', 'Customer payment links'),
     route('GET', '/api/messages/status', 'Messaging integration status'),
     route('GET', '/api/messages/feed', 'Fast role-scoped live message feed'),
+    route('POST', '/api/messages/read-state', 'Persistent staff message read/unread state'),
     route('POST', '/api/messages/delivery-sync', 'Refresh final SMS carrier delivery results'),
     route('POST', '/api/messages/send', 'Deliver secure customer-app messages or send optional email/SMS'),
     route('POST', '/api/messages/attachment', 'Staff private message attachment'),
@@ -18792,7 +18976,7 @@ function stripeSetupCardHtml(request, message = '') {
   const disabled = setupReady ? '' : ' disabled';
   const amount = '$' + Number(request.amount || 0).toLocaleString();
   const customerMessage = message || request.stripeCardSetupCustomerMessage || request.cardSetupCustomerMessage || '';
-  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Card Setup</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><div class="public-shell"><div class="public-hero"><div class="public-head"><a class="public-brand brand-link" href="https://www.wheelsonauto.com/"><img class="brand-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"><div><strong>WheelsonAuto</strong><div class="small">Secure Stripe card setup</div></div></a></div><h1>Set up automatic payments</h1><p>Save a card securely with Stripe. WheelsonAuto receives a payment-method reference, never the full card number or CVV.</p></div><main class="public-main"><section class="card section"><div class="grid two"><div class="item"><strong>Customer</strong><div>' + escapeHtml(request.customer || 'Customer') + '</div><div class="muted">' + escapeHtml(request.vehicle || 'WheelsonAuto account') + '</div></div><div class="item"><strong>Recurring amount</strong><div class="money">' + amount + '</div><div class="muted">' + escapeHtml(request.frequency || 'Weekly') + '</div></div></div>' + (customerMessage ? '<div class="notice" style="margin-top:12px">' + escapeHtml(customerMessage) + '</div>' : '') + (!setupReady ? '<div class="notice" style="margin-top:12px">Stripe enrollment is prepared but not live. Add STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET in Render before using this link.</div>' : '') + '<form method="POST" action="/api/public/card-setup/' + encodeURIComponent(request.id) + '/stripe-checkout" class="form" style="margin-top:14px"><label class="check span2"><input name="consent" value="yes" type="checkbox" required' + disabled + '> I authorize WheelsonAuto to save this card with Stripe and charge the recurring schedule, one retry after a failed attempt, and separately approved catch-up payments on my account.</label><div class="notice span2">Saving this card does not switch an existing Clover schedule. WheelsonAuto will show the Stripe card as ready, and the owner must separately confirm the provider switch.</div><div class="span2 actions"><button class="btn primary" type="submit"' + disabled + '>Continue to secure Stripe</button><a class="btn" href="' + escapeHtml(request.onboardingReturnUrl || 'https://www.wheelsonauto.com/') + '">Cancel</a></div></form></section></main></div></body></html>';
+  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Card Setup</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><div class="public-shell"><div class="public-hero"><div class="public-head"><a class="public-brand brand-link" href="https://www.wheelsonauto.com/"><img class="brand-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"><div><strong>WheelsonAuto</strong><div class="small">Secure Stripe card setup</div></div></a></div><h1>Set up automatic payments</h1><p>Save a card securely with Stripe. WheelsonAuto receives a payment-method reference, never the full card number or CVV.</p></div><main class="public-main"><section class="card section"><div class="grid two"><div class="item"><strong>Customer</strong><div>' + escapeHtml(request.customer || 'Customer') + '</div><div class="muted">' + escapeHtml(request.vehicle || 'WheelsonAuto account') + '</div></div><div class="item"><strong>Recurring amount</strong><div class="money">' + amount + '</div><div class="muted">' + escapeHtml(request.frequency || 'Weekly') + '</div></div></div>' + (customerMessage ? '<div class="notice" style="margin-top:12px">' + escapeHtml(customerMessage) + '</div>' : '') + (!setupReady ? '<div class="notice" style="margin-top:12px">Stripe enrollment is prepared but not live. Add STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET in Render before using this link.</div>' : '') + '<form id="stripeSetupForm" method="POST" action="/api/public/card-setup/' + encodeURIComponent(request.id) + '/stripe-checkout" class="form" style="margin-top:14px"><label class="check span2"><input name="consent" value="yes" type="checkbox" required' + disabled + '> I authorize WheelsonAuto to save this card with Stripe and charge the recurring schedule, one retry after a failed attempt, and separately approved catch-up payments on my account.</label><div class="notice span2">Saving this card does not switch an existing Clover schedule. WheelsonAuto will show the Stripe card as ready, and the owner must separately confirm the provider switch.</div><div id="stripeSetupProgress" class="notice span2" style="display:none">Opening Stripe secure checkout...</div><div class="span2 actions"><button id="stripeSetupSubmit" class="btn primary" type="submit"' + disabled + '>Continue to secure Stripe</button><a class="btn" href="' + escapeHtml(request.onboardingReturnUrl || 'https://www.wheelsonauto.com/') + '">Cancel</a></div></form></section></main></div><script>(function(){var form=document.getElementById("stripeSetupForm"),button=document.getElementById("stripeSetupSubmit"),progress=document.getElementById("stripeSetupProgress");if(!form)return;form.addEventListener("submit",function(){button.disabled=true;button.textContent="Opening Stripe...";progress.style.display="block";setTimeout(function(){if(document.visibilityState==="visible"){progress.textContent="Stripe is taking longer than expected. Keep this page open; retry once only if an error appears.";button.textContent="Connecting securely...";}},8000);});})();</script></body></html>';
 }
 function stripeRecurringRowsForRequest(data, request) {
   const rows = resolveCardSetupPlanRows(data, {
@@ -18851,7 +19035,7 @@ async function ensureStripeCustomer(data, request) {
     phone: request.phone || undefined,
     description: ['WheelsonAuto customer', request.customer, request.vehicle].filter(Boolean).join(' - ').slice(0, 350),
     metadata: stripeMetadata(request, { flow: 'customer_record' })
-  }, customerIdempotencyKey);
+  }, customerIdempotencyKey, { timeoutMs: 10000 });
   request.stripeCustomerId = customer.id;
   request.stripeCustomerCreatedAt = request.stripeCustomerCreatedAt || new Date().toISOString();
   stripeRecurringRowsForRequest(data, request).forEach(row => {
@@ -18887,7 +19071,7 @@ async function attachStripeCardSetupCheckout(data, request, req) {
     custom_text: { submit: { message: 'This securely saves your card for the WheelsonAuto schedule you authorized. It does not charge the card today.' } },
     success_url: PUBLIC_BASE_URL + '/setup-card/' + encodeURIComponent(request.id) + '/stripe-success?session_id={CHECKOUT_SESSION_ID}',
     cancel_url: PUBLIC_BASE_URL + '/setup-card/' + encodeURIComponent(request.id)
-  }, 'woa-stripe-setup-' + request.id);
+  }, 'woa-stripe-setup-' + request.id, { timeoutMs: 10000 });
   const now = new Date().toISOString();
   Object.assign(request, {
     paymentProvider: 'stripe',
@@ -19653,26 +19837,70 @@ function finalizeStripeMigrationAfterPaid(recurring, payment, paymentAtIso) {
     lastBillingPeriodKey: disabled.lastBillingPeriodKey || ''
   };
 }
-function isDueForWheelsonAutoAutopay(row, dateKey = localDateKey(), now = new Date()) {
+function wheelsonAutoAutopayEligibility(row, dateKey = localDateKey(), now = new Date()) {
   const status = String(row && row.status || '').toLowerCase();
-  if (Number(row && (row.retryCount || row.failedAttempts) || 0) >= 2) return false;
-  if (status !== 'active' && !status.includes('1x failed') && !status.includes('confirmation pending')) return false;
-  if (!isWheelsonAutoManagedAutopay(row)) return false;
-  if (!stripeMigration.automaticChargeAllowed(row, normalizedPaymentProvider(row.paymentProvider || row.provider || 'clover'), dateKey)) return false;
+  const provider = normalizedPaymentProvider(row && (row.paymentProvider || row.provider) || 'clover');
+  const attempts = Number(row && (row.retryCount || row.failedAttempts) || 0);
+  const occurrence = recurringOccurrenceKey(row);
+  const rapid = rapidAutopayIntervalMs(row) > 0;
+  const nowAt = now instanceof Date ? now : new Date(now);
+  const migrationDateKey = rapid && occurrence ? localDateKey(new Date(occurrence)) : dateKey;
+  const blocked = (reason, nextAttemptAt = '') => ({ eligible: false, reason, occurrence, nextAttemptAt, provider });
+  if (attempts >= 2) return blocked('Two automatic attempts failed. Contact the customer before another charge.');
+  if (status !== 'active' && !status.includes('1x failed') && !status.includes('confirmation pending')) return blocked('Autopay status is ' + (row && row.status || 'not active') + '.');
+  if (!row || !row.autoChargeEnabled) return blocked('Automatic charging is turned off.');
+  if (!hasWheelsonAutoSavedCard(row)) return blocked('No saved-card authorization is connected.');
+  if (provider === 'stripe' && !recurringCardReadyForProvider(row, provider)) return blocked('The Stripe customer or saved card is not charge-ready.');
+  if (!stripeMigration.automaticChargeAllowed(row, provider, migrationDateKey)) return blocked('The protected Clover-to-Stripe migration state does not allow this provider to charge yet.');
   if (rapidAutopayIntervalMs(row)) {
-    const occurrence = recurringOccurrenceKey(row);
     const dueAt = new Date(occurrence);
-    const nowAt = now instanceof Date ? now : new Date(now);
-    if (!occurrence || !Number.isFinite(dueAt.getTime()) || !Number.isFinite(nowAt.getTime()) || dueAt.getTime() > nowAt.getTime()) return false;
-    if (String(row.lastAutoChargeOccurrenceKey || '') === occurrence) return false;
-    if (!retryDelayPassed(row, nowAt)) return false;
-    return true;
+    if (!occurrence || !Number.isFinite(dueAt.getTime()) || !Number.isFinite(nowAt.getTime())) return blocked('The next rapid charge date and time is invalid.');
+    if (String(row.lastAutoChargeOccurrenceKey || '') === occurrence) return blocked('This exact rapid interval was already processed.');
+    if (dueAt.getTime() > nowAt.getTime()) return blocked('Waiting for the saved rapid charge time.', dueAt.toISOString());
+    if (!retryDelayPassed(row, nowAt)) {
+      const last = new Date(String(row.lastAutoChargeAttemptAt || row.lastFailedAt || ''));
+      return blocked('Waiting for the protected one-hour retry.', Number.isFinite(last.getTime()) ? new Date(last.getTime() + 60 * 60 * 1000).toISOString() : '');
+    }
+    return { eligible: true, reason: 'Due now.', occurrence, nextAttemptAt: occurrence, provider };
   }
   const dueKey = recurringDateKey(row);
-  if (!dueKey || dueKey > dateKey) return false;
-  if (dueKey === dateKey && businessMinutesNow() < chargeTimeMinutes(row)) return false;
-  if (!retryDelayPassed(row)) return false;
-  return String(row.lastAutoChargeDate || '') !== dateKey;
+  if (!dueKey) return blocked('The next charge date is missing or invalid.');
+  if (dueKey > dateKey) return blocked('Waiting for the next charge date.', dueKey + 'T' + String(row.chargeTime || '18:00') + ':00');
+  if (dueKey === dateKey && businessMinutesNow(nowAt) < chargeTimeMinutes(row)) return blocked('Waiting for today\'s charge time.', dueKey + 'T' + String(row.chargeTime || '18:00') + ':00');
+  if (!retryDelayPassed(row, nowAt)) return blocked('Waiting for the protected one-hour retry.');
+  if (String(row.lastAutoChargeDate || '') === dateKey) return blocked('Today\'s automatic charge was already processed.');
+  return { eligible: true, reason: 'Due now.', occurrence: dueKey, nextAttemptAt: dueKey, provider };
+}
+function isDueForWheelsonAutoAutopay(row, dateKey = localDateKey(), now = new Date()) {
+  return wheelsonAutoAutopayEligibility(row, dateKey, now).eligible;
+}
+function scheduleNextRapidAutopayWakeup(rows = []) {
+  if (rapidAutopayWakeupTimer) clearTimeout(rapidAutopayWakeupTimer);
+  rapidAutopayWakeupTimer = null;
+  rapidAutopayWakeupAt = '';
+  const now = new Date();
+  const candidates = (Array.isArray(rows) ? rows : []).filter(row => rapidAutopayIntervalMs(row)).map(row => {
+    const eligibility = wheelsonAutoAutopayEligibility(row, localDateKey(now), now);
+    const target = new Date(eligibility.nextAttemptAt || eligibility.occurrence || '');
+    return eligibility.eligible || /waiting for the saved rapid charge time|waiting for the protected one-hour retry/i.test(eligibility.reason)
+      ? { row, target }
+      : null;
+  }).filter(item => item && Number.isFinite(item.target.getTime())).sort((left, right) => left.target.getTime() - right.target.getTime());
+  if (!candidates.length) {
+    woaAutopayStatus.nextRapidWakeupAt = '';
+    return '';
+  }
+  const targetAt = Math.max(Date.now() + 250, candidates[0].target.getTime() + 250);
+  rapidAutopayWakeupAt = new Date(targetAt).toISOString();
+  woaAutopayStatus.nextRapidWakeupAt = rapidAutopayWakeupAt;
+  rapidAutopayWakeupTimer = setTimeout(() => {
+    rapidAutopayWakeupTimer = null;
+    rapidAutopayWakeupAt = '';
+    woaAutopayStatus.nextRapidWakeupAt = '';
+    void runWheelsonAutoAutopay({ source: 'rapid schedule wakeup' }).catch(err => reportBackgroundTaskFailure('autopay-run', err, { route: 'WheelsonAuto rapid autopay wakeup', source: 'rapid schedule' }, 'Rapid WOA autopay'));
+  }, Math.min(2147483000, Math.max(250, targetAt - Date.now())));
+  if (rapidAutopayWakeupTimer.unref) rapidAutopayWakeupTimer.unref();
+  return rapidAutopayWakeupAt;
 }
 function patchRecurringAdminState(data, id, patch) {
   const stamp = new Date().toISOString();
@@ -20337,7 +20565,7 @@ async function chargeStripeSavedCard(data, recurring, payload = {}) {
         chargePurpose,
         chargeReason: String(payload.reason || '').slice(0, 250)
       })
-    }, idempotencyKey);
+    }, idempotencyKey, { timeoutMs: 10000 });
   } catch (error) {
     if (isStripeConfirmationPendingError(error)) {
       const pendingAttempt = updateStripeChargeAttempt(data, recurring, attempt, {
@@ -21036,6 +21264,7 @@ async function runWheelsonAutoAutopay(options = {}) {
       lastResult: result
     };
     await writeData(data);
+    scheduleNextRapidAutopayWakeup(data.recurringPayments);
     woaAutopayStatus.lastFinishedAt = data.integrations.wheelsonAutoAutopay.lastFinishedAt;
     woaAutopayStatus.lastResult = result;
     woaAutopayStatus.lastError = result.errors[0] || '';
@@ -25835,6 +26064,69 @@ const server = http.createServer(async (req, res) => {
       await writeData(data);
       return send(res, 302, '', 'text/plain', { Location: vehicleReturnPath });
     }
+    if (url.pathname === '/customer/return-request' && req.method === 'POST') {
+      const customerUser = customerSessionUser(req);
+      if (!customerUser) return send(res, 302, '', 'text/plain', { Location: '/customer/login' });
+      const vehicleReturnPath = customerExperiencePath(req, 'vehicle');
+      const form = new URLSearchParams(await readBody(req, 64 * 1024));
+      const returnMethod = String(form.get('returnMethod') || 'Customer drop-off').trim().slice(0, 80);
+      const returnDate = validCalendarDateKey(String(form.get('returnDate') || '').trim());
+      const returnTime = String(form.get('returnTime') || '').trim().slice(0, 40);
+      const address = String(form.get('address') || '').trim().slice(0, 300);
+      const notes = String(form.get('notes') || '').trim().slice(0, 1200);
+      if (!returnDate || returnDate < localDateKey()) return send(res, 400, paymentResultHtml('Choose a valid return date', 'Return scheduling must use today or a future date.', vehicleReturnPath, 'Back to vehicle'));
+      if (/WheelsonAuto pickup/i.test(returnMethod) && !address) return send(res, 400, paymentResultHtml('Pickup address needed', 'Enter where WheelsonAuto should collect the vehicle.', vehicleReturnPath, 'Back to vehicle'));
+      const data = await readData();
+      const account = activeCustomerSessionAccount(data, customerUser);
+      if (!account) return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: '/customer/login' });
+      const portal = customerPortalState(data, account);
+      const vehicle = portal.vehicle || {};
+      const recurring = portal.recurring || {};
+      const customerName = String(portal.summary && portal.summary.customer || account.customer || account.name || 'Customer');
+      const vehicleName = String(portal.summary && portal.summary.vehicle || vehicle.title || vehicle.name || recurring.vehicle || 'Vehicle');
+      const now = new Date().toISOString();
+      const task = {
+        id: 'task-customer-return-' + crypto.randomBytes(8).toString('hex'),
+        organizationId: account.organizationId || MAIN_ORG_ID,
+        type: 'Vehicle return',
+        title: 'Vehicle return - ' + customerName,
+        customer: customerName,
+        customerAccountId: account.id,
+        vehicle: vehicleName,
+        vehicleId: account.vehicleId || vehicle.id || recurring.vehicleId || '',
+        vin: vehicle.vin || recurring.vin || '',
+        plate: vehicle.plate || vehicle.stock || recurring.licensePlate || recurring.plate || '',
+        due: returnDate,
+        returnDate,
+        returnTime,
+        returnMethod,
+        address: /WheelsonAuto pickup/i.test(returnMethod) ? address : '5150 NJ-42, Blackwood, NJ 08012',
+        status: 'Scheduled',
+        owner: 'Dispatch',
+        source: 'Customer portal',
+        notes: notes || 'Customer scheduled a vehicle return.',
+        createdAt: now,
+        updatedAt: now
+      };
+      data.tasks = Array.isArray(data.tasks) ? data.tasks : [];
+      data.messages = Array.isArray(data.messages) ? data.messages : [];
+      data.tasks.unshift(task);
+      data.messages.unshift({
+        id: 'msg-' + task.id, organizationId: task.organizationId, customerAccountId: account.id, customer: customerName,
+        phone: account.phone || '', email: account.email || '', direction: 'Customer action', channel: 'Customer portal',
+        template: 'Vehicle return', subject: 'Vehicle return scheduled', status: 'Dispatch review', tone: 'warn',
+        body: [vehicleName, returnMethod, returnDate, returnTime, task.address, notes].filter(Boolean).join('\n'),
+        source: 'Customer portal', vehicleId: task.vehicleId, taskId: task.id, createdAt: now, date: new Date(now).toLocaleString('en-US')
+      });
+      await queueOwnerEmailNotification(data, 'customer_message', {
+        customer: customerName,
+        subject: 'Vehicle return scheduled - ' + customerName,
+        body: ['Customer: ' + customerName, 'Vehicle: ' + vehicleName, 'Method: ' + returnMethod, 'Date: ' + returnDate, 'Time: ' + (returnTime || 'Not selected'), 'Location: ' + task.address, notes ? 'Note: ' + notes : ''].filter(Boolean).join('\n')
+      });
+      appendCustomerPortalAudit(data, account, 'Customer scheduled vehicle return', [customerName, vehicleName, returnMethod, returnDate, returnTime, task.address].filter(Boolean));
+      await writeData(data);
+      return send(res, 302, '', 'text/plain', { Location: vehicleReturnPath });
+    }
     if (url.pathname === '/customer/issue-report' && req.method === 'POST') {
       const customerUser = customerSessionUser(req);
       if (!customerUser) return send(res, 302, '', 'text/plain', { Location: '/customer/login' });
@@ -27788,8 +28080,18 @@ const server = http.createServer(async (req, res) => {
           const customerName = String(customer.name || customer.customer || '').trim();
           const accountId = String(customer.customerAccountId || '').trim();
           const uniqueCustomerName = customerName && (data.customers || []).filter(row => normKey(row.name || row.customer) === normKey(customerName)).length === 1;
-          const exact = row => String(row.customerId || '') === customerId
+          const selectedRentalId = String(customer.activeRentalFileId || '').trim();
+          const selectedVehicleId = String(customer.vehicleId || '').trim();
+          const linkedCustomers = (data.customers || []).filter(row => String(row.id || '') === customerId
             || accountId && String(row.customerAccountId || '') === accountId
+            || selectedRentalId && String(row.activeRentalFileId || '') === selectedRentalId
+            || selectedVehicleId && String(row.vehicleId || '') === selectedVehicleId && normKey(row.name || row.customer) === normKey(customerName));
+          const linkedCustomerIds = new Set(linkedCustomers.map(row => String(row.id || '')).filter(Boolean));
+          const linkedAccountIds = new Set(linkedCustomers.map(row => String(row.customerAccountId || '')).filter(Boolean));
+          const exact = row => linkedCustomerIds.has(String(row.customerId || ''))
+            || linkedAccountIds.has(String(row.customerAccountId || ''))
+            || selectedRentalId && String(row.rentalFileId || row.activeRentalFileId || '') === selectedRentalId
+            || selectedVehicleId && String(row.vehicleId || '') === selectedVehicleId && normKey(row.customer || row.name || row.customerName) === normKey(customerName)
             || uniqueCustomerName && normKey(row.customer || row.name || row.customerName) === normKey(customerName);
           const activeRentals = (data.rentalFiles || []).filter(row => rentalFiles.isActiveRentalFile(row) && exact(row));
           if (activeRentals.length > 1) throw Object.assign(new Error('This customer has more than one active Rental File. Resolve the duplicate before ending the contract.'), { statusCode: 409 });
@@ -27817,15 +28119,15 @@ const server = http.createServer(async (req, res) => {
           const now = new Date().toISOString();
           (data.recurringPayments || []).filter(exact).forEach(row => Object.assign(row, { status: 'Removed', autoChargeEnabled: false, autopayManagedBy: 'Stopped - customer contract ended', nextRun: '', endDate, endedAt: contractEndedAt, removedAt: now, updatedAt: now }));
           (data.contracts || []).filter(exact).forEach(row => Object.assign(row, { status: 'Ended', endStatus: 'Ended', endDate, endedAt: contractEndedAt, updatedAt: now }));
-          (data.customerAccounts || []).filter(row => String(row.id || '') === accountId || String(row.customerId || '') === customerId).forEach(row => Object.assign(row, { status: 'Disabled', disabledAt: now, disabledBy: user.name || user.username || 'Staff', portalStage: 'Contract ended', updatedAt: now }));
+          (data.customerAccounts || []).filter(row => linkedAccountIds.has(String(row.id || '')) || linkedCustomerIds.has(String(row.customerId || ''))).forEach(row => Object.assign(row, { status: 'Disabled', disabledAt: now, disabledBy: user.name || user.username || 'Staff', portalStage: 'Contract ended', updatedAt: now }));
           const openClaimAmount = (data.claims || []).filter(row => exact(row) && !/paid|closed|resolved|dismissed|cancelled|removed/i.test(String(row.status || ''))).reduce((sum, row) => sum + Number(row.amount || 0), 0);
           const unpaidAmount = (data.payments || []).filter(row => exact(row) && /failed|declined|unpaid|past due/i.test(String(row.status || ''))).reduce((sum, row) => sum + Number(row.amount || 0), 0);
-          Object.assign(customer, {
+          linkedCustomers.forEach(record => Object.assign(record, {
             activeRentalFileId: '', vehicleId: '', vehicle: '', vin: '', licensePlate: '',
             status: 'History', stage: 'Contract ended', contractEndedAt, endDate,
             contractEndReason: cleanResourceText(payload.reason || 'Customer contract ended by staff.', 1200),
             outstandingBalance: openClaimAmount + unpaidAmount, archivedAt: now, archivedBy: user.name || user.username || 'Staff', updatedAt: now
-          });
+          }));
           appendAuditLog(data, user, 'Customer contract ended', [customerName || customerId, contractEndedAt, returnedVehicle ? 'Vehicle returned to In lot' : 'No vehicle assigned', 'Outstanding record ' + moneyText(customer.outstandingBalance), 'Payment and contract history preserved']);
           saved = staffCustomerRecord(data, customer);
         });
@@ -28473,7 +28775,12 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/recurring-payments' && req.method === 'GET') {
       if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can view recurring payment schedules.' });
       const data = await readViewData();
-      const page = paginatedResource(viewResourceRows(data, 'recurringPayments', user), url, {
+      const now = new Date();
+      const records = viewResourceRows(data, 'recurringPayments', user).map(row => {
+        const eligibility = wheelsonAutoAutopayEligibility(row, localDateKey(now), now);
+        return { ...row, autopayEligible: eligibility.eligible, autopayBlockedReason: eligibility.eligible ? '' : eligibility.reason, autopayNextAttemptAt: eligibility.nextAttemptAt || '' };
+      });
+      const page = paginatedResource(records, url, {
         searchFields: ['id', 'customer', 'phone', 'email', 'vehicle', 'vin', 'licensePlate', 'plate', 'tracker', 'status', 'provider', 'paymentProvider', 'paymentSetup', 'nextRun'],
         defaultLimit: 100
       });
@@ -28886,6 +29193,32 @@ const server = http.createServer(async (req, res) => {
       });
       const revision = platformMessageRevision(messages);
       return json(res, 200, { ok: true, revision, messages, starCoach: publicStarCoachState(data) }, { 'Cache-Control': 'private, no-store' });
+    }
+    if (url.pathname === '/api/messages/read-state' && req.method === 'POST') {
+      if (String(user.role || '').toLowerCase() === 'mechanic') return json(res, 403, { ok: false, error: 'Mechanic accounts do not have access to customer messages.' });
+      const payload = await readJsonBody(req, 64 * 1024);
+      const messageIds = new Set((Array.isArray(payload.messageIds) ? payload.messageIds : []).map(value => String(value || '').trim()).filter(Boolean).slice(0, 200));
+      if (!messageIds.size) return json(res, 400, { ok: false, error: 'Choose at least one message.' });
+      const markUnread = payload.unread === true;
+      const changedAt = new Date().toISOString();
+      let changed = 0;
+      await mutateLatestData(markUnread ? 'message marked unread' : 'message thread read', async data => {
+        (data.messages || []).forEach(message => {
+          if (!messageIds.has(String(message.id || ''))) return;
+          if (!isOwnerUser(user) && String(message.organizationId || MAIN_ORG_ID) !== userOrganizationId(user)) return;
+          if (markUnread) {
+            message.staffUnread = true;
+            message.staffReadAt = '';
+            message.staffReadBy = '';
+          } else {
+            message.staffUnread = false;
+            message.staffReadAt = changedAt;
+            message.staffReadBy = user.name || user.username || user.id || 'Staff';
+          }
+          changed += 1;
+        });
+      }, { fastMessagingWrite: true, organizationId: userOrganizationId(user) });
+      return json(res, 200, { ok: true, changed, unread: markUnread, changedAt });
     }
     if (url.pathname === '/api/state' && req.method === 'PUT') {
       const incoming = await readJsonBody(req, 32 * 1024 * 1024);
@@ -29793,7 +30126,15 @@ const server = http.createServer(async (req, res) => {
       const result = await runAutoSync({ source: 'dashboard', force: url.searchParams.get('force') === '1' });
       return json(res, result.ok ? 200 : 207, result);
     }
-    if (url.pathname === '/api/woa-autopay/status' && req.method === 'GET') return json(res, 200, { ok: true, autopay: woaAutopayStatus });
+    if (url.pathname === '/api/woa-autopay/status' && req.method === 'GET') {
+      const data = await readViewData();
+      const now = new Date();
+      const diagnostics = viewResourceRows(data, 'recurringPayments', user).filter(row => !/removed|history|ended|stopped/i.test(String(row.status || ''))).map(row => {
+        const eligibility = wheelsonAutoAutopayEligibility(row, localDateKey(now), now);
+        return { id: row.id || '', customer: row.customer || '', frequency: row.frequency || '', nextRun: row.nextRun || '', status: row.status || '', eligible: eligibility.eligible, reason: eligibility.reason, nextAttemptAt: eligibility.nextAttemptAt || '' };
+      });
+      return json(res, 200, { ok: true, autopay: { ...woaAutopayStatus, nextRapidWakeupAt: rapidAutopayWakeupAt || woaAutopayStatus.nextRapidWakeupAt || '', diagnostics } });
+    }
     if (url.pathname === '/api/woa-autopay/run' && req.method === 'POST') {
       const result = await runWheelsonAutoAutopay({ source: 'dashboard' });
       return json(res, result.ok ? 200 : 207, result);
@@ -30897,6 +31238,7 @@ const server = http.createServer(async (req, res) => {
       appendAuditLog(data, user, existingAutopay ? 'Autopay reactivated' : 'Autopay created', [autopay.customer || 'Unknown customer', moneyText(autopay.amount || 0), autopay.frequency || 'Schedule', autopay.nextRun || 'No next date', autopay.vehicle || autopay.vin || 'No vehicle linked']);
       await protectConcurrentLocalWrites(data, { preferIncoming: true });
       await writeData(data);
+      scheduleNextRapidAutopayWakeup(data.recurringPayments);
       return json(res, 201, { ok: true, autopay: existingAutopay || autopay, reactivated: !!existingAutopay });
     }
     if (url.pathname === '/api/recurring-payments/update' && req.method === 'POST') {
@@ -31026,6 +31368,7 @@ const server = http.createServer(async (req, res) => {
       enrichLinkedProfiles(data);
       appendAuditLog(data, user, scheduleChanged ? 'Autopay schedule updated' : (amountChanged ? 'Autopay amount updated' : 'Autopay reviewed'), [recurring && recurring.customer || id, moneyText(amount !== undefined ? amount : recurring && recurring.amount || 0), frequency, nextRun + ' ' + chargeTime, status]);
       await writeData(data);
+      scheduleNextRapidAutopayWakeup(data.recurringPayments);
       return json(res, 200, { ok: true, nextRun, frequency, amount: amount !== undefined ? amount : recurring && recurring.amount, status, paymentDay, chargeTime, monthlyDay, retryRule, autopayManagedBy: patch.autopayManagedBy, autoChargeEnabled: enableWheelsonAutoCharge, amountChanged, scheduleChanged, retryReset, cutoverRescheduled, stripeCutoverDate: cutoverRescheduled ? nextRun : migrationBeforeUpdate.cutoverDate || '' });
     }
     if (url.pathname === '/api/recurring-payments/remove' && req.method === 'POST') {
@@ -31336,6 +31679,7 @@ const server = http.createServer(async (req, res) => {
         const result = await chargeSavedRecurringCard(data, payload, req);
         appendAuditLog(data, user, 'Manual saved-card charge', [result.charge.customer || result.payment.customer || 'Unknown customer', moneyText(result.payment.amount || payload.amount || 0), result.payment.status || 'Paid', result.payment.vehicle || result.charge.vehicle || 'No vehicle linked']);
         await writeData(data);
+        schedulePaymentOutcomeEmail(result.recurring || {}, result.payment || {}, '', url.pathname);
         return json(res, 201, { ok: true, charge: result.charge, payment: result.payment });
       } catch (err) {
         const recurring = findRecurringRow(data, payload.recurringPaymentId || payload.id);
@@ -31372,6 +31716,7 @@ const server = http.createServer(async (req, res) => {
           appendAuditLog(data, user, 'Stripe card authentication required', [recurring.customer || 'Unknown customer', moneyText(payment.amount || payload.amount || recurring.amount || 0), payment.scheduledDueDate || recurring.nextRun || 'No billing date', 'Autopay paused; secure card update required']);
           await protectConcurrentLocalWrites(data, { preferIncoming: true, reason: 'record Stripe card authentication-required state' });
           await writeData(data);
+          schedulePaymentOutcomeEmail(recurring, payment, err && err.message || '', url.pathname);
           return json(res, 409, {
             ok: false,
             cardAuthenticationRequired: true,
@@ -31404,6 +31749,7 @@ const server = http.createServer(async (req, res) => {
           appendAuditLog(data, user, 'Manual saved-card charge not found', [recurring.customer || 'Unknown customer', moneyText(payment.amount || payload.amount || 0), String(err && err.message || err)]);
           await protectConcurrentLocalWrites(data);
           await writeData(data);
+          schedulePaymentOutcomeEmail(recurring, payment, err && err.message || '', url.pathname);
           return json(res, 409, { ok: false, error: payment.status + ': ' + String(err && err.message || err), payment });
         }
         if (recurring) {
@@ -31411,6 +31757,7 @@ const server = http.createServer(async (req, res) => {
           appendAuditLog(data, user, 'Manual saved-card charge failed', [recurring.customer || 'Unknown customer', moneyText(payment.amount || payload.amount || recurring.amount || 0), payment.status, String(err && err.message || err)]);
           await protectConcurrentLocalWrites(data);
           await writeData(data);
+          schedulePaymentOutcomeEmail(recurring, payment, err && err.message || '', url.pathname);
           return json(res, 400, { ok: false, error: payment.status + ': ' + String(err && err.message || err), payment });
         }
         return json(res, 400, { ok: false, error: String(err && err.message || err) });
@@ -31789,6 +32136,7 @@ module.exports = {
   findRecurringRow,
   successfulRecurringPaymentEvidence,
   retryDelayPassed,
+  wheelsonAutoAutopayEligibility,
   isDueForWheelsonAutoAutopay,
   cloverAutomaticChargeAttemptNumber,
   cloverRecurringChargeIdempotencyKey,

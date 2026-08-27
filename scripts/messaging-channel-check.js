@@ -215,6 +215,9 @@ requireText('Deterministic email delivery key', emailDeliveryIdempotencyKey, "cr
 requireText('Resend reply-to support', sendProviderEmail, 'emailPayload.reply_to');
 requireText('Resend owner-copy support', sendProviderEmail, 'emailPayload.bcc');
 requireText('SendGrid support', sendProviderEmail, 'api.sendgrid.com/v3/mail/send');
+requireText('Branded HTML email renderer', server, 'function brandedEmailHtml');
+requireText('WheelsonAuto email logo', server, 'wheelsLOGO.png?v=1772299505&width=180');
+requireText('Resend HTML email body', sendProviderEmail, 'brandedEmailHtml(safeSubject, body)');
 requireText('Public owner-copy email status', publicMessagingStatus, 'emailOwnerCopy');
 requireText('Public transactional SMS status', publicMessagingStatus, 'transactionalDeliveryReady');
 requireText('Live SMS PostgreSQL gate', sendProviderSms, 'PostgreSQL required');

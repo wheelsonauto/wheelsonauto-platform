@@ -155,7 +155,7 @@ export function DispatchPage() {
 
     <section className="operations-detail">
       {!draft ? <div className="detail-empty"><strong>Select a task</strong><span>Open an item or create a new task.</span></div> : <form onSubmit={submit}>
-        <header className="detail-header"><button type="button" className="detail-back" onClick={() => { setDraft(null); setSelectedId(''); }} aria-label="Back to tasks">Back</button><div><span>Dispatch task</span><h2>{draft.title || 'New task'}</h2></div>{draft.updatedAt ? <small>Updated {new Date(draft.updatedAt).toLocaleString()}</small> : null}</header>
+        <header className="detail-header"><button type="button" className="detail-back" onClick={() => { setDraft(null); setSelectedId(''); }} aria-label="Back to tasks">Back</button><div><span>Dispatch task</span><h2>{draft.title || 'New task'}</h2></div>{draft.updatedAt ? <small>Updated {new Date(draft.updatedAt).toLocaleString('en-US')}</small> : null}</header>
         <div className="detail-scroll">
           {error ? <div className="inline-alert error">{error}</div> : null}
           {notice ? <div className="inline-alert">{notice}</div> : null}

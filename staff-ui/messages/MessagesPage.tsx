@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { Paperclip } from 'lucide-react';
-import { draftStarReply, loadMessageFeed, sendMessage, sendMessageAttachment, sendStarInstruction, type SendMessageInput } from '../api';
+import { draftStarReply, loadMessageFeed, sendMessage, sendMessageAttachment, sendStarInstruction, setMessageReadState, type SendMessageInput } from '../api';
 import type { MessageRecord, MessageThread, StarCoachState } from '../types';
 
 function timeValue(message: MessageRecord): number {
@@ -35,6 +35,13 @@ function internalStarDraft(message: MessageRecord): boolean {
 function internalNotification(message: MessageRecord): boolean {
   return /outbound notification/i.test(message.direction || '')
     || /WheelsonAuto email notification/i.test(message.source || '');
+}
+
+function staffUnreadMessage(message: MessageRecord): boolean {
+  if (!/inbound|customer action/i.test(message.direction || '')) return false;
+  if (message.staffUnread === true) return true;
+  if (message.staffReadAt) return false;
+  return !/read/i.test(message.status || '');
 }
 
 function buildThreads(messages: MessageRecord[]): MessageThread[] {
@@ -90,7 +97,7 @@ function buildThreads(messages: MessageRecord[]): MessageThread[] {
       customerAccountId: accountIdentity?.customerAccountId || contact.customerAccountId || '',
       messages: ordered,
       latest,
-      unread: ordered.filter(row => /inbound/i.test(row.direction || '') && !/read/i.test(row.status || '')).length,
+      unread: ordered.filter(staffUnreadMessage).length,
       starReviewCount: reviewRows.length,
       latestStarReview: reviewRows[reviewRows.length - 1]
     };
@@ -102,8 +109,8 @@ function shortTime(message: MessageRecord): string {
   if (Number.isNaN(parsed.getTime())) return '';
   const today = new Date();
   return parsed.toDateString() === today.toDateString()
-    ? parsed.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-    : parsed.toLocaleDateString([], { month: 'short', day: 'numeric' });
+    ? parsed.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+    : parsed.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
 function availableChannels(thread: MessageThread): SendMessageInput['channel'][] {
@@ -202,6 +209,31 @@ export function MessagesPage() {
       : searched;
   }, [inboxView, query, threads]);
   const selected = threads.find(thread => thread.key === selectedKey) || null;
+
+  const openThread = (thread: MessageThread) => {
+    setSelectedKey(thread.key);
+    const unreadIds = thread.messages.filter(staffUnreadMessage).map(message => message.id).filter(id => !id.startsWith('sending-'));
+    if (!unreadIds.length) return;
+    const readAt = new Date().toISOString();
+    setMessages(current => current.map(message => unreadIds.includes(message.id) ? { ...message, staffUnread: false, staffReadAt: readAt } : message));
+    void setMessageReadState(unreadIds, false).catch(requestError => {
+      setError((requestError as Error).message);
+      void refresh(undefined, true);
+    });
+  };
+
+  const markSelectedUnread = () => {
+    if (!selected) return;
+    const latestInbound = selected.messages.slice().reverse().find(message => /inbound|customer action/i.test(message.direction || ''));
+    if (!latestInbound) return;
+    setMessages(current => current.map(message => message.id === latestInbound.id ? { ...message, staffUnread: true, staffReadAt: '' } : message));
+    void setMessageReadState([latestInbound.id], true)
+      .then(() => setNotice('Conversation marked unread.'))
+      .catch(requestError => {
+        setError((requestError as Error).message);
+        void refresh(undefined, true);
+      });
+  };
 
   useEffect(() => {
     if (!selected && selectedKey) setSelectedKey('');
@@ -318,7 +350,7 @@ export function MessagesPage() {
         {!loading && !filtered.length ? <div className="empty-state">No conversations match this search.</div> : null}
         {filtered.map(thread => {
           const preview = inboxView === 'star' ? thread.latestStarReview || thread.latest : thread.latest;
-          return <button key={thread.key} className={thread.key === selectedKey ? 'thread active' : 'thread'} onClick={() => setSelectedKey(thread.key)}>
+          return <button key={thread.key} className={thread.key === selectedKey ? 'thread active' : 'thread'} onClick={() => openThread(thread)}>
           <span className="avatar" aria-hidden="true">{thread.customer.slice(0, 1).toUpperCase()}</span>
           <span className="thread-copy"><strong>{thread.customer}</strong><span>{preview.body || preview.subject || 'No message text'}</span></span>
           <span className="thread-meta"><time>{shortTime(preview)}</time>{inboxView === 'star' && thread.starReviewCount ? <b>{thread.starReviewCount}</b> : thread.unread ? <b>{thread.unread}</b> : null}</span>
@@ -334,6 +366,7 @@ export function MessagesPage() {
           <span className="avatar" aria-hidden="true">{selected.customer.slice(0, 1).toUpperCase()}</span>
           <div><strong>{selected.customer}</strong><span>{selected.phone || selected.email || 'WheelsonAuto customer'}</span></div>
           {inboxView === 'star' && selected.starReviewCount ? <span className="review-label">Review required</span> : null}
+          <button className="unread-command" type="button" onClick={markSelectedUnread}>Mark unread</button>
           <button className="star-button" onClick={askStar} disabled={starLoading}>{starLoading ? 'Drafting...' : 'Star draft'}</button>
         </header>
         <div className="message-history">

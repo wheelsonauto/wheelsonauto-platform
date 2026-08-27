@@ -62,7 +62,7 @@ export function ServiceDashboardPage({ onNavigate }: { onNavigate: (workspace: s
   ].slice(0, 12);
 
   return <main className="dashboard-workspace service-dashboard">
-    <header className="page-heading"><div><span>Mechanic workspace</span><h1>Service home</h1><p>Today&apos;s jobs, vehicles, inspections, and sign-off work. Customer money and private account tools stay out of this workspace.</p></div><time>{new Date().toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' })}</time></header>
+    <header className="page-heading"><div><span>Mechanic workspace</span><h1>Service home</h1><p>Today&apos;s jobs, vehicles, inspections, and sign-off work. Customer money and private account tools stay out of this workspace.</p></div><time>{new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}</time></header>
     {error ? <div className="inline-alert error">{error}</div> : null}
     <section className="metric-strip" aria-label="Service summary">
       <button onClick={() => onNavigate('maintenance')}><span>Open jobs</span><strong>{loading ? '...' : openJobs.length}</strong><small>active service records</small></button>

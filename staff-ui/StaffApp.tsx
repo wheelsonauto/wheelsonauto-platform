@@ -94,7 +94,7 @@ const ownerMobileItems: NavItem[] = [
 const workspaceNames = new Map<Workspace, string>([
   ...ownerNavGroups.flatMap(group => group.items.map(item => [item.id, item.label] as [Workspace, string])),
   ['payments', 'Payments'], ['applications', 'Applications'], ['dispatch', 'Dispatch'], ['maintenance', 'Maintenance'], ['systems', 'Systems'],
-  ['reports', 'Reports'], ['more', 'Owner admin'], ['settings', 'Settings'], ['rental', 'Rental File']
+  ['reports', 'Reports'], ['more', 'Admin'], ['settings', 'Settings'], ['rental', 'Rental File']
 ]);
 
 const roleWorkspaceAccess: Record<StaffRole, Set<Workspace>> = {

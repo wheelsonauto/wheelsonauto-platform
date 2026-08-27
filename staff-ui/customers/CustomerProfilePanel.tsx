@@ -13,6 +13,7 @@ export function CustomerProfilePanel({
   saving,
   working,
   dueTotal,
+  nextAutopay,
   vehicles,
   assignmentVehicleId,
   assignmentReason,
@@ -42,6 +43,7 @@ export function CustomerProfilePanel({
   saving: boolean;
   working: boolean;
   dueTotal: number;
+  nextAutopay?: string;
   vehicles: VehicleRecord[];
   assignmentVehicleId: string;
   assignmentReason: string;
@@ -71,6 +73,7 @@ export function CustomerProfilePanel({
       <section className="identity-summary customer-lifecycle-summary">
         <div><span>Vehicle</span><strong>{customer.vehicle || 'Not assigned'}</strong></div>
         <div><span>Amount due</span><strong>{money(dueTotal)}</strong></div>
+        <div><span>Next autopay</span><strong>{nextAutopay ? (nextAutopay.includes('T') ? dateTime(nextAutopay) : shortDate(nextAutopay)) : 'Not scheduled'}</strong></div>
         <div><span>Contract start</span><strong>{customer.contractStartedAt ? shortDate(customer.contractStartedAt) : 'Not recorded'}</strong></div>
         <div><span>Contract end</span><strong>{customer.contractEndedAt || customer.endDate ? dateTime(customer.contractEndedAt || customer.endDate) : 'Active'}</strong></div>
       </section>

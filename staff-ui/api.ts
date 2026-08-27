@@ -92,6 +92,17 @@ export async function sendMessageAttachment(input: Omit<SendMessageInput, 'chann
   return result;
 }
 
+export async function setMessageReadState(messageIds: string[], unread = false): Promise<{ ok: boolean; changed: number; unread: boolean; changedAt: string }> {
+  const response = await fetch('/api/messages/read-state', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ messageIds, unread })
+  });
+  const result = await parseJson<{ ok: boolean; changed: number; unread: boolean; changedAt: string }>(response);
+  invalidateCachedPaths('/api/messages/feed', '/api/app-notifications');
+  return result;
+}
+
 export async function draftStarReply(message: MessageRecord): Promise<{ ok: boolean; draft: MessageRecord; plan?: { reply?: string; approvalRequired?: boolean; needsHuman?: boolean; canAutoSend?: boolean }; autoSend?: { attempted: boolean; sent: boolean; message?: MessageRecord; warning?: string } }> {
   const response = await fetch('/api/messages/ai-reply', {
     method: 'POST',

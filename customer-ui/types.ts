@@ -41,6 +41,10 @@ export type PortalRecord = {
   issue?: string;
   due?: string;
   nextDue?: string;
+  returnDate?: string;
+  returnTime?: string;
+  returnMethod?: string;
+  address?: string;
   date?: string;
   createdAt?: string;
   updatedAt?: string;
@@ -78,6 +82,7 @@ export type CustomerPortal = {
   documents: PortalRecord[];
   paymentRequests: PortalRecord[];
   cardSetupRequests: PortalRecord[];
+  returnAppointments: PortalRecord[];
   generatedAt: string;
 };
 

@@ -34,6 +34,7 @@ assert(shell.includes('customer-message-page') && shell.includes('customer-messa
 assert(shell.includes('useSwipeTabs(tabIds, tab, navigate') && shell.includes("matchMedia('(max-width: 720px)')") && shell.includes('customer-swipe-zone'), 'Customer mobile workspaces must support protected horizontal tab gestures without changing desktop behavior.');
 assert(shell.includes('row.stripeCardSetupCustomerMessage') && shell.includes('row.cardSetupCustomerMessage'), 'Customer-safe card retry guidance must render in the replacement portal.');
 assert(['/customer/card-change', '/customer/receipt-request', '/customer/statement-request', '/customer/paid-outside'].every(action => shell.includes(action)), 'Customer payment support actions are incomplete.');
+assert(server.includes("url.pathname === '/customer/return-request'") && shell.includes('/customer/return-request') && shell.includes('WheelsonAuto pickup') && shell.includes('Customer drop-off'), 'Customer return scheduling must support drop-off or WheelsonAuto pickup from the Vehicle workspace.');
 assert(shell.includes('payment-support-actions') && shell.includes('<details'), 'Secondary payment actions must stay inside one compact disclosure.');
 assert(sources.every(source => !source.includes('/api/state')), 'The customer app must never read or save whole platform state.');
 assert(sources.every(source => !source.includes('setInterval(')), 'The customer app must not add an independent polling loop.');

@@ -7,7 +7,8 @@ import {
   Plus,
   Send,
   Trash2,
-  WalletCards
+  WalletCards,
+  X
 } from 'lucide-react';
 import {
   assignCustomerVehicle,
@@ -87,6 +88,10 @@ function scheduleValue(frequency: string, value: string) {
   if (!rapidFrequency(frequency)) return dateInput(value);
   const date = new Date(value);
   return Number.isFinite(date.getTime()) ? date.toISOString() : '';
+}
+
+function scheduleText(value?: string) {
+  return String(value || '').includes('T') ? dateTime(value) : shortDate(value);
 }
 
 function operationId() {
@@ -244,7 +249,7 @@ export function CustomersPage({ onNavigate, onOpenRental }: { onNavigate: (works
   const navigateDetail = (next: DetailTab) => {
     if (next === detailTab) return;
     setDetailTrail(current => [...current, detailTab]);
-    setDetailTab(next); setPaymentAction(null); setPaymentDraft(null); setGeneratedUrl('');
+    setDetailTab(next); setPaymentAction(null); setPaymentDraft(null); setGeneratedUrl(''); setError(''); setNotice('');
   };
   const backDetail = () => {
     if (paymentAction) { setPaymentAction(null); setPaymentDraft(null); setGeneratedUrl(''); return; }
@@ -357,8 +362,8 @@ export function CustomersPage({ onNavigate, onOpenRental }: { onNavigate: (works
           if (!paymentDraft.nextRun) throw new Error('Choose the exact next charge date.');
           const nextRun = scheduleValue(paymentDraft.frequency, paymentDraft.nextRun);
           if (!nextRun) throw new Error(rapidFrequency(paymentDraft.frequency) ? 'Choose the exact next charge date and time.' : 'Choose the exact next charge date.');
-          await updateAutopay({ recurringPaymentId: selectedSchedule.id, nextRun, frequency: paymentDraft.frequency, amount, status: paymentDraft.status, chargeTime: rapidFrequency(paymentDraft.frequency) ? '' : paymentDraft.chargeTime, retryRule: 'Retry once then contact', autopayManagedBy: selectedSchedule.autopayManagedBy || 'WheelsonAuto', note: paymentDraft.note, autoChargeEnabled: paymentDraft.autoChargeEnabled });
-          setNotice('Autopay amount, schedule, and charging state updated.');
+          const updated = await updateAutopay({ recurringPaymentId: selectedSchedule.id, nextRun, frequency: paymentDraft.frequency, amount, status: paymentDraft.status, chargeTime: rapidFrequency(paymentDraft.frequency) ? '' : paymentDraft.chargeTime, retryRule: 'Retry once then contact', autopayManagedBy: selectedSchedule.autopayManagedBy || 'WheelsonAuto', note: paymentDraft.note, autoChargeEnabled: paymentDraft.autoChargeEnabled });
+          setNotice(`Autopay saved: ${updated.frequency} starting ${dateTime(updated.nextRun)}. Automatic charging is ${updated.autoChargeEnabled ? 'enabled' : 'off'}.`);
         }
         if (paymentAction === 'remove') {
           await removeAutopay(selectedSchedule.id, paymentDraft.note || 'Removed from WheelsonAuto autopay by admin.');
@@ -394,7 +399,7 @@ export function CustomersPage({ onNavigate, onOpenRental }: { onNavigate: (works
 
     <section className="operations-detail">{!draft ? <div className="detail-empty"><strong>Select a customer</strong><span>Customer, vehicle, card, autopay, and transaction history stay in one file.</span></div> : <div className="customer-connected-detail">
       <header className="detail-header"><button type="button" className="detail-back" onClick={backDetail}>Back</button><div><span>{creatingCustomer ? 'New customer' : 'Connected customer file'}</span><h2>{draft.name || 'Add customer'}</h2></div><em className={`status-chip ${statusTone(draft.status || draft.stage)}`}>{draft.status || draft.stage || 'Active'}</em></header>
-      {error ? <div className="inline-alert error">{error}</div> : null}{notice ? <div className="inline-alert">{notice}</div> : null}
+      {error || notice ? <div className={`customer-action-feedback ${error ? 'error' : 'success'}`} role={error ? 'alert' : 'status'} aria-live="polite"><span>{error || notice}</span><button type="button" aria-label="Dismiss message" onClick={() => { setError(''); setNotice(''); }}><X size={15} /></button></div> : null}
       <div className="detail-scroll">
         {detailTab === 'customer' ? <Suspense fallback={<div className="workspace-loading"><span /><strong>Opening customer file</strong></div>}>
           <CustomerProfilePanel
@@ -403,6 +408,7 @@ export function CustomersPage({ onNavigate, onOpenRental }: { onNavigate: (works
             saving={saving}
             working={working}
             dueTotal={selectedDueTotal}
+            nextAutopay={selectedSchedule?.nextRun}
             vehicles={assignmentVehicles}
             assignmentVehicleId={assignmentVehicleId}
             assignmentReason={assignmentReason}
@@ -428,9 +434,9 @@ export function CustomersPage({ onNavigate, onOpenRental }: { onNavigate: (works
             onEndContract={endCustomerContract}
           />
         </Suspense> : detailTab === 'payments' ? <section className="customer-payments-detail">
-          <header className="payment-detail-command"><div><span>Payment control</span><strong>{selectedSchedule ? `${money(selectedSchedule.amount)} ${selectedSchedule.frequency || 'Weekly'}` : 'No recurring plan yet'}</strong><small>{selectedSchedule ? `${selectedSchedule.provider || selectedSchedule.paymentProvider || 'Provider'} | Next ${selectedSchedule.nextRun || 'not scheduled'}` : 'Create a secure Stripe setup link to begin.'}</small></div><div className="customer-file-commands"><button type="button" className="secondary-command compact" onClick={() => navigateDetail('customer')}><FileText size={15} /> Customer info</button><button type="button" className="secondary-command compact" onClick={() => navigateDetail('dues')}><CircleDollarSign size={15} /> Dues</button><button type="button" className="primary-command compact" onClick={() => beginAction('new')}><Plus size={15} /> Add autopay</button></div></header>
+          <header className="payment-detail-command"><div><span>Payment control</span><strong>{selectedSchedule ? `${money(selectedSchedule.amount)} ${selectedSchedule.frequency || 'Weekly'}` : 'No recurring plan yet'}</strong><small>{selectedSchedule ? `${selectedSchedule.provider || selectedSchedule.paymentProvider || 'Provider'} | Next ${scheduleText(selectedSchedule.nextRun)}` : 'Create a secure Stripe setup link to begin.'}</small></div><div className="customer-file-commands"><button type="button" className="secondary-command compact" onClick={() => navigateDetail('customer')}><FileText size={15} /> Customer info</button><button type="button" className="secondary-command compact" onClick={() => navigateDetail('dues')}><CircleDollarSign size={15} /> Dues</button><button type="button" className="primary-command compact" onClick={() => beginAction('new')}><Plus size={15} /> Add autopay</button></div></header>
           {selectedCustomerAutopay.length > 1 ? <label className="schedule-picker">Recurring plan<select value={selectedSchedule?.id || ''} onChange={event => { setSelectedAutopayId(event.target.value); setPaymentAction(null); }} >{selectedCustomerAutopay.map(row => <option key={row.id} value={row.id}>{[money(row.amount), row.frequency || 'Weekly', row.vehicle || 'No vehicle', row.status || 'Setup'].join(' | ')}</option>)}</select></label> : null}
-          {selectedSchedule ? <><section className="payment-schedule-summary"><div><span>Status</span><strong>{selectedSchedule.status || 'Setup needed'}</strong></div><div><span>Card</span><strong>{cardDisplay(selectedSchedule)}</strong></div><div><span>Autocharge</span><strong>{selectedSchedule.autoChargeEnabled ? 'Enabled' : 'Not enabled'}</strong></div><div><span>Vehicle</span><strong>{selectedSchedule.vehicle || 'Not linked'}</strong></div></section><div className="payment-command-row"><button type="button" className="primary-command compact" onClick={() => beginAction('charge')}><CircleDollarSign size={15} /> Charge</button><button type="button" className="secondary-command compact" onClick={() => beginAction('result')}><WalletCards size={15} /> Record result</button><button type="button" className="secondary-command compact" onClick={() => beginAction('link')}><Send size={15} /> Send link</button><button type="button" className="text-command" onClick={() => beginAction('card')}><CreditCard size={15} /> Change card</button><button type="button" className="text-command" onClick={() => beginAction('edit')}><CalendarClock size={15} /> Edit autopay</button>{/setup|waiting/i.test([selectedSchedule.status, selectedSchedule.paymentSetup].join(' ')) ? <button type="button" className="danger-text-command" onClick={() => beginAction('delete')}><Trash2 size={15} /> Delete setup</button> : <button type="button" className="danger-text-command" onClick={() => beginAction('remove')}><Trash2 size={15} /> Remove autopay</button>}</div></> : null}
+          {selectedSchedule ? <><section className="payment-schedule-summary"><div><span>Status</span><strong>{selectedSchedule.status || 'Setup needed'}</strong></div><div><span>Card</span><strong>{cardDisplay(selectedSchedule)}</strong></div><div><span>Autocharge</span><strong>{selectedSchedule.autoChargeEnabled ? 'Enabled' : 'Not enabled'}</strong></div><div><span>Next attempt</span><strong>{scheduleText(selectedSchedule.autopayNextAttemptAt || selectedSchedule.nextRun)}</strong></div><div><span>Vehicle</span><strong>{selectedSchedule.vehicle || 'Not linked'}</strong></div></section>{selectedSchedule.autoChargeEnabled && selectedSchedule.autopayBlockedReason && !/^Waiting for/i.test(selectedSchedule.autopayBlockedReason) ? <div className="inline-alert error"><strong>Autopay is blocked.</strong> {selectedSchedule.autopayBlockedReason}</div> : null}<div className="payment-command-row"><button type="button" className="primary-command compact" onClick={() => beginAction('charge')}><CircleDollarSign size={15} /> Charge</button><button type="button" className="secondary-command compact" onClick={() => beginAction('result')}><WalletCards size={15} /> Record result</button><button type="button" className="secondary-command compact" onClick={() => beginAction('link')}><Send size={15} /> Send link</button><button type="button" className="text-command" onClick={() => beginAction('card')}><CreditCard size={15} /> Change card</button><button type="button" className="text-command" onClick={() => beginAction('edit')}><CalendarClock size={15} /> Edit autopay</button>{/setup|waiting/i.test([selectedSchedule.status, selectedSchedule.paymentSetup].join(' ')) ? <button type="button" className="danger-text-command" onClick={() => beginAction('delete')}><Trash2 size={15} /> Delete setup</button> : <button type="button" className="danger-text-command" onClick={() => beginAction('remove')}><Trash2 size={15} /> Remove autopay</button>}</div></> : null}
           {paymentAction && paymentDraft ? <Suspense fallback={<div className="workspace-loading"><span /><strong>Opening payment action</strong></div>}><CustomerPaymentActionPanel action={paymentAction} draft={paymentDraft} customer={draft} selectedSchedule={selectedSchedule} availableVehicles={availableVehicles} dueTotal={selectedDueTotal} working={working} generatedUrl={generatedUrl} onDraft={setPaymentDraft} onSubmit={runPaymentAction} onClose={() => { setPaymentAction(null); setPaymentDraft(null); setGeneratedUrl(''); }} onCopy={copyGeneratedUrl} /></Suspense> : null}
           <section className="transaction-history"><header><div><span>History</span><strong>Transactions</strong></div><b>{selectedCustomerPayments.length}</b></header>{selectedCustomerPayments.length ? selectedCustomerPayments.map(payment => <article key={payment.id}><span className={`status-line ${statusTone(payment.status)}`} /><div><strong>{money(payment.amount)} | {payment.status || 'Recorded'}</strong><small>{[payment.vehicle, payment.method || payment.provider, dateTime(payment.createdAt || payment.date)].filter(Boolean).join(' | ')}</small></div>{payment.rentalFileId ? <button type="button" className="text-command" onClick={() => onOpenRental(payment.rentalFileId || '')}><FileText size={14} /> File</button> : null}</article>) : <div className="empty-state compact">No transactions are connected to this customer yet.</div>}</section>
         </section> : <Suspense fallback={<div className="workspace-loading"><span /><strong>Opening dues</strong></div>}>

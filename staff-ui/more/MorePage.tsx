@@ -19,29 +19,29 @@ const groups: Array<{ title: string; items: MoreLink[] }> = [
     { id: 'systems', label: 'Systems', detail: 'Stripe, Star, email, storage, GPS, and providers' }
   ] },
   { title: 'Account', items: [
-    { id: 'settings', label: 'Settings', detail: 'Profile, security, company, and sign out' }
+    { id: 'settings', label: 'Settings', detail: 'Profile, security, company, and appearance' }
   ] }
 ];
 
 export function MorePage({ role, theme, onThemeChange, onNavigate, initialSection = '' }: { role: 'owner' | 'manager' | 'mechanic'; theme: 'dark' | 'light'; onThemeChange: (theme: 'dark' | 'light') => void; onNavigate: (workspace: string, recordId?: string) => void; initialSection?: string }) {
-  const ownerBack = <button type="button" className="owner-admin-back" onClick={() => onNavigate('more')} aria-label="Back to Owner admin"><ChevronLeft size={20} strokeWidth={1.8} /></button>;
-  if (role === 'owner' && initialSection === 'dispatch') return <section className="owner-admin-subview"><header className="subview-header">{ownerBack}<div><span>Owner admin</span><strong>Dispatch</strong></div></header><DispatchPage /></section>;
-  if (role === 'owner' && initialSection === 'accounts') return <section className="owner-admin-subview"><header className="subview-header">{ownerBack}<div><span>Owner admin</span><strong>Accounts</strong></div></header><AccountsPage /></section>;
-  if (role === 'owner' && initialSection === 'systems') return <section className="owner-admin-subview"><header className="subview-header">{ownerBack}<div><span>Owner admin</span><strong>Systems</strong></div></header><SystemsPage /></section>;
-  if (role === 'owner' && initialSection === 'settings') return <section className="owner-admin-subview"><header className="subview-header">{ownerBack}<div><span>Owner admin</span><strong>Settings</strong></div></header><SettingsPage role={role} theme={theme} onThemeChange={onThemeChange} onNavigate={workspace => onNavigate(workspace === 'systems' ? 'more' : workspace, workspace === 'systems' ? 'systems' : undefined)} embedded /></section>;
+  const ownerBack = <button type="button" className="owner-admin-back" onClick={() => onNavigate('more')} aria-label="Back to Admin"><ChevronLeft size={20} strokeWidth={1.8} /></button>;
+  if (role === 'owner' && initialSection === 'dispatch') return <section className="owner-admin-subview"><header className="subview-header">{ownerBack}<div><span>Admin</span><strong>Dispatch</strong></div></header><DispatchPage /></section>;
+  if (role === 'owner' && initialSection === 'accounts') return <section className="owner-admin-subview"><header className="subview-header">{ownerBack}<div><span>Admin</span><strong>Accounts</strong></div></header><AccountsPage /></section>;
+  if (role === 'owner' && initialSection === 'systems') return <section className="owner-admin-subview"><header className="subview-header">{ownerBack}<div><span>Admin</span><strong>Systems</strong></div></header><SystemsPage /></section>;
+  if (role === 'owner' && initialSection === 'settings') return <section className="owner-admin-subview"><header className="subview-header">{ownerBack}<div><span>Admin</span><strong>Settings</strong></div></header><SettingsPage role={role} theme={theme} onThemeChange={onThemeChange} onNavigate={workspace => onNavigate(workspace === 'systems' ? 'more' : workspace, workspace === 'systems' ? 'systems' : undefined)} embedded /></section>;
   const visibleGroups = role === 'mechanic'
     ? [{ title: 'Account', items: [{ id: 'settings', label: 'Settings', detail: 'Profile, security, and sign out' }] }]
     : role === 'owner'
-      ? [{ title: 'Owner tools', items: [
+      ? [{ title: 'Administration', items: [
         { id: 'accounts', label: 'Accounts', detail: 'Staff logins, customer accounts, and company access' },
         { id: 'dispatch', label: 'Dispatch', detail: 'Tasks, follow-ups, claims, and ownership' },
         { id: 'systems', label: 'Systems', detail: 'Stripe, Star, email, storage, GPS, and providers' },
-        { id: 'settings', label: 'Settings', detail: 'Security, company, appearance, and sign out' }
+        { id: 'settings', label: 'Settings', detail: 'Security, company, and appearance' }
       ] }]
       : groups.map(group => ({ ...group, items: group.items.filter(item => !['payments', 'accounting', 'systems', 'applications'].includes(item.id)) })).filter(group => group.items.length);
   const openItem = (item: MoreLink) => {
     if (role === 'owner' && (item.id === 'accounts' || item.id === 'dispatch' || item.id === 'systems' || item.id === 'settings')) return onNavigate('more', item.id);
     onNavigate(item.id);
   };
-  return <main className="menu-workspace"><header className="page-heading"><div><span>WheelsonAuto staff</span><h1>{role === 'owner' ? 'Owner admin' : 'More'}</h1><p>{role === 'owner' ? 'Sensitive platform controls and dispatch stay in one owner-only workspace.' : 'Deeper tools stay organized without crowding daily navigation.'}</p></div></header>{visibleGroups.map(group => <section className="menu-group" key={group.title}><h2>{group.title}</h2>{group.items.map(item => <button className="menu-row" key={item.id} onClick={() => openItem(item)}><span><strong>{item.label}</strong><small>{item.detail}</small></span><b aria-hidden="true">›</b></button>)}</section>)}</main>;
+  return <main className="menu-workspace"><header className="page-heading"><div><span>WheelsonAuto staff</span><h1>{role === 'owner' ? 'Admin' : 'More'}</h1><p>{role === 'owner' ? 'Protected platform controls, accounts, and dispatch.' : 'Deeper tools stay organized without crowding daily navigation.'}</p></div></header>{visibleGroups.map(group => <section className="menu-group" key={group.title}><h2>{group.title}</h2>{group.items.map(item => <button className="menu-row" key={item.id} onClick={() => openItem(item)}><span><strong>{item.label}</strong><small>{item.detail}</small></span><b aria-hidden="true">›</b></button>)}</section>)}{role === 'owner' ? <a className="admin-logout" href="/logout">Log out</a> : null}</main>;
 }
