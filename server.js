@@ -424,7 +424,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260827-autopay-frequency-repair-374';
+const ASSET_VERSION = 'platform-20260827-stripe-success-authority-375';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -19880,49 +19880,86 @@ function assertRecurringChargeAllowed(data, recurring, payload, provider) {
 function finalizeStripeMigrationAfterPaid(recurring, payment, paymentAtIso) {
   const migration = stripeMigration.migrationRecord(recurring);
   const billingPeriodKey = recurringBillingPeriodKey(recurring, payment.scheduledDueDate);
-  if (!stripeMigration.hasCloverSource(recurring)) {
-    return stripeMigrationPatch(recurring, stripeMigration.STATES.STRIPE_ACTIVE, {
+  const paymentIntentId = String(payment.stripePaymentIntentId || '').trim();
+  try {
+    if (!stripeMigration.hasCloverSource(recurring)) {
+      return {
+        ...stripeMigrationPatch(recurring, stripeMigration.STATES.STRIPE_ACTIVE, {
+          at: paymentAtIso,
+          lastBillingPeriodKey: billingPeriodKey,
+          note: 'Stripe payment recorded.'
+        }),
+        stripeMigrationReconciliationRequired: false,
+        stripeMigrationReconciliationReason: ''
+      };
+    }
+    if (migration.state !== stripeMigration.STATES.FIRST_STRIPE_CHARGE_PENDING) {
+      return {
+        ...stripeMigrationPatch(recurring, migration.state, {
+          at: paymentAtIso,
+          lastBillingPeriodKey: billingPeriodKey,
+          note: 'Stripe payment recorded.'
+        }),
+        stripeMigrationReconciliationRequired: false,
+        stripeMigrationReconciliationReason: ''
+      };
+    }
+    const passed = stripeMigration.transition(recurring, stripeMigration.STATES.FIRST_STRIPE_CHARGE_PASSED, {
       at: paymentAtIso,
+      firstStripeChargeAt: paymentAtIso,
+      firstStripePaymentIntentId: paymentIntentId,
       lastBillingPeriodKey: billingPeriodKey,
-      note: 'Stripe payment recorded.'
+      note: 'First protected Stripe charge passed.'
     });
-  }
-  if (migration.state !== stripeMigration.STATES.FIRST_STRIPE_CHARGE_PENDING) {
-    return stripeMigrationPatch(recurring, migration.state, {
+    const disabled = stripeMigration.transition({ ...recurring, stripeMigration: passed }, stripeMigration.STATES.CLOVER_DISABLED, {
       at: paymentAtIso,
+      firstStripeChargeAt: paymentAtIso,
+      firstStripePaymentIntentId: paymentIntentId,
+      cloverDisabledAt: paymentAtIso,
+      cloverDisabledBy: migration.cloverStoppedConfirmedBy || 'Owner-confirmed cutover',
       lastBillingPeriodKey: billingPeriodKey,
-      note: 'Stripe payment recorded.'
+      note: 'First Stripe charge passed after owner-confirmed Clover stop.'
     });
+    return {
+      stripeMigration: disabled,
+      stripeMigrationStatus: stripeMigration.stateLabel(disabled.state),
+      stripeCutoverDate: disabled.cutoverDate || '',
+      stripeCutoverScheduledAt: disabled.cutoverScheduledAt || '',
+      cloverStoppedConfirmedAt: disabled.cloverStoppedConfirmedAt || '',
+      cloverStoppedConfirmedBy: disabled.cloverStoppedConfirmedBy || '',
+      firstStripeChargeAt: disabled.firstStripeChargeAt || '',
+      firstStripePaymentIntentId: disabled.firstStripePaymentIntentId || '',
+      cloverDisabledAt: disabled.cloverDisabledAt || '',
+      cloverDisabledBy: disabled.cloverDisabledBy || '',
+      lastBillingPeriodKey: disabled.lastBillingPeriodKey || '',
+      stripeMigrationReconciliationRequired: false,
+      stripeMigrationReconciliationReason: ''
+    };
+  } catch (error) {
+    if (String(error && error.code || '') !== 'invalid_stripe_migration_transition') throw error;
+    // Stripe is authoritative after it returns a live successful PaymentIntent.
+    // Preserve incomplete legacy Clover audit evidence for staff review without
+    // turning real collected money into a false failed customer payment.
+    const reason = String(error && error.message || error).slice(0, 500);
+    const preserved = {
+      ...migration,
+      firstStripeChargeAt: migration.firstStripeChargeAt || paymentAtIso,
+      firstStripePaymentIntentId: migration.firstStripePaymentIntentId || paymentIntentId,
+      lastBillingPeriodKey: billingPeriodKey || migration.lastBillingPeriodKey || '',
+      history: migration.history.concat({
+        state: migration.state,
+        at: paymentAtIso,
+        note: 'Stripe payment succeeded; incomplete legacy Clover migration evidence was preserved for reconciliation.'
+      }).slice(-30),
+      updatedAt: paymentAtIso
+    };
+    return {
+      ...stripeMigrationRecordPatch(preserved),
+      stripeMigrationReconciliationRequired: true,
+      stripeMigrationReconciliationReason: reason,
+      stripeMigrationReconciliationAt: paymentAtIso
+    };
   }
-  const passed = stripeMigration.transition(recurring, stripeMigration.STATES.FIRST_STRIPE_CHARGE_PASSED, {
-    at: paymentAtIso,
-    firstStripeChargeAt: paymentAtIso,
-    firstStripePaymentIntentId: payment.stripePaymentIntentId || '',
-    lastBillingPeriodKey: billingPeriodKey,
-    note: 'First protected Stripe charge passed.'
-  });
-  const disabled = stripeMigration.transition({ ...recurring, stripeMigration: passed }, stripeMigration.STATES.CLOVER_DISABLED, {
-    at: paymentAtIso,
-    firstStripeChargeAt: paymentAtIso,
-    firstStripePaymentIntentId: payment.stripePaymentIntentId || '',
-    cloverDisabledAt: paymentAtIso,
-    cloverDisabledBy: migration.cloverStoppedConfirmedBy || 'Owner-confirmed cutover',
-    lastBillingPeriodKey: billingPeriodKey,
-    note: 'First Stripe charge passed after owner-confirmed Clover stop.'
-  });
-  return {
-    stripeMigration: disabled,
-    stripeMigrationStatus: stripeMigration.stateLabel(disabled.state),
-    stripeCutoverDate: disabled.cutoverDate || '',
-    stripeCutoverScheduledAt: disabled.cutoverScheduledAt || '',
-    cloverStoppedConfirmedAt: disabled.cloverStoppedConfirmedAt || '',
-    cloverStoppedConfirmedBy: disabled.cloverStoppedConfirmedBy || '',
-    firstStripeChargeAt: disabled.firstStripeChargeAt || '',
-    firstStripePaymentIntentId: disabled.firstStripePaymentIntentId || '',
-    cloverDisabledAt: disabled.cloverDisabledAt || '',
-    cloverDisabledBy: disabled.cloverDisabledBy || '',
-    lastBillingPeriodKey: disabled.lastBillingPeriodKey || ''
-  };
 }
 function wheelsonAutoAutopayEligibility(row, dateKey = localDateKey(), now = new Date()) {
   const status = String(row && row.status || '').toLowerCase();
@@ -20520,16 +20557,40 @@ function saveFailedChargeResult(data, row, payload = {}, err, options = {}) {
     recurringPaymentId: payment.recurringPaymentId
   });
   const migration = stripeMigration.migrationRecord(row);
-  const firstStripeFailurePatch = paymentProvider === 'stripe' && stripeMigration.hasCloverSource(row) && migration.state === stripeMigration.STATES.FIRST_STRIPE_CHARGE_PENDING
-    ? stripeMigrationRecordPatch(stripeMigration.transition(row, stripeMigration.STATES.FIRST_STRIPE_CHARGE_PENDING, {
-        at: stamp,
-        firstStripeChargeFailedAt: stamp,
-        firstStripeChargeFailureCount: attempts,
-        firstStripeChargeFailureIntentId: stripePaymentIntentId,
-        firstStripeChargeFailureError: message,
-        note: 'Protected first Stripe charge failed attempt ' + attempts + '. Clover remains recorded as stopped; Stripe cutover stays pending for retry or owner recovery.'
-      }))
-    : {};
+  let firstStripeFailurePatch = {};
+  if (paymentProvider === 'stripe' && stripeMigration.hasCloverSource(row) && migration.state === stripeMigration.STATES.FIRST_STRIPE_CHARGE_PENDING) {
+    const details = {
+      at: stamp,
+      firstStripeChargeFailedAt: stamp,
+      firstStripeChargeFailureCount: attempts,
+      firstStripeChargeFailureIntentId: stripePaymentIntentId,
+      firstStripeChargeFailureError: message,
+      note: 'Protected first Stripe charge failed attempt ' + attempts + '. Clover remains recorded as stopped; Stripe cutover stays pending for retry or owner recovery.'
+    };
+    try {
+      firstStripeFailurePatch = stripeMigrationRecordPatch(stripeMigration.transition(row, stripeMigration.STATES.FIRST_STRIPE_CHARGE_PENDING, details));
+    } catch (error) {
+      if (String(error && error.code || '') !== 'invalid_stripe_migration_transition') throw error;
+      firstStripeFailurePatch = {
+        ...stripeMigrationRecordPatch({
+          ...migration,
+          firstStripeChargeFailedAt: stamp,
+          firstStripeChargeFailureCount: attempts,
+          firstStripeChargeFailureIntentId: stripePaymentIntentId,
+          firstStripeChargeFailureError: message,
+          history: migration.history.concat({
+            state: migration.state,
+            at: stamp,
+            note: 'Stripe failure recorded while incomplete legacy Clover migration evidence remains queued for reconciliation.'
+          }).slice(-30),
+          updatedAt: stamp
+        }),
+        stripeMigrationReconciliationRequired: true,
+        stripeMigrationReconciliationReason: String(error && error.message || error).slice(0, 500),
+        stripeMigrationReconciliationAt: stamp
+      };
+    }
+  }
   const recurringPatch = options.preserveRecurringState ? {
     lastManualChargeResult: status,
     lastManualChargeError: message,
@@ -20769,7 +20830,7 @@ async function chargeStripeSavedCard(data, recurring, payload = {}) {
   const shouldAdvancePastDue = !additionalManualCharge && scheduledDueKey && scheduledDueKey <= paymentDateKey;
   const resolvedNextRun = String(requestedNextRun || (shouldAdvancePastDue ? nextFutureRecurringDate(recurring, paymentDateKey, scheduledDueKey) : priorNextRun) || priorNextRun).trim();
   const chargeId = stripeObjectId(intent.latest_charge);
-  const payment = {
+  let payment = {
     id: 'stripe-charge-' + (intent.id || Date.now()),
     paymentProvider: 'stripe',
     providerPaymentId: intent.id || '',
@@ -20805,8 +20866,7 @@ async function chargeStripeSavedCard(data, recurring, payload = {}) {
     stripeLivemode: intent.livemode === true,
     stripeIdempotencyKey: idempotencyKey
   };
-  data.payments = Array.isArray(data.payments) ? data.payments : [];
-  if (!data.payments.some(row => row.stripePaymentIntentId === intent.id)) data.payments.unshift(payment);
+  payment = upsertAuthoritativeStripePaidPayment(data, payment).payment;
   if (chargePurpose === 'dues') applySuccessfulPaymentToCustomerDues(data, recurring, payment, amount);
   const attempts = Array.isArray(recurring.paymentAttempts) ? recurring.paymentAttempts.slice() : [];
   if (!attempts.some(row => String(row && row.stripePaymentIntentId || '') === String(intent.id || ''))) attempts.unshift({ id: 'attempt-stripe-charge-' + (intent.id || Date.now()), date: payment.date, customer: payment.customer, amount, result: payment.status, method: payment.method, notes: payment.notes, vehicle: payment.vehicle, vehicleId: payment.vehicleId, vin: payment.vin, plate: payment.plate, tracker: payment.tracker, stripePaymentIntentId: intent.id || '', stripeIdempotencyKey: idempotencyKey, recurringPaymentId: payment.recurringPaymentId });
@@ -21117,7 +21177,7 @@ async function runWheelsonAutoAutopay(options = {}) {
   woaAutopayStatus.fatalError = '';
   const runAt = options.now instanceof Date ? options.now : new Date(options.now || Date.now());
   const dateKey = options.dateKey || localDateKey(runAt);
-  const result = { dateKey, charged: 0, creditCovered: 0, creditApplied: 0, pickupSchedulesRecovered: 0, rapidSchedulesRepaired: 0, reconciled: 0, failed: 0, notFound: 0, authenticationRequired: 0, confirmationPending: 0, providerBlocked: 0, duplicateBlocked: 0, skipped: 0, errors: [] };
+  const result = { dateKey, charged: 0, creditCovered: 0, creditApplied: 0, pickupSchedulesRecovered: 0, rapidSchedulesRepaired: 0, stripeOutcomesReconciled: 0, reconciled: 0, failed: 0, notFound: 0, authenticationRequired: 0, confirmationPending: 0, providerBlocked: 0, duplicateBlocked: 0, skipped: 0, errors: [] };
   let autopayLock = null;
   try {
     autopayLock = await STATE_REPOSITORY.acquireJobLock('wheelsonauto-autopay');
@@ -21130,6 +21190,7 @@ async function runWheelsonAutoAutopay(options = {}) {
     }
     const data = await readData();
     data.recurringPayments = Array.isArray(data.recurringPayments) ? data.recurringPayments : [];
+    result.stripeOutcomesReconciled = reconcileStripePaymentOutcomeContradictions(data);
     result.pickupSchedulesRecovered = repairCompletedPickupAutopayStates(data);
     result.rapidSchedulesRepaired = repairInvalidRapidAutopaySchedules(data, runAt);
     for (const row of data.recurringPayments) {
@@ -21453,6 +21514,7 @@ async function runWheelsonAutoAutopay(options = {}) {
       duplicateBlocked: result.duplicateBlocked,
       pickupSchedulesRecovered: result.pickupSchedulesRecovered,
       rapidSchedulesRepaired: result.rapidSchedulesRepaired,
+      stripeOutcomesReconciled: result.stripeOutcomesReconciled,
       blockedReasons: result.blockedReasons
     }));
     return { ok: result.errors.length === 0, skipped: false, ...result, status: woaAutopayStatus };
@@ -22040,6 +22102,84 @@ function recordStripePaymentReceipt(data, payment = {}) {
     source: 'Stripe signed payment webhook'
   });
 }
+function upsertAuthoritativeStripePaidPayment(data, payment = {}) {
+  const intentId = String(payment.stripePaymentIntentId || payment.providerPaymentId || '').trim();
+  data.payments = Array.isArray(data.payments) ? data.payments : [];
+  if (!intentId) {
+    data.payments.unshift(payment);
+    return { payment, removed: 0 };
+  }
+  const matches = data.payments.filter(row => stripePaymentIntentMatchesRecord(row, intentId));
+  const mutableMatches = matches.filter(row => !/refund|dispute|chargeback|retrieval/i.test(String(row && row.status || '')));
+  const primary = mutableMatches.find(row => stripeMigration.paymentIsPaid(row.status)) || mutableMatches[0] || payment;
+  if (primary !== payment) Object.assign(primary, payment);
+  else if (!mutableMatches.length) data.payments.unshift(primary);
+  let removed = 0;
+  data.payments = data.payments.filter(row => {
+    if (row === primary || !mutableMatches.includes(row)) return true;
+    removed += 1;
+    return false;
+  });
+  return { payment: primary, removed };
+}
+function reconcileStripePaymentOutcomeContradictions(data) {
+  data.payments = Array.isArray(data.payments) ? data.payments : [];
+  data.recurringPayments = Array.isArray(data.recurringPayments) ? data.recurringPayments : [];
+  const groups = new Map();
+  data.payments.forEach(payment => {
+    const intentId = String(payment && (payment.stripePaymentIntentId || payment.providerPaymentId) || '').trim();
+    if (!intentId || !/^pi_/i.test(intentId)) return;
+    const group = groups.get(intentId) || [];
+    group.push(payment);
+    groups.set(intentId, group);
+  });
+  let reconciled = 0;
+  groups.forEach((payments, intentId) => {
+    const paid = payments.find(payment => stripeMigration.paymentIsPaid(payment.status));
+    const contradictions = paid ? payments.filter(payment => payment !== paid && /fail|declin|unpaid|retry|contact customer/i.test(String(payment.status || ''))) : [];
+    if (!paid || !contradictions.length) return;
+    const contradictionIds = new Set(contradictions.map(payment => payment.id).filter(Boolean));
+    data.payments = data.payments.filter(payment => !contradictions.includes(payment));
+    const recurringId = String(paid.recurringPaymentId || contradictions.find(payment => payment.recurringPaymentId) && contradictions.find(payment => payment.recurringPaymentId).recurringPaymentId || '');
+    const recurring = data.recurringPayments.find(row => String(row && (row.id || row.cloverSubscriptionId) || '') === recurringId);
+    if (recurring) {
+      const rapid = rapidAutopayIntervalMs(recurring) > 0;
+      const attempts = (Array.isArray(recurring.paymentAttempts) ? recurring.paymentAttempts : []).filter(attempt => {
+        if (String(attempt && attempt.stripePaymentIntentId || '') !== intentId) return true;
+        return stripeMigration.paymentIsPaid(attempt.result || attempt.status);
+      });
+      const settledAttempt = {
+        ...(recurring.stripeChargeAttempt || {}),
+        status: 'succeeded',
+        paymentIntentId: intentId,
+        succeededAt: paid.createdAt || new Date().toISOString(),
+        source: 'Authoritative paid Stripe reconciliation'
+      };
+      updateRecurringChargeState(data, recurring.id || recurring.cloverSubscriptionId, {
+        status: rapid ? 'Rapid test passed' : 'Active',
+        tone: 'good',
+        retryCount: 0,
+        failedAttempts: 0,
+        autoChargeEnabled: rapid ? false : recurring.autoChargeEnabled,
+        rapidTestCompletedAt: rapid ? (recurring.rapidTestCompletedAt || paid.createdAt || new Date().toISOString()) : recurring.rapidTestCompletedAt,
+        rapidTestPaymentId: rapid ? (recurring.rapidTestPaymentId || paid.id || intentId) : recurring.rapidTestPaymentId,
+        lastStripePaymentIntentId: intentId,
+        lastPaymentResult: paid.status || 'Paid',
+        lastPaymentNote: appendUniqueNote(paid.notes || '', 'A contradictory local failure for this successful Stripe PaymentIntent was removed.'),
+        lastAutoChargeResult: rapid ? 'Paid - rapid Stripe test complete' : 'Paid',
+        lastAutoChargeError: '',
+        stripeChargeAttempt: settledAttempt,
+        paymentAttempts: attempts,
+        stripeOutcomeReconciledAt: new Date().toISOString(),
+        stripeOutcomeReconciledPaymentIntentId: intentId,
+        stripeOutcomeReconciledFailureIds: Array.from(contradictionIds)
+      });
+    }
+    paid.notes = appendUniqueNote(paid.notes || '', 'WheelsonAuto removed a contradictory local failure for the same successful Stripe PaymentIntent.');
+    reconciled += contradictions.length;
+  });
+  return reconciled;
+}
 function stripePaymentIntentMatchesRecord(payment = {}, intentId = '') {
   const target = String(intentId || '').trim();
   if (!target) return false;
@@ -22052,11 +22192,10 @@ function duplicateStripeBillingPeriodPayment(data, recurring, scheduledDueKey, i
 }
 function stripeWebhookChargeAllowed(recurring, scheduledDueKey) {
   const currentProvider = normalizedPaymentProvider(recurring && (recurring.paymentProvider || recurring.provider) || 'clover');
-  const migrationDateKey = rapidAutopayIntervalMs(recurring)
-    ? localDateKey(new Date(validRecurringInstant(scheduledDueKey) || Date.now()))
-    : scheduledDueKey;
-  return currentProvider === 'stripe'
-    && stripeMigration.automaticChargeAllowed(recurring, 'stripe', migrationDateKey);
+  // Match the live charge path: once this exact plan is assigned to Stripe,
+  // historical Clover identifiers remain audit evidence and cannot relabel a
+  // signed successful Stripe result as an unexpected-provider failure.
+  return currentProvider === 'stripe';
 }
 function applyStripePaymentIntentSucceeded(data, intent = {}) {
   const intentId = stripeObjectId(intent);
@@ -22078,7 +22217,8 @@ function applyStripePaymentIntentSucceeded(data, intent = {}) {
   const receivedCents = Number(intent.amount_received || intent.amount || 0);
   const amount = receivedCents > 0 ? receivedCents / 100 : Number(recurring.amount || 0);
   data.payments = Array.isArray(data.payments) ? data.payments : [];
-  const existing = data.payments.find(row => stripePaymentIntentMatchesRecord(row, intentId));
+  const matchingPayments = data.payments.filter(row => stripePaymentIntentMatchesRecord(row, intentId));
+  const existing = matchingPayments.find(row => stripeMigration.paymentIsPaid(row.status)) || matchingPayments[0];
   const alreadyPaid = !!(existing && stripeMigration.paymentIsPaid(existing.status));
   const duplicateBillingPeriodPayment = alreadyPaid || claim.additionalManualCharge ? null : duplicateStripeBillingPeriodPayment(data, recurring, scheduledDueKey, intentId);
   const duplicateBillingPeriod = !!duplicateBillingPeriodPayment;
@@ -22096,7 +22236,7 @@ function applyStripePaymentIntentSucceeded(data, intent = {}) {
     : providerMigrationReview
       ? 'Paid - provider migration review'
       : 'Paid';
-  const payment = {
+  let payment = {
     ...(existing || { id: 'stripe-charge-' + intentId }),
     paymentProvider: 'stripe',
     providerPaymentId: intentId,
@@ -22141,8 +22281,7 @@ function applyStripePaymentIntentSucceeded(data, intent = {}) {
     providerAtWebhook: normalizedPaymentProvider(recurring.paymentProvider || recurring.provider || 'clover'),
     stripeMigrationStateAtWebhook: stripeMigration.migrationRecord(recurring).state
   };
-  if (existing) Object.assign(existing, payment);
-  else data.payments.unshift(payment);
+  payment = upsertAuthoritativeStripePaidPayment(data, payment).payment;
   if (claim.chargePurpose === 'dues') applySuccessfulPaymentToCustomerDues(data, recurring, payment, amount);
   const attempts = Array.isArray(recurring.paymentAttempts) ? recurring.paymentAttempts.slice() : [];
   if (!attempts.some(row => String(row && row.stripePaymentIntentId || '') === intentId)) attempts.unshift({

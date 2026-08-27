@@ -202,6 +202,13 @@ async function main() {
       stripeLivemode: false,
       cardSavedAt: new Date().toISOString(),
       paymentSetup: 'Card saved through WheelsonAuto',
+      cloverPaymentSource: 'historical-clover-card-reference',
+      stripeMigration: {
+        state: 'first_stripe_charge_pending',
+        cutoverDate: today,
+        cloverStoppedConfirmedAt: new Date().toISOString(),
+        cloverStoppedConfirmedBy: 'Autopay regression owner'
+      },
       organizationId: 'org-wheelsonauto'
     }, {
       id: 'rec-reschedule-1',
@@ -262,7 +269,7 @@ async function main() {
     let cookie = await ownerCookie(server);
 
     const firstRun = await request(server, 'POST', '/api/woa-autopay/run', { cookie, json: {} });
-    assert(firstRun.status === 207 && firstRun.json.failed === 1, 'The first known Stripe decline must be recorded as one failed attempt.');
+    assert(firstRun.status === 207 && firstRun.json.failed === 1, 'The first known Stripe decline must be recorded as one failed attempt. Got ' + JSON.stringify({ status: firstRun.status, body: firstRun.json }));
     assert(chargeRequests.length === 1, 'The first autopay run must submit one Stripe request.');
     const firstKey = chargeRequests[0].idempotencyKey;
     assert(firstKey === 'woa-stripe-auto-rec-restart-1-' + today + '-22900-attempt-1', 'Attempt one must retain the original production idempotency key across deploys and restarts.');
@@ -356,6 +363,13 @@ async function main() {
       stripeLivemode: false,
       cardSavedAt: new Date().toISOString(),
       paymentSetup: 'Card saved through WheelsonAuto',
+      cloverPaymentSource: 'historical-rapid-clover-card-reference',
+      stripeMigration: {
+        state: 'first_stripe_charge_pending',
+        cutoverDate: today,
+        cloverStoppedConfirmedAt: new Date().toISOString(),
+        cloverStoppedConfirmedBy: 'Autopay regression owner'
+      },
       organizationId: 'org-wheelsonauto'
     });
     saved.applications.push({
@@ -410,16 +424,52 @@ async function main() {
     assert(Date.parse(rapidRow.nextRun) > Date.parse(rapidDueAt) && rapidRow.lastAutoChargeOccurrenceKey === rapidDueAt, 'A successful rapid charge must advance beyond the processed minute and preserve the exact occurrence.');
     assert(rapidRow.customerPortalCreditBalance === 50, 'A rapid Stripe verification must not consume customer account credit instead of testing the saved card.');
     assert(rapidRow.lastAutoChargeResult === 'Paid - rapid Stripe test complete', 'A rapid success must leave an explicit provider-test result on the recurring plan.');
+    assert(rapidRow.stripeMigrationReconciliationRequired === true, 'Incomplete historical Clover audit fields may require reconciliation, but must never relabel a successful Stripe charge as failed.');
+    const rapidPaid = saved.payments.find(payment => payment.recurringPaymentId === 'rec-rapid-minute-1' && payment.status === 'Paid');
+    assert(rapidPaid && rapidPaid.stripePaymentIntentId, 'The rapid Stripe verification must persist one authoritative paid PaymentIntent.');
+    assert(saved.payments.filter(payment => payment.recurringPaymentId === 'rec-rapid-minute-1').length === 1, 'A successful provider result must not create a contradictory failed transaction.');
+
+    saved.payments.unshift({
+      id: 'legacy-contradictory-failure',
+      recurringPaymentId: 'rec-rapid-minute-1',
+      customer: 'Rapid Minute Customer',
+      vehicle: '1999 test test',
+      amount: 1,
+      status: '1x failed - retrying',
+      paymentProvider: 'stripe',
+      stripePaymentIntentId: rapidPaid.stripePaymentIntentId,
+      providerPaymentId: rapidPaid.stripePaymentIntentId,
+      source: 'Legacy post-success failure bug',
+      createdAt: rapidPaid.createdAt
+    });
+    Object.assign(rapidRow, {
+      status: 'Rapid test failed',
+      tone: 'warn',
+      autoChargeEnabled: true,
+      retryCount: 1,
+      failedAttempts: 1,
+      lastAutoChargeResult: 'Rapid test failed',
+      lastAutoChargeError: 'Legacy post-success bookkeeping failure',
+      paymentAttempts: [{
+        id: 'legacy-contradictory-attempt',
+        result: '1x failed - retrying',
+        stripePaymentIntentId: rapidPaid.stripePaymentIntentId,
+        recurringPaymentId: 'rec-rapid-minute-1'
+      }].concat(rapidRow.paymentAttempts || [])
+    });
+    await fs.writeFile(path.join(dataDir, 'data.json'), JSON.stringify(saved, null, 2));
 
     server = loadServer();
     cookie = await ownerCookie(server);
     const rapidRestartRun = await request(server, 'POST', '/api/woa-autopay/run', { cookie, json: {} });
-    assert(rapidRestartRun.status === 200 && rapidRestartRun.json.charged === 0 && chargeRequests.length === 3, 'Restarting after a rapid success must not charge the same minute twice.');
+    assert(rapidRestartRun.status === 200 && rapidRestartRun.json.charged === 0 && rapidRestartRun.json.stripeOutcomesReconciled === 1 && chargeRequests.length === 3, 'Restarting after a rapid success must reconcile a historical paid/failed contradiction without charging the same minute twice.');
     saved = await readSaved(dataDir);
     const rapidRestartRow = saved.recurringPayments.find(row => row.id === 'rec-rapid-minute-1');
     assert(rapidRestartRow.autoChargeEnabled === false && rapidRestartRow.status === 'Rapid test passed', 'Completed-pickup recovery must not reactivate a one-shot rapid test after its provider result.');
+    assert(saved.payments.filter(payment => payment.stripePaymentIntentId === rapidPaid.stripePaymentIntentId).length === 1, 'Paid Stripe reconciliation must leave exactly one authoritative transaction for a PaymentIntent.');
+    assert(saved.payments.find(payment => payment.stripePaymentIntentId === rapidPaid.stripePaymentIntentId).status === 'Paid', 'The authoritative Stripe PaymentIntent must remain paid after contradiction cleanup.');
 
-    console.log('Autopay restart check passed: Stripe attempt keys, one-hour delay, safe schedule edits, one-shot rapid provider testing, retry success, and restart recovery are protected.');
+    console.log('Autopay restart check passed: all schedule cadences, Stripe success authority, contradiction cleanup, attempt keys, one-hour delay, one-shot rapid provider testing, retry success, and restart recovery are protected.');
   } finally {
     global.fetch = originalFetch;
     await fs.rm(dataDir, { recursive: true, force: true });
