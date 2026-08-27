@@ -2,7 +2,9 @@ import { lazy, Suspense, type FormEvent, useEffect, useMemo, useState } from 're
 import {
   CalendarClock,
   CircleDollarSign,
+  Copy,
   CreditCard,
+  ExternalLink,
   FileText,
   Plus,
   Send,
@@ -33,18 +35,35 @@ import type { ClaimRecord, CustomerRecord, PaymentRecord, RecurringPaymentRecord
 import { canonicalCustomerRecords, dateTime, money, normalized, shortDate, statusTone, wordsMatch } from '../ui';
 import { useSwipeTabs } from '../useSwipeTabs';
 import { useViewedRecords } from '../useViewedRecords';
-import type { ActionDraft, PaymentAction } from './CustomerPaymentActionPanel';
 
 const CustomerDuesPanel = lazy(() => import('./CustomerDuesPanel').then(module => ({ default: module.CustomerDuesPanel })));
 const CustomerProfilePanel = lazy(() => import('./CustomerProfilePanel').then(module => ({ default: module.CustomerProfilePanel })));
 const CustomerTransactionsPanel = lazy(() => import('./CustomerTransactionsPanel').then(module => ({ default: module.CustomerTransactionsPanel })));
-const CustomerPaymentActionPanel = lazy(() => import('./CustomerPaymentActionPanel').then(module => ({ default: module.CustomerPaymentActionPanel })));
 
 type Filter = 'active' | 'dues' | 'history' | 'transactions';
 type DetailTab = 'customer' | 'payments' | 'dues';
+type PaymentAction = 'new' | 'charge' | 'result' | 'link' | 'card' | 'edit' | 'remove' | 'delete' | null;
 
 const filters: readonly Filter[] = ['active', 'dues', 'history', 'transactions'];
 const filterLabels: Record<Filter, string> = { active: 'Active', dues: 'Tolls / violations & dues', history: 'History', transactions: 'Transactions' };
+
+type ActionDraft = {
+  amount: string;
+  frequency: string;
+  nextRun: string;
+  chargeTime: string;
+  status: string;
+  result: string;
+  method: string;
+  reason: string;
+  note: string;
+  provider: 'stripe' | 'clover';
+  vehicleId: string;
+  autoChargeEnabled: boolean;
+  emailLink: boolean;
+  confirmed: boolean;
+  operationId: string;
+};
 
 function nowLocalInput() {
   const date = new Date();
@@ -83,6 +102,13 @@ function dateTimeInput(value?: string) {
   return local.toISOString().slice(0, 16);
 }
 
+function nextRapidInput(frequency: string) {
+  const date = new Date(Date.now() + (/hour/i.test(frequency) ? 60 : 1) * 60_000);
+  date.setSeconds(0, 0);
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 16);
+}
+
 function scheduleValue(frequency: string, value: string) {
   if (!rapidFrequency(frequency)) return dateInput(value);
   const date = new Date(value);
@@ -105,7 +131,6 @@ function actionDraft(row: RecurringPaymentRecord | null, customer: CustomerRecor
     result: 'Paid',
     method: 'Paid outside app',
     reason: action === 'link' ? 'Payment needs attention' : action === 'card' ? 'Change card on file' : '',
-    chargePurpose: 'one_time',
     note: '',
     provider,
     vehicleId: row?.vehicleId || customer.vehicleId || '',
@@ -114,24 +139,6 @@ function actionDraft(row: RecurringPaymentRecord | null, customer: CustomerRecor
     confirmed: false,
     operationId: operationId()
   };
-}
-
-function cardDisplay(row: RecurringPaymentRecord) {
-  const brand = String(row.cardLabel || '').trim();
-  const last4 = String(row.cardLast4 || '').trim();
-  if (brand && last4) return `${brand} ending ${last4}`;
-  if (last4) return `Card ending ${last4}`;
-  return brand || row.paymentSetup || 'Setup needed';
-}
-
-function claimBalance(row: ClaimRecord) {
-  return Math.max(0, Number(row.remainingAmount ?? row.amount ?? 0));
-}
-
-function failedPaymentBalance(row: PaymentRecord) {
-  if (row.createsDue === false || row.balanceEffect === 'none') return 0;
-  if (/manual saved-card charge|one-time saved-card charge/i.test(String(row.source || ''))) return 0;
-  return Math.max(0, Number(row.balanceRemaining ?? row.amount ?? 0));
 }
 
 export function CustomersPage({ onNavigate, onOpenRental }: { onNavigate: (workspace: string, recordId?: string) => void; onOpenRental: (rentalId: string) => void }) {
@@ -144,7 +151,6 @@ export function CustomersPage({ onNavigate, onOpenRental }: { onNavigate: (works
   const [selectedAutopayId, setSelectedAutopayId] = useState('');
   const [draft, setDraft] = useState<CustomerRecord | null>(null);
   const [detailTab, setDetailTab] = useState<DetailTab>('payments');
-  const [detailTrail, setDetailTrail] = useState<DetailTab[]>([]);
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<Filter>('active');
   const [loading, setLoading] = useState(true);
@@ -201,14 +207,14 @@ export function CustomersPage({ onNavigate, onOpenRental }: { onNavigate: (works
 
   const viewed = useViewedRecords('customers', customerRows, !loading);
   const paymentCountFor = (customer: CustomerRecord) => payments.filter(row => sameCustomer(row, customer)).length + autopay.filter(row => sameCustomer(row, customer)).length;
-  const paymentAttentionFor = (customer: CustomerRecord) => autopay.filter(row => sameCustomer(row, customer) && /failed|declined|not found|contact|past due/i.test([row.status, row.paymentSetup].join(' '))).length + payments.filter(row => sameCustomer(row, customer) && /failed|declined|unpaid|past due/i.test(row.status || '') && failedPaymentBalance(row) > 0).length;
-  const openClaimsFor = (customer: CustomerRecord) => claims.filter(row => sameClaim(row, customer) && !/paid|closed|resolved|dismissed|cancelled/i.test(row.status || '') && claimBalance(row) > 0);
+  const paymentAttentionFor = (customer: CustomerRecord) => autopay.filter(row => sameCustomer(row, customer) && /failed|declined|not found|contact|past due/i.test([row.status, row.paymentSetup].join(' '))).length + payments.filter(row => sameCustomer(row, customer) && /failed|declined|unpaid|past due/i.test(row.status || '')).length;
+  const openClaimsFor = (customer: CustomerRecord) => claims.filter(row => sameClaim(row, customer) && !/paid|closed|resolved|dismissed|cancelled/i.test(row.status || '') && Number(row.amount || 0) > 0);
   const hasAssignedVehicle = (customer: CustomerRecord) => vehicles.some(vehicle => !/removed|retired|sold/i.test(vehicle.status || '') && normalized(vehicle.currentCustomer) === normalized(customer.name)) || !!(customer.activeRentalFileId && customer.vehicleId && vehicles.some(vehicle => vehicle.id === customer.vehicleId && !/removed|retired|sold/i.test(vehicle.status || '')));
   const dueAmountFor = (customer: CustomerRecord) => {
-    const failedPayments = payments.filter(row => sameCustomer(row, customer) && /failed|declined|unpaid|past due/i.test(row.status || '')).reduce((sum, row) => sum + failedPaymentBalance(row), 0);
+    const failedPayments = payments.filter(row => sameCustomer(row, customer) && /failed|declined|unpaid|past due/i.test(row.status || '')).reduce((sum, row) => sum + Number(row.amount || 0), 0);
     const failedSchedules = autopay.filter(row => sameCustomer(row, customer) && /failed|declined|not found|contact|past due/i.test([row.status, row.paymentSetup].join(' ')));
-    const scheduleAmount = failedPayments ? 0 : failedSchedules.reduce((sum, row) => sum + Math.max(0, Number(row.outstandingBalance ?? row.amount ?? 0)), 0);
-    return openClaimsFor(customer).reduce((sum, row) => sum + claimBalance(row), 0) + failedPayments + scheduleAmount;
+    const scheduleAmount = failedPayments ? 0 : failedSchedules.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+    return openClaimsFor(customer).reduce((sum, row) => sum + Number(row.amount || 0), 0) + failedPayments + scheduleAmount;
   };
   const hasDues = (customer: CustomerRecord) => paymentAttentionFor(customer) > 0 || openClaimsFor(customer).length > 0;
   const visible = useMemo(() => customerRows.filter(customer => {
@@ -228,8 +234,8 @@ export function CustomersPage({ onNavigate, onOpenRental }: { onNavigate: (works
   const selectedCustomerPayments = useMemo(() => draft ? payments.filter(row => sameCustomer(row, draft)).sort((a, b) => (Date.parse(b.createdAt || b.date || '') || 0) - (Date.parse(a.createdAt || a.date || '') || 0)) : [], [draft, payments]);
   const selectedCustomerAutopay = useMemo(() => draft ? autopay.filter(row => sameCustomer(row, draft)).sort((a, b) => Number(/failed|declined|not found|review|paused/i.test(b.status || '')) - Number(/failed|declined|not found|review|paused/i.test(a.status || '')) || String(a.nextRun || '').localeCompare(String(b.nextRun || ''))) : [], [draft, autopay]);
   const selectedClaims = useMemo(() => draft ? claims.filter(row => sameClaim(row, draft)).sort((a, b) => (Date.parse(b.updatedAt || b.createdAt || '') || 0) - (Date.parse(a.updatedAt || a.createdAt || '') || 0)) : [], [claims, draft]);
-  const selectedOpenClaims = selectedClaims.filter(row => !/paid|closed|resolved|dismissed|cancelled|removed/i.test(row.status || '') && claimBalance(row) > 0);
-  const selectedFailedPayments = selectedCustomerPayments.filter(row => /failed|declined|unpaid|past due/i.test(row.status || '') && failedPaymentBalance(row) > 0);
+  const selectedOpenClaims = selectedClaims.filter(row => !/paid|closed|resolved|dismissed|cancelled|removed/i.test(row.status || '') && Number(row.amount || 0) > 0);
+  const selectedFailedPayments = selectedCustomerPayments.filter(row => /failed|declined|unpaid|past due/i.test(row.status || ''));
   const selectedDueTotal = draft ? dueAmountFor(draft) : 0;
   const selectedSchedule = selectedCustomerAutopay.find(row => row.id === selectedAutopayId) || selectedCustomerAutopay[0] || null;
 
@@ -239,27 +245,14 @@ export function CustomersPage({ onNavigate, onOpenRental }: { onNavigate: (works
   }, [selectedCustomerAutopay, selectedAutopayId]);
 
   const closeDetail = () => {
-    setDraft(null); setSelectedId(''); setCreatingCustomer(false); setDetailTrail([]); setPaymentAction(null); setPaymentDraft(null); setGeneratedUrl(''); setArchiveConfirmed(false); setError(''); setNotice('');
-  };
-  const navigateDetail = (next: DetailTab) => {
-    if (next === detailTab) return;
-    setDetailTrail(current => [...current, detailTab]);
-    setDetailTab(next); setPaymentAction(null); setPaymentDraft(null); setGeneratedUrl('');
-  };
-  const backDetail = () => {
-    if (paymentAction) { setPaymentAction(null); setPaymentDraft(null); setGeneratedUrl(''); return; }
-    if (detailTrail.length) {
-      const previous = detailTrail[detailTrail.length - 1];
-      setDetailTrail(current => current.slice(0, -1)); setDetailTab(previous); return;
-    }
-    closeDetail();
+    setDraft(null); setSelectedId(''); setCreatingCustomer(false); setPaymentAction(null); setPaymentDraft(null); setGeneratedUrl(''); setArchiveConfirmed(false); setError(''); setNotice('');
   };
   const openCustomer = (customer: CustomerRecord) => {
     viewed.markViewed(customer.id);
-    setSelectedId(customer.id); setDraft({ ...customer }); setCreatingCustomer(false); setAssignmentVehicleId(customer.vehicleId || ''); setDetailTab('payments'); setDetailTrail([]); setPaymentAction(null); setPaymentDraft(null); setArchiveEndAt(nowLocalInput()); setArchiveConfirmed(false); setError(''); setNotice('');
+    setSelectedId(customer.id); setDraft({ ...customer }); setCreatingCustomer(false); setAssignmentVehicleId(customer.vehicleId || ''); setDetailTab('payments'); setPaymentAction(null); setPaymentDraft(null); setArchiveEndAt(nowLocalInput()); setArchiveConfirmed(false); setError(''); setNotice('');
   };
   const openNewCustomer = () => {
-    setSelectedId(''); setCreatingCustomer(true); setDraft({ id: '', name: '', phone: '', email: '', address: '', city: '', state: 'NJ', postalCode: '', notes: '', status: 'Setup', stage: 'No vehicle assigned' }); setDetailTab('customer'); setDetailTrail([]); setPaymentAction(null); setError(''); setNotice('');
+    setSelectedId(''); setCreatingCustomer(true); setDraft({ id: '', name: '', phone: '', email: '', address: '', city: '', state: 'NJ', postalCode: '', notes: '', status: 'Setup', stage: 'No vehicle assigned' }); setDetailTab('customer'); setPaymentAction(null); setError(''); setNotice('');
   };
   const beginAction = (action: PaymentAction) => {
     if (!draft) return;
@@ -325,10 +318,9 @@ export function CustomersPage({ onNavigate, onOpenRental }: { onNavigate: (works
       } else {
         if (!selectedSchedule) throw new Error('Choose the exact recurring plan first.');
         if (paymentAction === 'charge') {
-          if (paymentDraft.chargePurpose === 'dues' && selectedDueTotal <= 0) throw new Error('This customer has no open balance to pay. Use a one-time charge instead.');
-          if (paymentDraft.chargePurpose === 'dues' && amount > selectedDueTotal + 0.001) throw new Error(`The dues payment cannot exceed the current ${money(selectedDueTotal)} balance.`);
-          const result = await chargeSavedCard({ recurringPaymentId: selectedSchedule.id, amount, chargePurpose: paymentDraft.chargePurpose, reason: paymentDraft.reason, note: paymentDraft.note, operationId: paymentDraft.operationId, allowAdditionalManualCharge: true });
-          setNotice(paymentDraft.chargePurpose === 'dues' ? `${money(result.payment.dueAppliedAmount ?? result.payment.amount)} applied to ${draft.name}'s dues.` : `${money(result.payment.amount)} one-time charge recorded for ${result.payment.customer || draft.name}.`);
+          const nextRun = paymentDraft.nextRun ? scheduleValue(paymentDraft.frequency, paymentDraft.nextRun) : '';
+          const result = await chargeSavedCard({ recurringPaymentId: selectedSchedule.id, amount, nextRun, note: paymentDraft.note });
+          setNotice(`${money(result.payment.amount)} ${result.payment.status || 'payment'} recorded for ${result.payment.customer || draft.name}.`);
         }
         if (paymentAction === 'result') {
           const nextRun = paymentDraft.nextRun ? scheduleValue(paymentDraft.frequency, paymentDraft.nextRun) : '';
@@ -381,6 +373,28 @@ export function CustomersPage({ onNavigate, onOpenRental }: { onNavigate: (works
   const assignmentTarget = assignmentVehicles.find(vehicle => vehicle.id === assignmentVehicleId);
   const replacesExistingCustomer = !!(assignmentTarget?.currentCustomer && normalized(assignmentTarget.currentCustomer) !== normalized(draft?.name));
 
+  const renderPaymentAction = () => {
+    if (!paymentAction || !paymentDraft) return null;
+    const setupAction = paymentAction === 'new' || paymentAction === 'card';
+    return <form className="payment-action-sheet" onSubmit={runPaymentAction}>
+      <header><div><span>Admin confirmation</span><strong>{paymentAction === 'new' ? 'Add autopay' : paymentAction === 'charge' ? 'Charge saved card' : paymentAction === 'result' ? 'Record payment result' : paymentAction === 'link' ? 'Send payment link' : paymentAction === 'card' ? 'Change card on file' : paymentAction === 'edit' ? 'Edit autopay' : paymentAction === 'delete' ? 'Delete pending setup' : 'Remove autopay'}</strong></div><button type="button" className="text-command" onClick={() => { setPaymentAction(null); setPaymentDraft(null); setGeneratedUrl(''); }}>Close</button></header>
+      {generatedUrl ? <section className="generated-link"><span>Secure link ready</span><input value={generatedUrl} readOnly /><div><button type="button" className="secondary-command compact" onClick={copyGeneratedUrl}><Copy size={14} /> Copy</button><a className="primary-command compact" href={generatedUrl} target="_blank" rel="noreferrer"><ExternalLink size={14} /> Open</a></div></section> : null}
+      {!generatedUrl ? <div className="form-grid compact-action-form">
+        {paymentAction === 'new' ? <label className="span-2">Exact vehicle<select required value={paymentDraft.vehicleId} onChange={event => setPaymentDraft({ ...paymentDraft, vehicleId: event.target.value })}><option value="">Choose vehicle</option>{availableVehicles.map(vehicle => <option key={vehicle.id} value={vehicle.id}>{[vehicleTitle(vehicle), vehicle.vin && `VIN ${vehicle.vin}`, vehicle.plate || vehicle.stock, vehicle.status].filter(Boolean).join(' | ')}</option>)}</select></label> : null}
+        {!['remove', 'delete', 'card'].includes(paymentAction) ? <label>Amount<input type="number" min="0.01" step="0.01" value={paymentDraft.amount} onChange={event => setPaymentDraft({ ...paymentDraft, amount: event.target.value })} /></label> : null}
+        {paymentAction === 'result' ? <><label>Result<select value={paymentDraft.result} onChange={event => setPaymentDraft({ ...paymentDraft, result: event.target.value })}><option>Paid</option><option>Pending</option><option>1x failed - retrying</option><option>2x failed - contact customer</option><option>Payment not found - check provider</option></select></label><label>Method<select value={paymentDraft.method} onChange={event => setPaymentDraft({ ...paymentDraft, method: event.target.value })}><option>Paid outside app</option><option>Stripe manual charge</option><option>Clover manual charge</option><option>Cash</option><option>Other</option></select></label></> : null}
+        {paymentAction === 'link' ? <label>Reason<select value={paymentDraft.reason} onChange={event => setPaymentDraft({ ...paymentDraft, reason: event.target.value })}><option>Payment needs attention</option><option>Catch-up payment</option><option>One-time payment</option><option>Partial payment</option></select></label> : null}
+        {paymentAction === 'card' ? <label>Secure provider<select value={paymentDraft.provider} onChange={event => setPaymentDraft({ ...paymentDraft, provider: event.target.value as 'stripe' | 'clover' })}><option value="stripe">Stripe</option><option value="clover">Clover</option></select></label> : null}
+        {['new', 'edit'].includes(paymentAction) ? <><label>Frequency<select value={paymentDraft.frequency} onChange={event => { const frequency = event.target.value; const rapid = rapidFrequency(frequency); setPaymentDraft({ ...paymentDraft, frequency, nextRun: rapid ? nextRapidInput(frequency) : dateInput(paymentDraft.nextRun) || dateInput(new Date().toISOString()), chargeTime: rapid ? '' : paymentDraft.chargeTime || '18:00' }); }}><option>Every minute</option><option>Every hour</option><option>Weekly</option><option>Bi-weekly</option><option>Monthly</option></select></label>{!rapidFrequency(paymentDraft.frequency) ? <label>Charge time<input type="time" value={paymentDraft.chargeTime} onChange={event => setPaymentDraft({ ...paymentDraft, chargeTime: event.target.value })} /></label> : <div className="rapid-schedule-note"><strong>Rapid interval</strong><span>The separate daily charge time is disabled. Each successful charge schedules the next exact interval.</span></div>}</> : null}
+        {['new', 'charge', 'result', 'edit'].includes(paymentAction) ? <label>{rapidFrequency(paymentDraft.frequency) ? 'Next charge date and time' : 'Next charge date'}<input type={rapidFrequency(paymentDraft.frequency) ? 'datetime-local' : 'date'} step={rapidFrequency(paymentDraft.frequency) ? '60' : undefined} value={paymentDraft.nextRun} onChange={event => setPaymentDraft({ ...paymentDraft, nextRun: event.target.value })} /></label> : null}
+        {paymentAction === 'edit' ? <><label>Status<select value={paymentDraft.status} onChange={event => setPaymentDraft({ ...paymentDraft, status: event.target.value })}><option>Active</option><option>Pending</option><option>1x failed - retrying</option><option>2x failed - contact customer</option><option>Paused</option></select></label><label className="toggle-field"><input type="checkbox" checked={paymentDraft.autoChargeEnabled} onChange={event => setPaymentDraft({ ...paymentDraft, autoChargeEnabled: event.target.checked })} /> Automatic charging enabled</label></> : null}
+        <label className="span-2">Internal note<textarea rows={3} value={paymentDraft.note} onChange={event => setPaymentDraft({ ...paymentDraft, note: event.target.value })} placeholder={paymentAction === 'remove' ? 'Why autopay is being removed' : 'Optional receipt, schedule, or customer context'} /></label>
+        {setupAction || paymentAction === 'link' ? <label className="toggle-field span-2"><input type="checkbox" checked={paymentDraft.emailLink} disabled={!draft?.email} onChange={event => setPaymentDraft({ ...paymentDraft, emailLink: event.target.checked })} /> Email the secure link to {draft?.email || 'customer email not saved'}</label> : null}
+      </div> : null}
+      {!generatedUrl ? <><label className="sensitive-confirmation"><input type="checkbox" checked={paymentDraft.confirmed} onChange={event => setPaymentDraft({ ...paymentDraft, confirmed: event.target.checked })} /><span><strong>I confirmed {draft?.name || 'this customer'} and this exact action.</strong><small>{paymentAction === 'charge' ? `This immediately attempts a real ${selectedSchedule?.provider || selectedSchedule?.paymentProvider || 'saved-card'} charge.` : paymentAction === 'remove' || paymentAction === 'delete' ? 'This changes active payment setup, but keeps the customer and history.' : 'WheelsonAuto will save a trackable record of this action.'}</small></span></label><button className={paymentAction === 'remove' || paymentAction === 'delete' ? 'danger-command full-command' : 'primary-command full-command'} disabled={working || !paymentDraft.confirmed}>{working ? 'Working...' : paymentAction === 'charge' ? 'Charge saved card now' : paymentAction === 'result' ? 'Save payment result' : paymentAction === 'link' ? 'Create and send link' : paymentAction === 'card' ? 'Create card setup link' : paymentAction === 'edit' ? 'Save autopay' : paymentAction === 'remove' ? 'Remove autopay' : paymentAction === 'delete' ? 'Delete setup' : 'Create Stripe setup link'}</button></> : null}
+    </form>;
+  };
+
   return <main className={`operations-workspace resource-workspace connected-customer-workspace ${draft ? 'has-detail' : ''}`}>
     <section className="operations-index">
       <header className="workspace-title"><div><span>{filter === 'transactions' ? 'Current and historical payment ledger' : 'One connected customer record'}</span><h1>{filter === 'transactions' ? 'Transactions' : 'Customers'}</h1></div><div className="workspace-head-actions">{filter !== 'transactions' && viewed.unreadCount ? <button type="button" className="unread-summary" onClick={viewed.markAllViewed}>{viewed.unreadCount} new</button> : null}{filter !== 'transactions' ? <button type="button" className="primary-command compact" onClick={openNewCustomer}><Plus size={15} /> Add customer</button> : null}</div></header>
@@ -393,9 +407,8 @@ export function CustomersPage({ onNavigate, onOpenRental }: { onNavigate: (works
     </section>
 
     <section className="operations-detail">{!draft ? <div className="detail-empty"><strong>Select a customer</strong><span>Customer, vehicle, card, autopay, and transaction history stay in one file.</span></div> : <div className="customer-connected-detail">
-      <header className="detail-header"><button type="button" className="detail-back" onClick={backDetail}>Back</button><div><span>{creatingCustomer ? 'New customer' : 'Connected customer file'}</span><h2>{draft.name || 'Add customer'}</h2></div><em className={`status-chip ${statusTone(draft.status || draft.stage)}`}>{draft.status || draft.stage || 'Active'}</em></header>
-      {error ? <div className="inline-alert error">{error}</div> : null}{notice ? <div className="inline-alert">{notice}</div> : null}
-      <div className="detail-scroll">
+      <header className="detail-header"><button type="button" className="detail-back" onClick={closeDetail}>Back</button><div><span>{creatingCustomer ? 'New customer' : 'Connected customer file'}</span><h2>{draft.name || 'Add customer'}</h2></div><em className={`status-chip ${statusTone(draft.status || draft.stage)}`}>{draft.status || draft.stage || 'Active'}</em></header>
+      <div className="detail-scroll">{error ? <div className="inline-alert error">{error}</div> : null}{notice ? <div className="inline-alert">{notice}</div> : null}
         {detailTab === 'customer' ? <Suspense fallback={<div className="workspace-loading"><span /><strong>Opening customer file</strong></div>}>
           <CustomerProfilePanel
             customer={draft}
@@ -416,8 +429,8 @@ export function CustomersPage({ onNavigate, onOpenRental }: { onNavigate: (works
             onSubmit={submitCustomer}
             onOpenRental={onOpenRental}
             onMessages={() => onNavigate('messages')}
-            onPayments={() => navigateDetail('payments')}
-            onDues={() => navigateDetail('dues')}
+            onPayments={() => setDetailTab('payments')}
+            onDues={() => setDetailTab('dues')}
             onAssignmentVehicle={vehicleId => { setAssignmentVehicleId(vehicleId); setAssignmentConfirmed(false); }}
             onAssignmentReason={setAssignmentReason}
             onAssignmentConfirmed={setAssignmentConfirmed}
@@ -428,10 +441,10 @@ export function CustomersPage({ onNavigate, onOpenRental }: { onNavigate: (works
             onEndContract={endCustomerContract}
           />
         </Suspense> : detailTab === 'payments' ? <section className="customer-payments-detail">
-          <header className="payment-detail-command"><div><span>Payment control</span><strong>{selectedSchedule ? `${money(selectedSchedule.amount)} ${selectedSchedule.frequency || 'Weekly'}` : 'No recurring plan yet'}</strong><small>{selectedSchedule ? `${selectedSchedule.provider || selectedSchedule.paymentProvider || 'Provider'} | Next ${selectedSchedule.nextRun || 'not scheduled'}` : 'Create a secure Stripe setup link to begin.'}</small></div><div className="customer-file-commands"><button type="button" className="secondary-command compact" onClick={() => navigateDetail('customer')}><FileText size={15} /> Customer info</button><button type="button" className="secondary-command compact" onClick={() => navigateDetail('dues')}><CircleDollarSign size={15} /> Dues</button><button type="button" className="primary-command compact" onClick={() => beginAction('new')}><Plus size={15} /> Add autopay</button></div></header>
+          <header className="payment-detail-command"><div><span>Payment control</span><strong>{selectedSchedule ? `${money(selectedSchedule.amount)} ${selectedSchedule.frequency || 'Weekly'}` : 'No recurring plan yet'}</strong><small>{selectedSchedule ? `${selectedSchedule.provider || selectedSchedule.paymentProvider || 'Provider'} | Next ${selectedSchedule.nextRun || 'not scheduled'}` : 'Create a secure Stripe setup link to begin.'}</small></div><div className="customer-file-commands"><button type="button" className="secondary-command compact" onClick={() => { setDetailTab('customer'); setPaymentAction(null); setPaymentDraft(null); }}><FileText size={15} /> Edit customer</button><button type="button" className="secondary-command compact" onClick={() => setDetailTab('dues')}><CircleDollarSign size={15} /> Dues</button><button type="button" className="primary-command compact" onClick={() => beginAction('new')}><Plus size={15} /> Add autopay</button></div></header>
           {selectedCustomerAutopay.length > 1 ? <label className="schedule-picker">Recurring plan<select value={selectedSchedule?.id || ''} onChange={event => { setSelectedAutopayId(event.target.value); setPaymentAction(null); }} >{selectedCustomerAutopay.map(row => <option key={row.id} value={row.id}>{[money(row.amount), row.frequency || 'Weekly', row.vehicle || 'No vehicle', row.status || 'Setup'].join(' | ')}</option>)}</select></label> : null}
-          {selectedSchedule ? <><section className="payment-schedule-summary"><div><span>Status</span><strong>{selectedSchedule.status || 'Setup needed'}</strong></div><div><span>Card</span><strong>{cardDisplay(selectedSchedule)}</strong></div><div><span>Autocharge</span><strong>{selectedSchedule.autoChargeEnabled ? 'Enabled' : 'Not enabled'}</strong></div><div><span>Vehicle</span><strong>{selectedSchedule.vehicle || 'Not linked'}</strong></div></section><div className="payment-command-row"><button type="button" className="primary-command compact" onClick={() => beginAction('charge')}><CircleDollarSign size={15} /> Charge</button><button type="button" className="secondary-command compact" onClick={() => beginAction('result')}><WalletCards size={15} /> Record result</button><button type="button" className="secondary-command compact" onClick={() => beginAction('link')}><Send size={15} /> Send link</button><button type="button" className="text-command" onClick={() => beginAction('card')}><CreditCard size={15} /> Change card</button><button type="button" className="text-command" onClick={() => beginAction('edit')}><CalendarClock size={15} /> Edit autopay</button>{/setup|waiting/i.test([selectedSchedule.status, selectedSchedule.paymentSetup].join(' ')) ? <button type="button" className="danger-text-command" onClick={() => beginAction('delete')}><Trash2 size={15} /> Delete setup</button> : <button type="button" className="danger-text-command" onClick={() => beginAction('remove')}><Trash2 size={15} /> Remove autopay</button>}</div></> : null}
-          {paymentAction && paymentDraft ? <Suspense fallback={<div className="workspace-loading"><span /><strong>Opening payment action</strong></div>}><CustomerPaymentActionPanel action={paymentAction} draft={paymentDraft} customer={draft} selectedSchedule={selectedSchedule} availableVehicles={availableVehicles} dueTotal={selectedDueTotal} working={working} generatedUrl={generatedUrl} onDraft={setPaymentDraft} onSubmit={runPaymentAction} onClose={() => { setPaymentAction(null); setPaymentDraft(null); setGeneratedUrl(''); }} onCopy={copyGeneratedUrl} /></Suspense> : null}
+          {selectedSchedule ? <><section className="payment-schedule-summary"><div><span>Status</span><strong>{selectedSchedule.status || 'Setup needed'}</strong></div><div><span>Card</span><strong>{selectedSchedule.cardLabel || (selectedSchedule.cardLast4 ? `Ending ${selectedSchedule.cardLast4}` : selectedSchedule.paymentSetup || 'Setup needed')}</strong></div><div><span>Autocharge</span><strong>{selectedSchedule.autoChargeEnabled ? 'Enabled' : 'Not enabled'}</strong></div><div><span>Vehicle</span><strong>{selectedSchedule.vehicle || 'Not linked'}</strong></div></section><div className="payment-command-row"><button type="button" className="primary-command compact" onClick={() => beginAction('charge')}><CircleDollarSign size={15} /> Charge</button><button type="button" className="secondary-command compact" onClick={() => beginAction('result')}><WalletCards size={15} /> Record result</button><button type="button" className="secondary-command compact" onClick={() => beginAction('link')}><Send size={15} /> Send link</button><button type="button" className="text-command" onClick={() => beginAction('card')}><CreditCard size={15} /> Change card</button><button type="button" className="text-command" onClick={() => beginAction('edit')}><CalendarClock size={15} /> Edit autopay</button>{/setup|waiting/i.test([selectedSchedule.status, selectedSchedule.paymentSetup].join(' ')) ? <button type="button" className="danger-text-command" onClick={() => beginAction('delete')}><Trash2 size={15} /> Delete setup</button> : <button type="button" className="danger-text-command" onClick={() => beginAction('remove')}><Trash2 size={15} /> Remove autopay</button>}</div></> : null}
+          {renderPaymentAction()}
           <section className="transaction-history"><header><div><span>History</span><strong>Transactions</strong></div><b>{selectedCustomerPayments.length}</b></header>{selectedCustomerPayments.length ? selectedCustomerPayments.map(payment => <article key={payment.id}><span className={`status-line ${statusTone(payment.status)}`} /><div><strong>{money(payment.amount)} | {payment.status || 'Recorded'}</strong><small>{[payment.vehicle, payment.method || payment.provider, dateTime(payment.createdAt || payment.date)].filter(Boolean).join(' | ')}</small></div>{payment.rentalFileId ? <button type="button" className="text-command" onClick={() => onOpenRental(payment.rentalFileId || '')}><FileText size={14} /> File</button> : null}</article>) : <div className="empty-state compact">No transactions are connected to this customer yet.</div>}</section>
         </section> : <Suspense fallback={<div className="workspace-loading"><span /><strong>Opening dues</strong></div>}>
           <CustomerDuesPanel
@@ -439,8 +452,8 @@ export function CustomersPage({ onNavigate, onOpenRental }: { onNavigate: (works
             claims={selectedOpenClaims}
             failedPayments={selectedFailedPayments}
             dueTotal={selectedDueTotal}
-            onBack={() => navigateDetail('customer')}
-            onPayments={() => navigateDetail('payments')}
+            onBack={() => setDetailTab('customer')}
+            onPayments={() => setDetailTab('payments')}
             onOpenRental={onOpenRental}
             onRefresh={() => refresh(undefined, true)}
             onError={setError}

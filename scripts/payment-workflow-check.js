@@ -365,4 +365,3 @@ requireText('Fallback transaction report possible match note', app, "customer===
 ].forEach(text => requireText('Customer-matched daily money truth', app + server, text));
 
 console.log('Payment workflow check passed: statuses, closeout, card actions, transaction matching, reassignment, and backend charge tracking are wired.');
-require('./customer-payment-control-check.js');
