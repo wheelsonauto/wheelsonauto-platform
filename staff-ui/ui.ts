@@ -4,7 +4,10 @@ export function money(value?: number | string) {
 
 export function shortDate(value?: string) {
   if (!value) return 'Not set';
-  const parsed = new Date(value);
+  const calendarDate = String(value).trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const parsed = calendarDate
+    ? new Date(Number(calendarDate[1]), Number(calendarDate[2]) - 1, Number(calendarDate[3]), 12)
+    : new Date(value);
   return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
