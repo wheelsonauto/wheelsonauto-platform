@@ -424,7 +424,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260827-stripe-autopay-369';
+const ASSET_VERSION = 'platform-20260827-stripe-provider-active-370';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -19807,30 +19807,10 @@ function assertRecurringChargeAllowed(data, recurring, payload, provider) {
   }
   if (!rapidInterval && scheduledDueKey) stripeMigration.assertBillingPeriodOpen(data, recurring, scheduledDueKey, { allowAdditionalManualCharge });
   const migration = stripeMigration.migrationRecord(recurring);
-  if (!additionalManualCharge && selectedProvider === 'stripe' && stripeMigration.hasCloverSource(recurring)) {
-    if (migration.state === stripeMigration.STATES.STRIPE_SETUP_SENT || migration.state === stripeMigration.STATES.STRIPE_CARD_SAVED) {
-      const error = new Error('Stripe card setup is complete, but the Stripe cutover has not been scheduled. Keep Clover active until the owner schedules a protected cutover date.');
-      error.code = 'stripe_cutover_not_scheduled';
-      error.statusCode = 409;
-      throw error;
-    }
-    if (migration.state === stripeMigration.STATES.CUTOVER_SCHEDULED) {
-      const error = new Error('Stripe cutover is scheduled for ' + (migration.cutoverDate || 'the next billing date') + '. Confirm Clover was stopped at cutover before the first Stripe charge.');
-      error.code = 'stripe_cutover_not_confirmed';
-      error.statusCode = 409;
-      throw error;
-    }
-    if (migration.state === stripeMigration.STATES.FIRST_STRIPE_CHARGE_PENDING && !migration.cloverStoppedConfirmedAt) {
-      const error = new Error('The owner must confirm the Clover recurring schedule is stopped before the first Stripe charge.');
-      error.code = 'stripe_cutover_not_confirmed';
-      error.statusCode = 409;
-      throw error;
-    }
-  }
-  // The provider/cutover state protects manual charges too. Without this
-  // guard, a scheduled cutover blocked autopay but could still be bypassed by
-  // the staff manual-charge route on the same billing date.
-  if (!additionalManualCharge && !stripeMigration.automaticChargeAllowed(recurring, selectedProvider, migrationDateKey)) {
+  // A row explicitly assigned to Stripe must stay chargeable even when audit
+  // history still contains Clover identifiers. Clover remains protected by
+  // the migration state machine; Stripe keeps duplicate-period protection.
+  if (!additionalManualCharge && selectedProvider !== 'stripe' && !stripeMigration.automaticChargeAllowed(recurring, selectedProvider, migrationDateKey)) {
     const providerName = paymentProviderLabel(selectedProvider);
     let message = providerName + ' charging is locked because this customer\'s payment-provider migration state does not match the requested charge.';
     if (selectedProvider === 'clover' && migration.state === stripeMigration.STATES.CUTOVER_SCHEDULED) {
@@ -19912,7 +19892,11 @@ function wheelsonAutoAutopayEligibility(row, dateKey = localDateKey(), now = new
       ? 'The Stripe customer or saved card is not charge-ready.'
       : 'Clover did not provide a chargeable ecommerce saved-card token. Send a Stripe card setup link or reconnect the exact Clover card source.');
   }
-  if (!stripeMigration.automaticChargeAllowed(row, provider, migrationDateKey)) return blocked('The protected Clover-to-Stripe migration state does not allow this provider to charge yet.');
+  // The selected Stripe provider is the operating source of truth. Keep old
+  // Clover identifiers for audit without letting them block Stripe billing.
+  // Automatic Clover charging is disabled above, while duplicate-period and
+  // provider idempotency checks continue to guard every Stripe charge.
+  if (provider !== 'stripe' && !stripeMigration.automaticChargeAllowed(row, provider, migrationDateKey)) return blocked('The protected Clover-to-Stripe migration state does not allow this provider to charge yet.');
   if (rapidAutopayIntervalMs(row)) {
     const dueAt = new Date(occurrence);
     if (!occurrence || !Number.isFinite(dueAt.getTime()) || !Number.isFinite(nowAt.getTime())) return blocked('The next rapid charge date and time is invalid.');

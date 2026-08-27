@@ -253,6 +253,12 @@ async function run() {
   assert.strictEqual(repairState.recurringPayments[0].nextRun, '2026-08-27T21:00:00.000Z', 'A repaired hourly schedule must point to the next hour, not remain blocked.');
   const stripeDuePlan = { id: 'rec-stripe-active', customer: 'Stripe Customer', status: 'Active', autoChargeEnabled: true, paymentProvider: 'stripe', provider: 'Stripe', stripeCustomerId: 'cus_active', stripePaymentMethodId: 'pm_active', stripeLivemode: true, frequency: 'Every minute', nextRun: '2026-08-27T19:59:00.000Z', amount: 229 };
   assert.strictEqual(serverRuntime.wheelsonAutoAutopayEligibility(stripeDuePlan, '2026-08-27', policyNow).eligible, true, 'A charge-ready due Stripe plan must be eligible without owner pilot approval.');
+  const stripeWithHistoricalClover = { ...stripeDuePlan, id: 'rec-stripe-with-clover-history', cloverSubscriptionId: 'legacy-clover-subscription', cloverCustomerId: 'legacy-clover-customer', stripeMigration: { state: 'stripe_card_saved' } };
+  assert.strictEqual(serverRuntime.wheelsonAutoAutopayEligibility(stripeWithHistoricalClover, '2026-08-27', policyNow).eligible, true, 'Historical Clover identifiers must not block a plan whose selected provider is Stripe.');
+  assert.doesNotThrow(
+    () => serverRuntime.assertRecurringChargeAllowed({ payments: [] }, stripeWithHistoricalClover, { automatic: true, scheduledDueDate: stripeWithHistoricalClover.nextRun }, 'stripe'),
+    'A selected Stripe provider must not require an older Clover migration checklist before charging.'
+  );
   const cloverDuePlan = { ...stripeDuePlan, id: 'rec-clover-blocked', paymentProvider: 'clover', provider: 'Clover', stripeCustomerId: '', stripePaymentMethodId: '', cloverCustomerId: 'cus_clover', cloverPaymentSource: 'src_clover' };
   const cloverEligibility = serverRuntime.wheelsonAutoAutopayEligibility(cloverDuePlan, '2026-08-27', policyNow);
   assert.strictEqual(cloverEligibility.eligible, false, 'A Clover plan must never be charged by the unattended worker.');
