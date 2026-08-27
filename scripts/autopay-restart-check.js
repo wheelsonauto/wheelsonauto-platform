@@ -437,10 +437,8 @@ async function main() {
       amount: 1,
       status: '1x failed - retrying',
       paymentProvider: 'stripe',
-      stripePaymentIntentId: rapidPaid.stripePaymentIntentId,
-      providerPaymentId: rapidPaid.stripePaymentIntentId,
       source: 'Legacy post-success failure bug',
-      createdAt: rapidPaid.createdAt
+      date: new Date(Date.parse(rapidPaid.createdAt) + 1000).toLocaleString('en-US')
     });
     Object.assign(rapidRow, {
       status: 'Rapid test failed',

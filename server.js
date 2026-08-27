@@ -424,7 +424,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260827-stripe-success-authority-375';
+const ASSET_VERSION = 'platform-20260827-stripe-ledger-reconcile-376';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -20507,9 +20507,14 @@ function saveFailedChargeResult(data, row, payload = {}, err, options = {}) {
   const stripePaymentIntentId = paymentProvider === 'stripe'
     ? stripeObjectId(options.stripePaymentIntentId || err && err.paymentIntent || stripeAttempt.paymentIntentId)
     : '';
+  const rawScheduledDueDate = payload.scheduledDueDate || stripeAttempt.scheduledDueDate || '';
+  const scheduledDueDate = paymentProvider === 'stripe' && rapidAutopayIntervalMs(row)
+    ? validRecurringInstant(rawScheduledDueDate)
+    : validCalendarDateKey(rawScheduledDueDate);
   const payment = {
     id: 'payment-failed-' + Date.now() + '-' + Math.random().toString(16).slice(2, 8),
     date: businessLocaleString(),
+    createdAt: stamp,
     customer: row.customer || payload.customer || 'Unknown customer',
     method: options.method || 'Clover saved card',
     amount,
@@ -20522,6 +20527,8 @@ function saveFailedChargeResult(data, row, payload = {}, err, options = {}) {
     createsDue,
     balanceEffect: createsDue ? undefined : 'none',
     balanceRemaining: createsDue ? amount : 0,
+    scheduledDueDate,
+    billingPeriodKey: recurringBillingPeriodKey(row, scheduledDueDate),
     recurringPaymentId: row.id || '',
     paymentProvider,
     providerPaymentId: stripePaymentIntentId || '',
@@ -21448,6 +21455,7 @@ async function runWheelsonAutoAutopay(options = {}) {
         row.lastAutoChargeAttemptAt = new Date().toISOString();
         saveFailedChargeResult(data, row, {
           amount: row.amount,
+          scheduledDueDate,
           note: 'WheelsonAuto autopay failed for due date ' + scheduledDueDate
         }, err, {
           dateKey,
@@ -22125,6 +22133,33 @@ function upsertAuthoritativeStripePaidPayment(data, payment = {}) {
 function reconcileStripePaymentOutcomeContradictions(data) {
   data.payments = Array.isArray(data.payments) ? data.payments : [];
   data.recurringPayments = Array.isArray(data.recurringPayments) ? data.recurringPayments : [];
+  const paidStripeRecords = data.payments.filter(payment => {
+    const intentId = String(payment && (payment.stripePaymentIntentId || payment.providerPaymentId) || '').trim();
+    return /^pi_/i.test(intentId) && stripeMigration.paymentIsPaid(payment.status);
+  });
+  data.payments.forEach(failure => {
+    const failureIntentId = String(failure && (failure.stripePaymentIntentId || failure.providerPaymentId) || '').trim();
+    if (failureIntentId || !/fail|declin|unpaid|retry|contact customer/i.test(String(failure && failure.status || ''))) return;
+    if (normalizedPaymentProvider(failure.paymentProvider || failure.provider || failure.method || '') !== 'stripe') return;
+    const failureRecurringId = String(failure.recurringPaymentId || '').trim();
+    const failureIdTime = String(failure.id || '').match(/^payment-failed-(\d{12,})/);
+    const failureAt = failureIdTime ? Number(failureIdTime[1]) : Date.parse(failure.createdAt || failure.date || '');
+    if (!failureRecurringId || !Number.isFinite(failureAt)) return;
+    const candidates = paidStripeRecords.filter(paid => {
+      if (String(paid.recurringPaymentId || '').trim() !== failureRecurringId) return false;
+      if (Math.abs(Number(paid.amount || 0) - Number(failure.amount || 0)) > 0.001) return false;
+      const paidAt = Date.parse(paid.createdAt || paid.date || '');
+      if (!Number.isFinite(paidAt)) return false;
+      const delay = failureAt - paidAt;
+      return delay >= 0 && delay <= 2 * 60 * 1000;
+    });
+    if (candidates.length !== 1) return;
+    const intentId = String(candidates[0].stripePaymentIntentId || candidates[0].providerPaymentId || '').trim();
+    failure.stripePaymentIntentId = intentId;
+    failure.providerPaymentId = intentId;
+    failure.stripeOutcomeMatchInferredAt = new Date().toISOString();
+    failure.stripeOutcomeMatchBasis = 'Same recurring plan, amount, and post-success two-minute window';
+  });
   const groups = new Map();
   data.payments.forEach(payment => {
     const intentId = String(payment && (payment.stripePaymentIntentId || payment.providerPaymentId) || '').trim();
