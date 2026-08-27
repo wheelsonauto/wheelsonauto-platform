@@ -4123,6 +4123,14 @@ async function main() {
       status: 'Active',
       tone: 'good',
       autoChargeEnabled: true,
+      retryCount: 0,
+      failedAttempts: 0,
+      lastAutoChargeDate: amountEditNextRun,
+      lastAutoChargeOccurrenceKey: amountEditNextRun,
+      lastAutoChargeAttemptDate: amountEditNextRun,
+      lastAutoChargeAttemptAt: amountEditNextRun + 'T22:00:00.000Z',
+      lastAutoChargeError: 'Old billing marker',
+      lastAutoChargeResult: 'Old processed occurrence',
       autopayManagedBy: 'WheelsonAuto',
       cloverCustomerId: 'custrapid001',
       cloverPaymentSource: 'clv_rapid_edit_001',
@@ -4199,6 +4207,7 @@ async function main() {
     const rapidScheduleRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     const rapidScheduleRow = rapidScheduleRead.json.recurringPayments.find(row => row.id === 'direct-autopay-rapid-edit');
     assert(rapidScheduleRow && rapidScheduleRow.frequency === 'Every minute' && rapidScheduleRow.nextRun === rapidScheduleStart && rapidScheduleRow.chargeTime === '' && rapidScheduleRow.paymentDay === '', 'The persisted rapid schedule must remain timestamp-driven without a weekday or fixed 6 PM field.');
+    assert(rapidScheduleRow.lastAutoChargeDate === '' && rapidScheduleRow.lastAutoChargeOccurrenceKey === '' && rapidScheduleRow.lastAutoChargeAttemptAt === '' && rapidScheduleRow.lastAutoChargeError === '' && rapidScheduleRow.lastAutoChargeResult === 'Schedule updated - waiting for due time', 'A new billing anchor must clear old processed-attempt markers so rapid and ordinary schedules can reach Stripe.');
     const lateScheduleEdit = await request(server, 'POST', '/api/recurring-payments/update', {
       cookie: ownerCookie,
       json: {

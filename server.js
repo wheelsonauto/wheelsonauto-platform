@@ -424,7 +424,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260827-rapid-stripe-proof-372';
+const ASSET_VERSION = 'platform-20260827-autopay-state-reset-373';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -19563,9 +19563,15 @@ function localDateKey(date = new Date()) {
   return year + '-' + month + '-' + day;
 }
 function rapidAutopayIntervalMs(value) {
-  const frequency = String(value && value.frequency || value || '').trim().toLowerCase();
+  const frequency = String(value && value.frequency || value || '')
+    .replace(/[\u200B-\u200D\uFEFF]/g, '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
   if (frequency === 'every minute') return 60 * 1000;
   if (frequency === 'every hour') return 60 * 60 * 1000;
+  if (/^(?:every|each) 1 minute$|^1 minute$/.test(frequency)) return 60 * 1000;
+  if (/^(?:every|each) 1 hour$|^1 hour$/.test(frequency)) return 60 * 60 * 1000;
   return 0;
 }
 function validRecurringInstant(value) {
@@ -21148,10 +21154,18 @@ async function runWheelsonAutoAutopay(options = {}) {
       });
       result.reconciled += 1;
     }
-    const due = data.recurringPayments.filter(row => isDueForWheelsonAutoAutopay(row, dateKey, runAt));
+    const eligibilityRows = data.recurringPayments.map(row => ({ row, eligibility: wheelsonAutoAutopayEligibility(row, dateKey, runAt) }));
+    const due = eligibilityRows.filter(item => item.eligibility.eligible).map(item => item.row);
+    result.managedSchedules = eligibilityRows.filter(item => item.row && item.row.autoChargeEnabled).length;
+    result.blockedReasons = eligibilityRows.reduce((summary, item) => {
+      if (item.eligibility.eligible || !item.row || !item.row.autoChargeEnabled) return summary;
+      const reason = String(item.eligibility.reason || 'Unknown block');
+      summary[reason] = Number(summary[reason] || 0) + 1;
+      return summary;
+    }, {});
     for (const row of due) {
       const scheduledDueDate = recurringOccurrenceKey(row);
-      const rapidTest = rapidAutopayIntervalMs(row) > 0;
+      const rapidTest = rapidAutopayIntervalMs(row) > 0 || !!validRecurringInstant(row.nextRun);
       try {
         const nextRun = nextFutureRecurringRun(row, runAt, scheduledDueDate);
         if (!nextRun) throw new Error('WheelsonAuto could not calculate the next ' + (row.frequency || 'recurring') + ' date. The card was not charged.');
@@ -21423,6 +21437,17 @@ async function runWheelsonAutoAutopay(options = {}) {
     woaAutopayStatus.lastResult = result;
     woaAutopayStatus.lastError = result.errors[0] || '';
     woaAutopayStatus.fatalError = '';
+    console.log('WheelsonAuto autopay run ' + JSON.stringify({
+      source: String(options.source || 'unknown'),
+      dateKey,
+      managedSchedules: result.managedSchedules,
+      due: due.length,
+      charged: result.charged,
+      failed: result.failed,
+      providerBlocked: result.providerBlocked,
+      duplicateBlocked: result.duplicateBlocked,
+      blockedReasons: result.blockedReasons
+    }));
     return { ok: result.errors.length === 0, skipped: false, ...result, status: woaAutopayStatus };
   } catch (err) {
     woaAutopayStatus.lastFinishedAt = new Date().toISOString();
@@ -31454,6 +31479,14 @@ const server = http.createServer(async (req, res) => {
         || String(recurring.frequency || 'Weekly') !== frequency;
       const priorRetryCount = Number(recurring.retryCount || recurring.failedAttempts || 0);
       const retryReset = billingAnchorChanged && priorRetryCount > 0;
+      const processedScheduleStateReset = billingAnchorChanged && !!(
+        recurring.lastAutoChargeDate
+        || recurring.lastAutoChargeOccurrenceKey
+        || recurring.lastAutoChargeAttemptDate
+        || recurring.lastAutoChargeAttemptAt
+        || recurring.lastAutoChargeError
+        || recurring.lastAutoChargeResult
+      );
       if (retryReset && /failed/i.test(status) && !/removed|history|ended|stopped/i.test(status)) status = 'Active';
       const explicitlyEnabled = Object.prototype.hasOwnProperty.call(payload, 'autoChargeEnabled');
       let enableWheelsonAutoCharge = explicitlyEnabled
@@ -31506,10 +31539,20 @@ const server = http.createServer(async (req, res) => {
         cutoverRescheduled = true;
       }
       if (scheduleChanged) patch.adminScheduleChangedAt = updatedAt;
-      if (retryReset) Object.assign(patch, {
+      if (billingAnchorChanged) Object.assign(patch, {
         retryCount: 0,
         failedAttempts: 0,
         tone: 'good',
+        lastAutoChargeDate: '',
+        lastAutoChargeOccurrenceKey: '',
+        lastAutoChargeAttemptDate: '',
+        lastAutoChargeAttemptAt: '',
+        lastAutoChargeError: '',
+        lastAutoChargeResult: 'Schedule updated - waiting for due time',
+        scheduleStateResetAt: updatedAt,
+        scheduleStateResetReason: 'Billing date or frequency changed by admin'
+      });
+      if (retryReset) Object.assign(patch, {
         retryResetAt: updatedAt,
         retryResetReason: 'Billing date or frequency changed by admin',
         retryResetFromDueDate: String(recurring.nextRun || ''),
@@ -31524,7 +31567,7 @@ const server = http.createServer(async (req, res) => {
       appendAuditLog(data, user, scheduleChanged ? 'Autopay schedule updated' : (amountChanged ? 'Autopay amount updated' : 'Autopay reviewed'), [recurring && recurring.customer || id, moneyText(amount !== undefined ? amount : recurring && recurring.amount || 0), frequency, nextRun + ' ' + chargeTime, status]);
       await writeData(data);
       scheduleNextAutopayWakeup(data.recurringPayments);
-      return json(res, 200, { ok: true, nextRun, frequency, amount: amount !== undefined ? amount : recurring && recurring.amount, status, paymentDay, chargeTime, monthlyDay, retryRule, autopayManagedBy: patch.autopayManagedBy, autoChargeEnabled: enableWheelsonAutoCharge, amountChanged, scheduleChanged, retryReset, cutoverRescheduled, stripeCutoverDate: cutoverRescheduled ? nextRun : migrationBeforeUpdate.cutoverDate || '' });
+      return json(res, 200, { ok: true, nextRun, frequency, amount: amount !== undefined ? amount : recurring && recurring.amount, status, paymentDay, chargeTime, monthlyDay, retryRule, autopayManagedBy: patch.autopayManagedBy, autoChargeEnabled: enableWheelsonAutoCharge, amountChanged, scheduleChanged, retryReset, processedScheduleStateReset, cutoverRescheduled, stripeCutoverDate: cutoverRescheduled ? nextRun : migrationBeforeUpdate.cutoverDate || '' });
     }
     if (url.pathname === '/api/recurring-payments/remove' && req.method === 'POST') {
       const payload = await readJsonBody(req);
