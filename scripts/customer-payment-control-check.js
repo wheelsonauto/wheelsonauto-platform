@@ -44,13 +44,16 @@ const data = {
   integrations: { clover: { recurringPlanMembers: [] } }
 };
 
-let scheduledBlocked = false;
+const scheduledStripeGuard = assertRecurringChargeAllowed(data, recurring, { automatic: false }, 'stripe');
+assert(scheduledStripeGuard.additionalManualCharge === false, 'The selected Stripe provider must remain active even when historical Clover identifiers are present.');
+
+let cloverAutomaticBlocked = false;
 try {
-  assertRecurringChargeAllowed(data, recurring, { automatic: false }, 'stripe');
+  assertRecurringChargeAllowed(data, recurring, { automatic: true }, 'clover');
 } catch (error) {
-  scheduledBlocked = error && error.code === 'stripe_cutover_not_scheduled';
+  cloverAutomaticBlocked = error && error.code === 'clover_automatic_charging_disabled';
 }
-assert(scheduledBlocked, 'A recurring billing-period charge must remain blocked before protected Stripe cutover.');
+assert(cloverAutomaticBlocked, 'Automatic Clover charging must remain disabled after Stripe becomes the selected provider.');
 
 const manualGuard = assertRecurringChargeAllowed(data, recurring, {
   automatic: false,
@@ -96,4 +99,4 @@ const staleCookieRequest = {
 assert(crossOriginSessionWrite(staleCookieRequest, '/api/public/card-setup/setup-token/stripe-checkout') === false, 'A single-use public card setup route must not be blocked by an unrelated stale app cookie.');
 assert(crossOriginSessionWrite(staleCookieRequest, '/api/customers/customer-1') === true, 'Cookie-authenticated account writes must remain protected from cross-origin requests.');
 
-console.log('Customer payment control check passed: one-time charges preserve cutover, failures create no dues, due payments allocate once, and public card setup remains session-independent.');
+console.log('Customer payment control check passed: selected Stripe billing stays active, automatic Clover stays disabled, one-time charge failures create no dues, due payments allocate once, and public card setup remains session-independent.');

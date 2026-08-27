@@ -19789,6 +19789,12 @@ function assertRecurringChargeAllowed(data, recurring, payload, provider) {
   const migrationDateKey = rapidInterval ? localDateKey(new Date(scheduledDueKey || Date.now())) : scheduledDueKey;
   const allowAdditionalManualCharge = additionalManualCharge;
   const selectedProvider = normalizedPaymentProvider(provider || recurring.paymentProvider || recurring.provider || 'clover');
+  if (payload.automatic === true && selectedProvider === 'clover') {
+    const error = new Error('Clover automatic charging is disabled. Switch this recurring plan to Stripe before autopay can run.');
+    error.code = 'clover_automatic_charging_disabled';
+    error.statusCode = 409;
+    throw error;
+  }
   if (selectedProvider === 'stripe' && stripeCardAuthenticationRequired(recurring)) {
     const error = new Error('Stripe needs this customer to re-authenticate or update their card before another saved-card charge. Send a secure Stripe card-update link; WheelsonAuto will not retry this card automatically.');
     error.code = 'stripe_authentication_required';
