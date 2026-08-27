@@ -159,7 +159,7 @@ async function run() {
   );
 
   const savedCardChargeSource = server.slice(server.indexOf('async function chargeStripeSavedCard'), server.indexOf('async function chargeCloverSavedCard'));
-  assert(savedCardChargeSource.includes("if (payload.automatic === true) assertStripeGeneralMoneyActionAllowed(data, 'running Stripe autopay');") && savedCardChargeSource.includes('else assertStripeMoneyActionsArmed();'), 'Owner manual charges must use hardened production readiness while unattended Stripe autopay retains the approved-pilot gate.');
+  assert(savedCardChargeSource.includes('recurring.controlledStripePilotTest === true') && savedCardChargeSource.includes('assertControlledStripeTestAutopayAllowed(data, recurring, amount)') && savedCardChargeSource.includes("assertStripeGeneralMoneyActionAllowed(data, 'running Stripe autopay');") && savedCardChargeSource.includes('else assertStripeMoneyActionsArmed();'), 'Only the capped dedicated Stripe test may exercise unattended autopay before approval; ordinary autopay retains the approved-pilot gate and manual charges retain hardened production readiness.');
   assert(server.includes("/^stripe_pilot_/.test(code)") && server.includes("'controlled_stripe_pilot_required'"), 'Stripe pilot policy blocks must be classified as provider safeguards instead of customer card failures.');
   assert(server.includes("Only the owner can manually charge a saved customer card."), 'Manual saved-card charges must require an owner session.');
 
@@ -243,7 +243,15 @@ async function run() {
     'card_setup_plan_ambiguous',
     'more than one payment schedule'
   ].forEach(value => assert(server.includes(value), 'Missing Stripe safety/runtime marker: ' + value));
-  const webhookContract = require('../server').stripeWebhookContract();
+  const serverRuntime = require('../server');
+  const controlledTestAutopay = serverRuntime.controlledStripeTestAutopayEligibility;
+  const controlledTestPlan = { controlledStripePilotTest: true, paymentProvider: 'stripe', amount: 1, vehicle: '1999 test test', vin: 'test', plate: 'test', cloverSubscriptionId: '' };
+  assert.strictEqual(controlledTestAutopay({}, controlledTestPlan).eligible, true, 'The dedicated $1 placeholder Stripe plan must be able to prove unattended autopay before final pilot approval.');
+  assert.strictEqual(controlledTestAutopay({}, { ...controlledTestPlan, amount: 6 }).eligible, false, 'A controlled Stripe automatic charge above $5 must remain blocked.');
+  assert.strictEqual(controlledTestAutopay({}, { ...controlledTestPlan, controlledStripePilotTest: false }).eligible, false, 'An ordinary customer plan must never inherit the controlled-test exception.');
+  assert.strictEqual(controlledTestAutopay({}, { ...controlledTestPlan, cloverSubscriptionId: 'sub_live_clover' }).eligible, false, 'The controlled test must never run while an actual Clover subscription remains linked.');
+  assert.strictEqual(controlledTestAutopay({}, { ...controlledTestPlan, vehicle: '2019 Mitsubishi Mirage', vin: 'ML32A3HJ9KH000001', plate: 'ABC123' }).eligible, false, 'A real vehicle identity must not be disguised as the low-dollar placeholder test.');
+  const webhookContract = serverRuntime.stripeWebhookContract();
   [
     'checkout.session.completed',
     'setup_intent.succeeded',
