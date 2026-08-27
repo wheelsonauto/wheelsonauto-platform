@@ -424,7 +424,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260827-autopay-local-time-371';
+const ASSET_VERSION = 'platform-20260827-rapid-stripe-proof-372';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -19807,7 +19807,8 @@ function isAdditionalManualCharge(payload = {}) {
   return payload.automatic !== true && payload.allowAdditionalManualCharge === true && !!manualChargePurpose(payload);
 }
 function assertRecurringChargeAllowed(data, recurring, payload, provider) {
-  const rapidInterval = rapidAutopayIntervalMs(recurring) > 0;
+  const rapidInterval = rapidAutopayIntervalMs(recurring) > 0
+    || payload.rapidAutopayOccurrence === true && payload.automatic === true && !!validRecurringInstant(payload.scheduledDueDate);
   const additionalManualCharge = isAdditionalManualCharge(payload);
   if (payload.automatic !== true && payload.allowAdditionalManualCharge === true && !additionalManualCharge) {
     const error = new Error('Choose whether this is a one-time charge or a payment applied to customer dues.');
@@ -21150,11 +21151,15 @@ async function runWheelsonAutoAutopay(options = {}) {
     const due = data.recurringPayments.filter(row => isDueForWheelsonAutoAutopay(row, dateKey, runAt));
     for (const row of due) {
       const scheduledDueDate = recurringOccurrenceKey(row);
+      const rapidTest = rapidAutopayIntervalMs(row) > 0;
       try {
         const nextRun = nextFutureRecurringRun(row, runAt, scheduledDueDate);
         if (!nextRun) throw new Error('WheelsonAuto could not calculate the next ' + (row.frequency || 'recurring') + ' date. The card was not charged.');
         const weeklyAmount = Math.max(0, Number(row.amount || row.weeklyAmount || 0));
-        const availableCredit = Math.max(0, Number(row.customerPortalCreditBalance || 0));
+        // Minute/hour schedules are live provider verification tools. They must
+        // prove the saved Stripe card path once instead of consuming account
+        // credit and appearing to run without a provider charge.
+        const availableCredit = rapidTest ? 0 : Math.max(0, Number(row.customerPortalCreditBalance || 0));
         if (weeklyAmount > 0 && availableCredit >= weeklyAmount) {
           applyCustomerPortalCreditToBilling(data, row, weeklyAmount, scheduledDueDate, { fullCoverage: true });
           const creditSuccessPatch = {
@@ -21184,6 +21189,7 @@ async function runWheelsonAutoAutopay(options = {}) {
           nextRun,
           scheduledDueDate,
           automatic: true,
+          rapidAutopayOccurrence: rapidTest,
           note: 'WheelsonAuto autopay charged for due date ' + scheduledDueDate + (creditToApply ? ' after ' + moneyText(creditToApply) + ' account credit' : '')
         }, null);
         if (!charged || !charged.payment || String(charged.payment.status || '').toLowerCase() !== 'paid') {
@@ -21195,11 +21201,14 @@ async function runWheelsonAutoAutopay(options = {}) {
           lastAutoChargeOccurrenceKey: scheduledDueDate,
           nextRun,
           adminNextRun: nextRun,
-          status: 'Active',
+          status: rapidTest ? 'Rapid test passed' : 'Active',
           tone: 'good',
           retryCount: 0,
           failedAttempts: 0,
-          lastAutoChargeResult: 'Paid'
+          autoChargeEnabled: rapidTest ? false : row.autoChargeEnabled,
+          rapidTestCompletedAt: rapidTest ? new Date().toISOString() : row.rapidTestCompletedAt,
+          rapidTestPaymentId: rapidTest ? String(charged.payment.id || charged.payment.stripePaymentIntentId || '') : row.rapidTestPaymentId,
+          lastAutoChargeResult: rapidTest ? 'Paid - rapid Stripe test complete' : 'Paid'
         };
         Object.assign(row, providerSuccessPatch);
         updateRecurringChargeState(data, row.id || row.cloverSubscriptionId, providerSuccessPatch);
@@ -21276,6 +21285,25 @@ async function runWheelsonAutoAutopay(options = {}) {
           continue;
         }
         if (isDuplicateBillingPeriodError(err)) {
+          if (rapidTest) {
+            const stamp = new Date().toISOString();
+            const rapidDuplicatePatch = {
+              status: 'Rapid test blocked',
+              tone: 'warn',
+              autoChargeEnabled: false,
+              lastAutoChargeResult: 'Rapid test blocked by duplicate protection',
+              lastAutoChargeError: String(err && err.message || err),
+              lastAutoChargeAttemptDate: dateKey,
+              lastAutoChargeAttemptAt: stamp,
+              lastDuplicateChargeBlockAt: stamp,
+              lastDuplicateChargeBlockPaymentId: err.existingPayment && (err.existingPayment.id || err.existingPayment.providerPaymentId) || ''
+            };
+            Object.assign(row, rapidDuplicatePatch);
+            updateRecurringChargeState(data, row.id || row.cloverSubscriptionId, rapidDuplicatePatch);
+            result.duplicateBlocked += 1;
+            result.errors.push((row.customer || row.id) + ': rapid Stripe test blocked by duplicate protection');
+            continue;
+          }
           const nextRun = nextFutureRecurringRun(row, runAt, scheduledDueDate);
           if (nextRun && nextRun !== scheduledDueDate) {
             updateRecurringChargeState(data, row.id, {
@@ -21328,11 +21356,12 @@ async function runWheelsonAutoAutopay(options = {}) {
           result.errors.push((row.customer || row.id) + ': ' + payment.status);
           continue;
         }
-        const attempts = Math.min(2, Number(row.retryCount || row.failedAttempts || 0) + 1);
+        const attempts = rapidTest ? 1 : Math.min(2, Number(row.retryCount || row.failedAttempts || 0) + 1);
         row.retryCount = attempts;
         row.failedAttempts = attempts;
-        row.status = attempts >= 2 ? '2x failed - contact customer' : '1x failed - retrying';
-        row.tone = attempts >= 2 ? 'bad' : 'warn';
+        row.status = rapidTest ? 'Rapid test failed' : (attempts >= 2 ? '2x failed - contact customer' : '1x failed - retrying');
+        row.tone = rapidTest || attempts < 2 ? 'warn' : 'bad';
+        if (rapidTest) row.autoChargeEnabled = false;
         row.lastAutoChargeResult = row.status;
         row.lastAutoChargeError = String(err && err.message || err);
         row.lastAutoChargeAttemptDate = dateKey;
@@ -21346,6 +21375,18 @@ async function runWheelsonAutoAutopay(options = {}) {
           method: paymentProviderLabel(row.paymentProvider || row.provider || 'clover') + ' saved card',
           source: 'WheelsonAuto autopay failed charge',
           cloverIdempotencyKey: row.cloverChargeAttempt && row.cloverChargeAttempt.idempotencyKey || row.lastCloverChargeIdempotencyKey || ''
+        });
+        if (rapidTest) updateRecurringChargeState(data, row.id || row.cloverSubscriptionId, {
+          status: 'Rapid test failed',
+          tone: 'warn',
+          autoChargeEnabled: false,
+          retryCount: 1,
+          failedAttempts: 1,
+          rapidTestCompletedAt: new Date().toISOString(),
+          lastAutoChargeResult: 'Rapid test failed',
+          lastAutoChargeError: row.lastAutoChargeError,
+          lastAutoChargeAttemptDate: dateKey,
+          lastAutoChargeAttemptAt: row.lastAutoChargeAttemptAt
         });
         queueCustomerMessage(data, row, attempts >= 2 ? '2x failed payment' : '1x failed payment', 'Ready to send', 'Hi ' + (row.customer || 'there') + ', this is WheelsonAuto. Your payment of $' + Number(row.amount || 0).toLocaleString() + ' did not go through' + (attempts >= 2 ? ' after two attempts. Please contact us today.' : '. We will retry once, but please contact us if you need help.'), attempts >= 2 ? 'bad' : 'warn');
         await queueOwnerEmailNotification(data, 'payment_failed', {

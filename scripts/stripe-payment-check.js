@@ -270,6 +270,12 @@ async function run() {
     () => serverRuntime.assertRecurringChargeAllowed({ payments: [] }, stripeWithHistoricalClover, { automatic: true, scheduledDueDate: stripeWithHistoricalClover.nextRun }, 'stripe'),
     'A selected Stripe provider must not require an older Clover migration checklist before charging.'
   );
+  const sameDayPaidEvidence = { id: 'pay-earlier-today', recurringPaymentId: 'rec-rapid-internal', status: 'Paid', createdAt: '2026-08-27T12:00:00.000Z' };
+  const rapidInternalPlan = { ...stripeDuePlan, id: 'rec-rapid-internal', frequency: 'Weekly', nextRun: '2026-08-27' };
+  assert.doesNotThrow(
+    () => serverRuntime.assertRecurringChargeAllowed({ payments: [sameDayPaidEvidence] }, rapidInternalPlan, { automatic: true, rapidAutopayOccurrence: true, scheduledDueDate: '2026-08-27T20:01:00.000Z' }, 'stripe'),
+    'An internally verified rapid occurrence must reach Stripe even when an earlier same-day payment exists.'
+  );
   const cloverDuePlan = { ...stripeDuePlan, id: 'rec-clover-blocked', paymentProvider: 'clover', provider: 'Clover', stripeCustomerId: '', stripePaymentMethodId: '', cloverCustomerId: 'cus_clover', cloverPaymentSource: 'src_clover' };
   const cloverEligibility = serverRuntime.wheelsonAutoAutopayEligibility(cloverDuePlan, '2026-08-27', policyNow);
   assert.strictEqual(cloverEligibility.eligible, false, 'A Clover plan must never be charged by the unattended worker.');

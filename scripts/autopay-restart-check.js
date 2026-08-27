@@ -320,6 +320,7 @@ async function main() {
       id: 'rec-rapid-minute-1',
       customer: 'Rapid Minute Customer',
       amount: 1,
+      customerPortalCreditBalance: 50,
       frequency: 'Every minute',
       nextRun: rapidDueAt,
       chargeTime: '',
@@ -345,15 +346,17 @@ async function main() {
     assert(chargeRequests.length === 3 && chargeRequests[2].idempotencyKey.includes('rec-rapid-minute-1'), 'The rapid charge must use its own protected recurring occurrence key.');
     saved = await readSaved(dataDir);
     const rapidRow = saved.recurringPayments.find(row => row.id === 'rec-rapid-minute-1');
-    assert(rapidRow.status === 'Active' && rapidRow.frequency === 'Every minute', 'A successful rapid charge must preserve the every-minute frequency.');
+    assert(rapidRow.status === 'Rapid test passed' && rapidRow.frequency === 'Every minute' && rapidRow.autoChargeEnabled === false, 'A successful rapid charge must preserve its test frequency and turn rapid autocharge off after one provider result.');
     assert(Date.parse(rapidRow.nextRun) > Date.parse(rapidDueAt) && rapidRow.lastAutoChargeOccurrenceKey === rapidDueAt, 'A successful rapid charge must advance beyond the processed minute and preserve the exact occurrence.');
+    assert(rapidRow.customerPortalCreditBalance === 50, 'A rapid Stripe verification must not consume customer account credit instead of testing the saved card.');
+    assert(rapidRow.lastAutoChargeResult === 'Paid - rapid Stripe test complete', 'A rapid success must leave an explicit provider-test result on the recurring plan.');
 
     server = loadServer();
     cookie = await ownerCookie(server);
     const rapidRestartRun = await request(server, 'POST', '/api/woa-autopay/run', { cookie, json: {} });
     assert(rapidRestartRun.status === 200 && rapidRestartRun.json.charged === 0 && chargeRequests.length === 3, 'Restarting after a rapid success must not charge the same minute twice.');
 
-    console.log('Autopay restart check passed: Stripe attempt keys, one-hour delay, safe schedule edits, rapid interval charging, retry success, and restart recovery are protected.');
+    console.log('Autopay restart check passed: Stripe attempt keys, one-hour delay, safe schedule edits, one-shot rapid provider testing, retry success, and restart recovery are protected.');
   } finally {
     global.fetch = originalFetch;
     await fs.rm(dataDir, { recursive: true, force: true });
