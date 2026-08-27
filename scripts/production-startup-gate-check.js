@@ -63,6 +63,17 @@ function cleanRuntimeEnvironment(dataDir) {
 async function main() {
   const serverSource = await fs.readFile(path.join(root, 'server.js'), 'utf8');
   assert.match(serverSource, /const startupMissing = preflight\.providerProofCollection[\s\S]*?preflight\.providerProofCollection\.missing/, 'Runtime startup must be gated by durable foundation readiness, not expiring provider evidence.');
+  assert.match(serverSource, /durable runtime safeguards are incomplete:[\s\S]*?startupMissing\.join/, 'A startup refusal must report only the durable runtime blockers that actually stopped the server.');
+  assert(!/stateBackup\.verified \|\| !stateBackup\.fresh\) providerProofCollectionMissing/.test(serverSource), 'An expired backup freshness window must lock launch actions without taking the application offline.');
+  assert(!/documentStorage\.productionReady \|\| !documentStorageValidation\.live[\s\S]*?providerProofCollectionMissing/.test(serverSource), 'Expired object-storage probe evidence must lock protected actions without taking the application offline.');
+  for (const providerWarning of [
+    'private object storage write/read/private/immutable/delete proof',
+    'signed live Stripe Identity verification',
+    'Resend wheelsonauto.com two-way email proof',
+    'OpenAI Star Responses API health proof with active safety limits'
+  ]) {
+    assert(serverSource.includes("missing.push('" + providerWarning + "')"), providerWarning + ' must remain a protected launch-action gate.');
+  }
   assert.match(serverSource, /stripeLaunchLocked:\s*!preflight\.readyForLiveStripe/, 'An available runtime must keep Stripe launch locked while provider or cutover evidence is incomplete.');
   assert.match(serverSource, /refreshRecoveryDrillForProductionStartup[\s\S]*?WOA_LIVE_RENDER_PRODUCTION[\s\S]*?STATE_REPOSITORY\.kind !== 'postgres'/, 'Only the exact PostgreSQL-backed WheelsonAuto production service may refresh recovery proof at startup.');
   assert.match(serverSource, /WOA_POSTGRES_RECOVERY_DRILL_CONFIRM:\s*postgresRecoveryDrill\.CONFIRMATION_PHRASE/, 'The automated production refresh must still use the guarded isolated-drill confirmation contract.');
@@ -81,23 +92,21 @@ async function main() {
     assert.strictEqual(result.signal, null, 'The startup gate must exit cleanly instead of hanging or being terminated.');
     assert.strictEqual(result.status, 1, 'Hardened mode with incomplete infrastructure must refuse to start the HTTP server.');
     assert.match(output, /WheelsonAuto refused to start with incomplete production safeguards/i, 'The startup failure must clearly identify the production guard.');
+    assert.match(output, /durable runtime safeguards are incomplete/i, 'The startup failure must distinguish durable runtime blockers from expiring provider proof warnings.');
     assert.match(output, /PostgreSQL transactional state/i, 'The startup guard must require transactional PostgreSQL.');
-    assert.match(output, /remove dedicated PostgreSQL drill credentials from the production web runtime/i, 'The startup guard must reject a web service that retains the dedicated drill database credential.');
+    assert.match(output, /database credential isolation/i, 'The startup guard must reject a web service that retains the dedicated drill database credential.');
     assert.match(output, /controlled PostgreSQL recovery drill/i, 'The startup guard must require a fresh controlled PostgreSQL restore and restart drill.');
-    assert.match(output, /WOA_STATE_BACKUP_ENABLED=1/i, 'The startup guard must require the scheduled encrypted state-backup worker.');
-    assert.match(output, /HTTPS offsite encrypted state-backup storage/i, 'The startup guard must require independent HTTPS offsite backup storage.');
-    assert.match(output, /dedicated WOA_STATE_BACKUP_ENCRYPTION_KEY/i, 'The startup guard must require a separate state-backup encryption key.');
-    assert.match(output, /verified encrypted offsite state backup/i, 'The startup guard must require an authenticated backup read-back before launch.');
-    assert.match(output, /S3-compatible AES-256-GCM private document storage/i, 'The startup guard must require encrypted private object storage.');
-    assert.match(output, /Stripe live secret key/i, 'The startup guard must require live Stripe credentials.');
-    assert.match(output, /Stripe onboarding payment provider/i, 'The startup guard must reject a live Stripe launch that still creates new onboarding payments through Clover.');
-    assert.match(output, /Stripe Identity provider/i, 'The startup guard must reject a live Stripe launch that falls back to manual identity verification.');
-    assert.match(output, /verified operational error alert delivery/i, 'The startup guard must require a verified owner alert route for failed jobs, webhooks, and autopay runs.');
-    assert.match(output, /WheelsonAuto first-party messaging enabled on PostgreSQL/i, 'The startup guard must require the built-in customer inbox while keeping carrier SMS optional.');
+    assert.match(output, /verified encrypted offsite state backup/i, 'The startup guard must require enabled, dedicated, production-ready backup storage with an authenticated read-back.');
+    assert.match(output, /production-ready encrypted private storage/i, 'The startup guard must require encrypted private object storage, key coverage, and private-artifact coverage.');
+    assert(!/Stripe live secret key/i.test(output), 'Missing provider credentials must lock provider actions without taking the application offline once the durable runtime is ready.');
+    assert(!/Stripe onboarding payment provider/i.test(output), 'Payment-provider rollout configuration must remain an action gate, not an application availability gate.');
+    assert(!/Stripe Identity provider/i.test(output), 'Identity-provider rollout configuration must remain an action gate, not an application availability gate.');
+    assert(!/verified operational error alert delivery/i.test(output), 'Expired provider alert proof must not replace the durable runtime failure reason.');
+    assert(!/WheelsonAuto first-party messaging enabled on PostgreSQL/i.test(output), 'First-party messaging launch evidence must not replace the durable runtime failure reason.');
     assert(!/Telnyx signed SMS delivery and inbound reply proof/i.test(output), 'Optional carrier SMS must not block the first-party customer-app launch.');
-    assert.match(output, /Resend wheelsonauto\.com two-way email proof/i, 'The startup guard must require a verified WheelsonAuto sender and signed two-way Resend proof.');
-    assert.match(output, /OpenAI Star Responses API health proof with active safety limits/i, 'The startup guard must require a fresh Star provider proof with configured request caps.');
-    assert.match(output, /fresh Clover recurring roster for controlled cutover/i, 'The startup guard must reject a Stripe launch that relies on a missing or degraded Clover recurring roster.');
+    assert(!/Resend wheelsonauto\.com two-way email proof/i.test(output), 'Expired Resend proof must lock email automation without taking the application offline.');
+    assert(!/OpenAI Star Responses API health proof with active safety limits/i.test(output), 'Expired Star proof must lock AI automation without taking the application offline.');
+    assert(!/fresh Clover recurring roster for controlled cutover/i.test(output), 'A stale Clover roster must lock cutover without taking the application offline.');
     assert(!/WheelsonAuto platform running/i.test(output), 'The HTTP listener must never start when required safeguards are incomplete.');
 
     const identityRuntimeResult = spawnSync(process.execPath, ['server.js'], {
@@ -108,12 +117,12 @@ async function main() {
     });
     const identityRuntimeOutput = [identityRuntimeResult.stdout, identityRuntimeResult.stderr].filter(Boolean).join('');
     assert.ifError(identityRuntimeResult.error);
-    assert.strictEqual(identityRuntimeResult.status, 1, 'Stripe Identity must still block startup until its own live verification proof is complete.');
-    assert.match(identityRuntimeOutput, /Stripe Identity live runtime/i, 'The startup guard must reject a Stripe Identity configuration without a usable live runtime.');
-    assert.match(identityRuntimeOutput, /signed live Stripe Identity verification/i, 'The startup guard must require a signed verified Stripe Identity event from a WheelsonAuto onboarding record.');
-    assert(!/WheelsonAuto platform running/i.test(identityRuntimeOutput), 'The HTTP listener must never start while Stripe Identity proof is incomplete.');
+    assert.strictEqual(identityRuntimeResult.status, 1, 'The fixture must still refuse startup because its durable database, backup, storage, and access foundation is incomplete.');
+    assert(!/Stripe Identity live runtime/i.test(identityRuntimeOutput), 'Stripe Identity readiness must not obscure the durable startup blocker.');
+    assert(!/signed live Stripe Identity verification/i.test(identityRuntimeOutput), 'Expired Stripe Identity proof must remain a feature gate instead of an availability gate.');
+    assert(!/WheelsonAuto platform running/i.test(identityRuntimeOutput), 'The HTTP listener must never start while durable runtime safeguards are incomplete.');
 
-    console.log('Production startup gate check passed: hardened mode refuses to listen until transactional state, controlled recovery, a fresh encrypted offsite backup, encrypted private storage, Stripe onboarding and Identity proof, Resend, Star, signed live payment safeguards, and failure-alert delivery are ready; carrier SMS stays optional.');
+    console.log('Production startup gate check passed: hardened mode refuses to listen until durable transactional state, controlled recovery, verified encrypted offsite backup configuration, encrypted private storage, signed sessions, owner access, and HTTPS are ready; expiring provider proof locks only its protected actions.');
   } finally {
     await fs.rm(dataDir, { recursive: true, force: true });
   }

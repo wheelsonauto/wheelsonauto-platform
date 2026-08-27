@@ -422,7 +422,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260827-billing-control-360';
+const ASSET_VERSION = 'platform-20260827-billing-control-361';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -14278,8 +14278,11 @@ async function productionInfrastructurePreflight(data = null, options = {}) {
   if (!databaseWithRecoveryDrill.snapshotRecoveryReady) providerProofCollectionMissing.push('verified PostgreSQL recovery snapshot');
   if (!databaseWithRecoveryDrill.migrationProofReady) providerProofCollectionMissing.push('verified JSON-to-PostgreSQL import proof');
   if (!recoveryDrill.ready) providerProofCollectionMissing.push('controlled PostgreSQL recovery drill');
-  if (!stateBackup.enabled || !stateBackup.productionReady || !stateBackup.dedicatedKeyConfigured || !stateBackup.verified || !stateBackup.fresh) providerProofCollectionMissing.push('fresh encrypted offsite state backup');
-  if (!documentStorage.productionReady || !documentStorageValidation.live || !documentEncryptionKeys.ready || !privateArtifacts.ready || !WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED) providerProofCollectionMissing.push('production-ready encrypted private storage');
+  // Runtime availability depends on durable storage configuration and verified
+  // recoverability. Expiring validation evidence remains a launch/money-action
+  // gate below, but must never take the entire staff and customer app offline.
+  if (!stateBackup.enabled || !stateBackup.productionReady || !stateBackup.dedicatedKeyConfigured || !stateBackup.verified) providerProofCollectionMissing.push('verified encrypted offsite state backup');
+  if (!documentStorage.productionReady || !documentEncryptionKeys.ready || !privateArtifacts.ready || !WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED) providerProofCollectionMissing.push('production-ready encrypted private storage');
   if (!SESSION_SIGNING_SECRET_CONFIGURED) providerProofCollectionMissing.push('stable signed sessions');
   if (!ownerAuthentication.passwordLoginConfigured || !ownerAuthentication.passwordLoginStrong || !ownerAuthentication.passwordLoginVerified || ownerAuthentication.pinFallbackAllowed) providerProofCollectionMissing.push('verified password-only owner access');
   if (!/^https:\/\//i.test(PUBLIC_BASE_URL || '')) providerProofCollectionMissing.push('HTTPS public origin');
@@ -14438,7 +14441,7 @@ async function assertProductionInfrastructure() {
     ? preflight.providerProofCollection.missing
     : preflight.missing;
   if (startupMissing.length) {
-    const error = new Error('Production hardening is enabled, but launch safeguards are incomplete: ' + preflight.missing.join(', ') + '.');
+    const error = new Error('Production hardening is enabled, but durable runtime safeguards are incomplete: ' + startupMissing.join(', ') + '. Provider proof warnings continue to lock only their protected actions.');
     error.code = 'production_infrastructure_not_ready';
     error.preflight = preflight;
     throw error;
