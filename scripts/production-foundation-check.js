@@ -539,7 +539,7 @@ async function main() {
     const cloverWithoutChargeToken = { status: 'Active', autoChargeEnabled: true, paymentProvider: 'clover', cloverCustomerId: 'identity-not-token', cardSavedAt: '2026-07-20T12:00:00.000Z', frequency: 'Weekly', nextRun: '2026-07-24', chargeTime: '00:00' };
     const missingCloverTokenEligibility = wheelsonAutoAutopayEligibility(cloverWithoutChargeToken, '2026-07-24', new Date('2026-07-24T23:00:00.000Z'));
     assert.strictEqual(missingCloverTokenEligibility.eligible, false, 'A Clover customer ID must never be submitted as though it were a chargeable saved-card token.');
-    assert.match(missingCloverTokenEligibility.reason, /ecommerce saved-card token/i, 'A blocked Clover plan must explain the exact missing token instead of silently missing autopay.');
+    assert.match(missingCloverTokenEligibility.reason, /Clover automatic charging is disabled/i, 'A blocked Clover plan must explain that unattended charging is disabled and the schedule must move to Stripe.');
     assert.strictEqual(nextRecurringOccurrence({ frequency: 'Daily' }, '2026-07-24'), '2026-07-25', 'Daily schedules must advance by one day.');
     assert.strictEqual(nextRecurringOccurrence({ frequency: 'Bi-weekly' }, '2026-07-24'), '2026-08-07', 'Biweekly schedules must advance by fourteen days.');
     assert.strictEqual(nextRecurringOccurrence({ frequency: 'Monthly', monthlyDay: 31 }, '2026-07-31'), '2026-08-31', 'Monthly schedules must preserve the requested day when it exists.');

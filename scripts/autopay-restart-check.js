@@ -127,10 +127,11 @@ async function main() {
   process.env.WOA_ADMIN_USERNAME = 'owner';
   process.env.WOA_ADMIN_PASSWORD = 'AutopayRestartOwner123!';
   process.env.WOA_SESSION_SECRET = 'autopay-restart-session-secret';
-  process.env.WOA_PAYMENT_PROVIDER = 'clover';
-  process.env.CLOVER_MERCHANT_ID = 'merchant_restart_test';
-  process.env.CLOVER_ECOMMERCE_PRIVATE_KEY = 'clover_restart_private_test';
-  process.env.CLOVER_CHARGE_BASE = 'https://clover.restart.test';
+  process.env.NODE_ENV = 'test';
+  process.env.WOA_ALLOW_ISOLATED_PROVIDER_TESTS = '1';
+  process.env.WOA_PAYMENT_PROVIDER = 'stripe';
+  process.env.STRIPE_SECRET_KEY = 'sk_test_autopay_restart';
+  process.env.STRIPE_API_BASE = 'https://stripe.restart.test/v1';
   process.env.WOA_AUTO_SYNC_MS = '3600000';
   process.env.WOA_AUTOPAY_MS = '3600000';
   process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS = '3600000';
@@ -139,22 +140,23 @@ async function main() {
   process.env.PUBLIC_BASE_URL = 'http://127.0.0.1:4191';
 
   global.fetch = async (url, options = {}) => {
-    if (new URL(String(url)).pathname === '/v1/charges') {
+    if (new URL(String(url)).pathname === '/v1/payment_intents') {
       chargeRequests.push({
         idempotencyKey: String(options.headers && (options.headers['idempotency-key'] || options.headers['Idempotency-Key']) || ''),
-        body: JSON.parse(String(options.body || '{}'))
+        body: Object.fromEntries(new URLSearchParams(String(options.body || '')))
       });
       if (providerMode === 'decline') {
         return {
           ok: false,
           status: 402,
-          async text() { return JSON.stringify({ type: 'card_error', code: 'card_declined', message: 'Restart test decline' }); }
+          async text() { return JSON.stringify({ error: { type: 'card_error', code: 'card_declined', decline_code: 'card_declined', message: 'Restart test decline' } }); }
         };
       }
+      const paymentIntentId = 'pi_restart_success_' + chargeRequests.length;
       return {
         ok: true,
         status: 200,
-        async text() { return JSON.stringify({ id: 'charge_restart_retry_success', status: 'succeeded', paid: true, captured: true }); }
+        async text() { return JSON.stringify({ id: paymentIntentId, status: 'succeeded', livemode: false, created: Math.floor(Date.now() / 1000), latest_charge: 'ch_restart_success_' + chargeRequests.length }); }
       };
     }
     return { ok: false, status: 500, async text() { return JSON.stringify({ message: 'Unexpected restart test request.' }); } };
@@ -183,10 +185,11 @@ async function main() {
       tone: 'good',
       autoChargeEnabled: true,
       autopayManagedBy: 'WheelsonAuto',
-      paymentProvider: 'clover',
-      provider: 'Clover',
-      cloverCustomerId: 'clover_restart_customer_1',
-      cloverPaymentSource: 'clv_restart_source_1',
+      paymentProvider: 'stripe',
+      provider: 'Stripe',
+      stripeCustomerId: 'cus_restart_customer_1',
+      stripePaymentMethodId: 'pm_restart_source_1',
+      stripeLivemode: false,
       cardSavedAt: new Date().toISOString(),
       paymentSetup: 'Card saved through WheelsonAuto',
       organizationId: 'org-wheelsonauto'
@@ -203,9 +206,11 @@ async function main() {
       failedAttempts: 2,
       autoChargeEnabled: true,
       autopayManagedBy: 'WheelsonAuto',
-      paymentProvider: 'clover',
-      cloverCustomerId: 'clover_reschedule_customer_1',
-      cloverPaymentSource: 'clv_reschedule_source_1',
+      paymentProvider: 'stripe',
+      provider: 'Stripe',
+      stripeCustomerId: 'cus_reschedule_customer_1',
+      stripePaymentMethodId: 'pm_reschedule_source_1',
+      stripeLivemode: false,
       cardSavedAt: new Date().toISOString(),
       organizationId: 'org-wheelsonauto'
     }, {
@@ -239,22 +244,22 @@ async function main() {
     let cookie = await ownerCookie(server);
 
     const firstRun = await request(server, 'POST', '/api/woa-autopay/run', { cookie, json: {} });
-    assert(firstRun.status === 207 && firstRun.json.failed === 1, 'The first known Clover decline must be recorded as one failed attempt.');
-    assert(chargeRequests.length === 1, 'The first autopay run must submit one Clover request.');
+    assert(firstRun.status === 207 && firstRun.json.failed === 1, 'The first known Stripe decline must be recorded as one failed attempt.');
+    assert(chargeRequests.length === 1, 'The first autopay run must submit one Stripe request.');
     const firstKey = chargeRequests[0].idempotencyKey;
-    assert(firstKey === 'woa-auto-rec-restart-1-' + today + '-22900', 'Attempt one must retain the original production idempotency key across deploys and restarts.');
+    assert(firstKey === 'woa-stripe-auto-rec-restart-1-' + today + '-22900-attempt-1', 'Attempt one must retain the original production idempotency key across deploys and restarts.');
 
     let saved = await readSaved(dataDir);
     let recurring = saved.recurringPayments.find(row => row.id === 'rec-restart-1');
     assert(recurring && recurring.retryCount === 1 && /1x failed/i.test(recurring.status), 'The first decline must persist retry count one.');
-    assert(recurring.cloverChargeAttempt && recurring.cloverChargeAttempt.idempotencyKey === firstKey, 'The failed Clover attempt must keep its exact provider idempotency key.');
-    assert(saved.payments.some(payment => payment.recurringPaymentId === 'rec-restart-1' && payment.cloverIdempotencyKey === firstKey), 'The failed transaction history must retain the Clover idempotency key.');
+    assert(recurring.stripeChargeAttempt && recurring.stripeChargeAttempt.idempotencyKey === firstKey, 'The failed Stripe attempt must keep its exact provider idempotency key.');
+    assert(saved.payments.some(payment => payment.recurringPaymentId === 'rec-restart-1' && payment.stripeIdempotencyKey === firstKey), 'The failed transaction history must retain the Stripe idempotency key.');
 
     server = loadServer();
     cookie = await ownerCookie(server);
     const immediateRestartRun = await request(server, 'POST', '/api/woa-autopay/run', { cookie, json: {} });
     assert(immediateRestartRun.status === 200 && immediateRestartRun.json.charged === 0 && immediateRestartRun.json.failed === 0, 'A server restart must preserve the one-hour retry delay.');
-    assert(chargeRequests.length === 1, 'Restarting before one hour must not contact Clover again.');
+    assert(chargeRequests.length === 1, 'Restarting before one hour must not contact Stripe again.');
 
     const blockedPendingEdit = await request(server, 'POST', '/api/recurring-payments/update', {
       cookie,
@@ -296,12 +301,12 @@ async function main() {
     const delayedRetry = await request(server, 'POST', '/api/woa-autopay/run', { cookie, json: {} });
     assert(delayedRetry.status === 200 && delayedRetry.json.charged === 1, 'The saved failed attempt must retry after the one-hour boundary.');
     assert(chargeRequests.length === 2, 'Exactly one real provider retry must be submitted after the delay.');
-    assert(chargeRequests[1].idempotencyKey === firstKey + '-attempt-2', 'The second real Clover attempt must use a new idempotency key instead of replaying the first decline.');
+    assert(chargeRequests[1].idempotencyKey === 'woa-stripe-auto-rec-restart-1-' + today + '-22900-attempt-2', 'The second real Stripe attempt must use a new idempotency key instead of replaying the first decline.');
 
     saved = await readSaved(dataDir);
     recurring = saved.recurringPayments.find(row => row.id === 'rec-restart-1');
     assert(recurring.status === 'Active' && recurring.retryCount === 0 && recurring.nextRun > today, 'A successful retry must clear failure state and advance the weekly schedule once.');
-    assert(recurring.cloverChargeAttempt.status === 'succeeded' && recurring.cloverChargeAttempt.attemptNumber === 2, 'The recurring customer must retain proof that attempt two succeeded.');
+    assert(recurring.stripeChargeAttempt.status === 'succeeded' && recurring.stripeChargeAttempt.sequence === 2, 'The recurring customer must retain proof that attempt two succeeded.');
     assert(saved.payments.filter(payment => payment.recurringPaymentId === 'rec-restart-1' && payment.status === 'Paid').length === 1, 'The retry lifecycle must create exactly one paid transaction.');
 
     server = loadServer();
@@ -322,10 +327,11 @@ async function main() {
       tone: 'good',
       autoChargeEnabled: true,
       autopayManagedBy: 'WheelsonAuto',
-      paymentProvider: 'clover',
-      provider: 'Clover',
-      cloverCustomerId: 'clover_rapid_customer_1',
-      cloverPaymentSource: 'clv_rapid_source_1',
+      paymentProvider: 'stripe',
+      provider: 'Stripe',
+      stripeCustomerId: 'cus_rapid_customer_1',
+      stripePaymentMethodId: 'pm_rapid_source_1',
+      stripeLivemode: false,
       cardSavedAt: new Date().toISOString(),
       paymentSetup: 'Card saved through WheelsonAuto',
       organizationId: 'org-wheelsonauto'
@@ -340,14 +346,14 @@ async function main() {
     saved = await readSaved(dataDir);
     const rapidRow = saved.recurringPayments.find(row => row.id === 'rec-rapid-minute-1');
     assert(rapidRow.status === 'Active' && rapidRow.frequency === 'Every minute', 'A successful rapid charge must preserve the every-minute frequency.');
-    assert(Date.parse(rapidRow.nextRun) > Date.now() && rapidRow.lastAutoChargeOccurrenceKey === rapidDueAt, 'A successful rapid charge must advance to the next future minute and preserve the processed occurrence.');
+    assert(Date.parse(rapidRow.nextRun) > Date.parse(rapidDueAt) && rapidRow.lastAutoChargeOccurrenceKey === rapidDueAt, 'A successful rapid charge must advance beyond the processed minute and preserve the exact occurrence.');
 
     server = loadServer();
     cookie = await ownerCookie(server);
     const rapidRestartRun = await request(server, 'POST', '/api/woa-autopay/run', { cookie, json: {} });
     assert(rapidRestartRun.status === 200 && rapidRestartRun.json.charged === 0 && chargeRequests.length === 3, 'Restarting after a rapid success must not charge the same minute twice.');
 
-    console.log('Autopay restart check passed: Clover attempt keys, one-hour delay, safe schedule edits, rapid interval charging, retry success, and restart recovery are protected.');
+    console.log('Autopay restart check passed: Stripe attempt keys, one-hour delay, safe schedule edits, rapid interval charging, retry success, and restart recovery are protected.');
   } finally {
     global.fetch = originalFetch;
     await fs.rm(dataDir, { recursive: true, force: true });

@@ -4129,6 +4129,26 @@ async function main() {
       paymentSetup: 'Card saved through WheelsonAuto',
       cardSavedAt: new Date().toISOString()
     });
+    const stripeAutopaySmokeIds = new Set([
+      'direct-autopay-fail-once',
+      'direct-autopay-fail-twice',
+      'direct-autopay-paid-stale',
+      'direct-autopay-success-overdue',
+      'direct-autopay-amount-edit',
+      'direct-autopay-late-schedule-edit',
+      'direct-autopay-paid-window-edit',
+      'direct-autopay-rapid-edit'
+    ]);
+    autopayState.recurringPayments.filter(row => stripeAutopaySmokeIds.has(row.id)).forEach(row => {
+      row.paymentProvider = 'stripe';
+      row.provider = 'Stripe';
+      row.stripeCustomerId = 'cus_' + row.id.replace(/[^a-z0-9]/gi, '_');
+      row.stripePaymentMethodId = 'pm_' + row.id.replace(/[^a-z0-9]/gi, '_');
+      row.stripeLivemode = true;
+      row.paymentSetup = 'Stripe card saved and chargeable';
+      delete row.cloverCustomerId;
+      delete row.cloverPaymentSource;
+    });
     autopayState.payments = autopayState.payments || [];
     autopayState.payments.unshift({
       id: 'direct-paid-window-payment',
@@ -4218,13 +4238,14 @@ async function main() {
     const autopayOriginalFetch = global.fetch;
     let successfulAutopayChargeCalls = 0;
     global.fetch = async (url, options = {}) => {
-      if (String(url).includes('/v1/charges')) {
-        const body = JSON.parse(String(options.body || '{}'));
-        if (body.source === 'clv_success_overdue_001' || body.source === 'clv_edit_late_001') {
+      if (String(url).includes('/v1/payment_intents')) {
+        const body = Object.fromEntries(new URLSearchParams(String(options.body || '')));
+        if (body.payment_method === 'pm_direct_autopay_success_overdue' || body.payment_method === 'pm_direct_autopay_late_schedule_edit') {
           successfulAutopayChargeCalls += 1;
-          return { ok: true, status: 200, async text() { return JSON.stringify({ id: body.source === 'clv_edit_late_001' ? 'charge-direct-late-edit-001' : 'charge-direct-overdue-001', status: 'succeeded', paid: true, captured: true }); } };
+          const intentId = body.payment_method === 'pm_direct_autopay_late_schedule_edit' ? 'pi_direct_late_edit_001' : 'pi_direct_overdue_001';
+          return { ok: true, status: 200, async text() { return JSON.stringify({ id: intentId, status: 'succeeded', livemode: true, created: Math.floor(Date.now() / 1000), latest_charge: 'ch_' + intentId }); } };
         }
-        return { ok: false, status: 402, async text() { return JSON.stringify({ message: 'Direct card decline' }); } };
+        return { ok: false, status: 402, async text() { return JSON.stringify({ error: { type: 'card_error', code: 'card_declined', decline_code: 'card_declined', message: 'Direct card decline' } }); } };
       }
       if (String(url).includes('api.resend.com')) return { ok: true, status: 200, async json() { return { id: 'direct-email-autopay' }; }, async text() { return JSON.stringify({ id: 'direct-email-autopay' }); } };
       return autopayOriginalFetch(url, options);
@@ -4242,7 +4263,7 @@ async function main() {
     const autopayRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     const autopayDiagnostics = await request(server, 'GET', '/api/woa-autopay/status', { cookie: ownerCookie });
     const missingTokenDiagnostic = autopayDiagnostics.json.autopay.diagnostics.find(row => row.id === 'direct-autopay-missing-token');
-    assert(missingTokenDiagnostic && missingTokenDiagnostic.eligible === false && /chargeable ecommerce saved-card token/i.test(missingTokenDiagnostic.reason || ''), 'A missing Clover card token must remain visible as an exact autopay diagnostic.');
+    assert(missingTokenDiagnostic && missingTokenDiagnostic.eligible === false && /Clover automatic charging is disabled/i.test(missingTokenDiagnostic.reason || ''), 'A Clover plan must remain visible as explicitly excluded from unattended autopay.');
     assert(autopayRead.json.messages.some(message => message.event === 'payment_failed' && message.customer === 'Direct Failed Once' && /1x failed/i.test(message.subject || '')), '1x failed payment notification should be saved in Messages.');
     assert(autopayRead.json.messages.some(message => message.event === 'payment_failed' && message.customer === 'Direct Failed Twice' && /2x failed/i.test(message.subject || '')), '2x failed payment notification should be saved in Messages.');
     assert(autopayRead.json.payments.some(payment => payment.customer === 'Direct Failed Once' && String(payment.status || '').includes('1x failed') && payment.vin === 'DIRECTFAILEDONCE'), '1x failed autopay should save a named failed transaction with vehicle evidence.');

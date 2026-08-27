@@ -159,7 +159,9 @@ async function run() {
   );
 
   const savedCardChargeSource = server.slice(server.indexOf('async function chargeStripeSavedCard'), server.indexOf('async function chargeCloverSavedCard'));
-  assert(savedCardChargeSource.includes('recurring.controlledStripePilotTest === true') && savedCardChargeSource.includes('assertControlledStripeTestAutopayAllowed(data, recurring, amount)') && savedCardChargeSource.includes("assertStripeGeneralMoneyActionAllowed(data, 'running Stripe autopay');") && savedCardChargeSource.includes('else assertStripeMoneyActionsArmed();'), 'Only the capped dedicated Stripe test may exercise unattended autopay before approval; ordinary autopay retains the approved-pilot gate and manual charges retain hardened production readiness.');
+  assert(savedCardChargeSource.includes('assertStripeMoneyActionsArmed();') && !savedCardChargeSource.includes("assertStripeGeneralMoneyActionAllowed(data, 'running Stripe autopay')") && !savedCardChargeSource.includes('assertControlledStripeTestAutopayAllowed(data, recurring, amount)'), 'Every charge-ready Stripe plan must use hardened provider readiness without retaining the obsolete pilot-only autopay gate.');
+  const savedRecurringRouterSource = server.slice(server.indexOf('async function chargeSavedRecurringCard'), server.indexOf('function applyCustomerPortalCreditToBilling'));
+  assert(savedRecurringRouterSource.includes("payload.automatic === true") && savedRecurringRouterSource.includes("error.code = 'clover_automatic_charging_disabled'"), 'Automatic Clover charging must remain explicitly disabled while manual Clover tools stay separate.');
   assert(server.includes("/^stripe_pilot_/.test(code)") && server.includes("'controlled_stripe_pilot_required'"), 'Stripe pilot policy blocks must be classified as provider safeguards instead of customer card failures.');
   assert(server.includes("Only the owner can manually charge a saved customer card."), 'Manual saved-card charges must require an owner session.');
 
@@ -204,7 +206,6 @@ async function run() {
     'controlledStripePilotMoneyActionReview',
     'assertStripeScopedMoneyActionAllowed',
     'assertStripeGeneralMoneyActionAllowed',
-    'The hardening flag alone never unlocks ordinary customer money actions',
     "transactionalStateReady: STATE_REPOSITORY.kind === 'postgres'",
     'privateDocumentStorageReady: WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED',
     'stateBackupConfigured: WOA_STATE_BACKUP_ENABLED',
@@ -244,6 +245,18 @@ async function run() {
     'more than one payment schedule'
   ].forEach(value => assert(server.includes(value), 'Missing Stripe safety/runtime marker: ' + value));
   const serverRuntime = require('../server');
+  const policyNow = new Date('2026-08-27T20:00:00.000Z');
+  const normalizedMinute = serverRuntime.normalizedRapidAutopayNextRun('Every minute', '2026-08-27', policyNow);
+  assert.strictEqual(normalizedMinute, '2026-08-27T20:01:00.000Z', 'A date-only value must become the next real minute when rapid autopay is selected.');
+  const repairState = { recurringPayments: [{ id: 'rec-rapid-repair', frequency: 'Every hour', nextRun: '2026-08-27', status: 'Active' }], integrations: { clover: { recurringPlanMembers: [] } } };
+  assert.strictEqual(serverRuntime.repairInvalidRapidAutopaySchedules(repairState, policyNow), 1, 'The autopay worker must repair one malformed saved rapid schedule.');
+  assert.strictEqual(repairState.recurringPayments[0].nextRun, '2026-08-27T21:00:00.000Z', 'A repaired hourly schedule must point to the next hour, not remain blocked.');
+  const stripeDuePlan = { id: 'rec-stripe-active', customer: 'Stripe Customer', status: 'Active', autoChargeEnabled: true, paymentProvider: 'stripe', provider: 'Stripe', stripeCustomerId: 'cus_active', stripePaymentMethodId: 'pm_active', stripeLivemode: true, frequency: 'Every minute', nextRun: '2026-08-27T19:59:00.000Z', amount: 229 };
+  assert.strictEqual(serverRuntime.wheelsonAutoAutopayEligibility(stripeDuePlan, '2026-08-27', policyNow).eligible, true, 'A charge-ready due Stripe plan must be eligible without owner pilot approval.');
+  const cloverDuePlan = { ...stripeDuePlan, id: 'rec-clover-blocked', paymentProvider: 'clover', provider: 'Clover', stripeCustomerId: '', stripePaymentMethodId: '', cloverCustomerId: 'cus_clover', cloverPaymentSource: 'src_clover' };
+  const cloverEligibility = serverRuntime.wheelsonAutoAutopayEligibility(cloverDuePlan, '2026-08-27', policyNow);
+  assert.strictEqual(cloverEligibility.eligible, false, 'A Clover plan must never be charged by the unattended worker.');
+  assert(/Clover automatic charging is disabled/.test(cloverEligibility.reason), 'The Clover block must explain that the plan needs to move to Stripe.');
   const controlledTestAutopay = serverRuntime.controlledStripeTestAutopayEligibility;
   const controlledTestPlan = { controlledStripePilotTest: true, paymentProvider: 'stripe', amount: 1, vehicle: '1999 test test', vin: 'test', plate: 'test', cloverSubscriptionId: '' };
   assert.strictEqual(controlledTestAutopay({}, controlledTestPlan).eligible, true, 'The dedicated $1 placeholder Stripe plan must be able to prove unattended autopay before final pilot approval.');

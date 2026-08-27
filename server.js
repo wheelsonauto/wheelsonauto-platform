@@ -424,7 +424,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260827-controlled-autopay-368';
+const ASSET_VERSION = 'platform-20260827-stripe-autopay-369';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -17572,6 +17572,9 @@ function cleanAutopayPayload(payload) {
   const paymentProvider = normalizedPaymentProvider(payload.paymentProvider || payload.provider || WOA_PAYMENT_PROVIDER);
   const frequency = String(payload.frequency || 'Weekly').trim();
   const rapidInterval = rapidAutopayIntervalMs(frequency) > 0;
+  const nextRun = rapidInterval
+    ? normalizedRapidAutopayNextRun(frequency, payload.nextRun || payload.firstRun)
+    : (payload.nextRun || payload.firstRun || 'After setup');
   return {
     id: payload.id || ('rec-' + Date.now()),
     applicationId: String(payload.applicationId || '').trim(),
@@ -17590,7 +17593,7 @@ function cleanAutopayPayload(payload) {
     tracker: String(payload.tracker || '').trim(),
     amount: Number.isFinite(amount) ? amount : 0,
     frequency,
-    nextRun: payload.nextRun || payload.firstRun || 'After setup',
+    nextRun,
     chargeTime: rapidInterval ? '' : String(payload.chargeTime || payload.paymentTime || '18:00').trim(),
     status: payload.status || 'Setup needed',
     tone: payload.tone || (payload.status === 'Active' ? 'good' : 'warn'),
@@ -19570,6 +19573,36 @@ function validRecurringInstant(value) {
   const date = new Date(raw);
   return Number.isFinite(date.getTime()) ? date.toISOString() : '';
 }
+function normalizedRapidAutopayNextRun(frequency, value, now = new Date()) {
+  const intervalMs = rapidAutopayIntervalMs(frequency);
+  if (!intervalMs) return String(value || '').trim();
+  const saved = validRecurringInstant(value);
+  if (saved) return saved;
+  const anchor = now instanceof Date ? now : new Date(now);
+  const anchorMs = Number.isFinite(anchor.getTime()) ? anchor.getTime() : Date.now();
+  return new Date(anchorMs + intervalMs).toISOString();
+}
+function repairInvalidRapidAutopaySchedules(data, now = new Date()) {
+  const rows = Array.isArray(data && data.recurringPayments) ? data.recurringPayments : [];
+  let repaired = 0;
+  rows.forEach(row => {
+    if (!rapidAutopayIntervalMs(row) || validRecurringInstant(row.nextRun)) return;
+    const nextRun = normalizedRapidAutopayNextRun(row.frequency, row.nextRun, now);
+    const patch = {
+      nextRun,
+      adminNextRun: nextRun,
+      chargeTime: '',
+      lastRapidScheduleRepairedAt: new Date().toISOString(),
+      lastRapidScheduleRepairedFrom: String(row.nextRun || ''),
+      lastAutoChargeError: '',
+      lastAutoChargeResult: 'Rapid schedule repaired'
+    };
+    Object.assign(row, patch);
+    updateRecurringChargeState(data, row.id || row.cloverSubscriptionId, patch);
+    repaired += 1;
+  });
+  return repaired;
+}
 function recurringOccurrenceKey(row) {
   if (rapidAutopayIntervalMs(row)) return validRecurringInstant(row && row.nextRun);
   return recurringDateKey(row);
@@ -19873,6 +19906,7 @@ function wheelsonAutoAutopayEligibility(row, dateKey = localDateKey(), now = new
   if (attempts >= 2) return blocked('Two automatic attempts failed. Contact the customer before another charge.');
   if (status !== 'active' && !status.includes('1x failed') && !status.includes('confirmation pending')) return blocked('Autopay status is ' + (row && row.status || 'not active') + '.');
   if (!row || !row.autoChargeEnabled) return blocked('Automatic charging is turned off.');
+  if (provider === 'clover') return blocked('Clover automatic charging is disabled. Switch this recurring plan to Stripe before autopay can run.');
   if (!recurringCardReadyForProvider(row, provider)) {
     return blocked(provider === 'stripe'
       ? 'The Stripe customer or saved card is not charge-ready.'
@@ -20510,9 +20544,7 @@ async function completeStripeRecurringChargeClaim(scope, key, response = {}, cla
 async function chargeStripeSavedCard(data, recurring, payload = {}) {
   const amount = Number(payload.amount || recurring.amount || 0);
   if (!amount || amount <= 0) throw new Error('Enter a valid amount before charging.');
-  if (payload.automatic === true && recurring.controlledStripePilotTest === true) assertControlledStripeTestAutopayAllowed(data, recurring, amount);
-  else if (payload.automatic === true) assertStripeGeneralMoneyActionAllowed(data, 'running Stripe autopay');
-  else assertStripeMoneyActionsArmed();
+  assertStripeMoneyActionsArmed();
   assertStripeLiveResult(recurring.stripeLivemode, 'Saved Stripe card');
   const chargeGuard = assertRecurringChargeAllowed(data, recurring, payload, 'stripe');
   const additionalManualCharge = chargeGuard.additionalManualCharge === true;
@@ -20792,6 +20824,12 @@ async function chargeSavedRecurringCard(data, payload, req) {
   const provider = normalizedPaymentProvider(recurring.paymentProvider || recurring.provider || 'clover');
   if (provider === 'stripe') return chargeStripeSavedCard(data, recurring, payload);
   if (provider !== 'clover') throw new Error('Unsupported saved-card provider: ' + paymentProviderLabel(provider) + '.');
+  if (payload.automatic === true) {
+    const error = new Error('Clover automatic charging is disabled. Switch this recurring plan to Stripe before autopay can run.');
+    error.code = 'clover_automatic_charging_disabled';
+    error.statusCode = 409;
+    throw error;
+  }
   const amount = Number(payload.amount || recurring.amount || 0);
   if (!amount || amount <= 0) throw new Error('Enter a valid amount before charging.');
   const chargeGuard = assertRecurringChargeAllowed(data, recurring, payload, 'clover');
@@ -21030,7 +21068,7 @@ async function runWheelsonAutoAutopay(options = {}) {
   woaAutopayStatus.fatalError = '';
   const runAt = options.now instanceof Date ? options.now : new Date(options.now || Date.now());
   const dateKey = options.dateKey || localDateKey(runAt);
-  const result = { dateKey, charged: 0, creditCovered: 0, creditApplied: 0, pickupSchedulesRecovered: 0, reconciled: 0, failed: 0, notFound: 0, authenticationRequired: 0, confirmationPending: 0, providerBlocked: 0, duplicateBlocked: 0, skipped: 0, errors: [] };
+  const result = { dateKey, charged: 0, creditCovered: 0, creditApplied: 0, pickupSchedulesRecovered: 0, rapidSchedulesRepaired: 0, reconciled: 0, failed: 0, notFound: 0, authenticationRequired: 0, confirmationPending: 0, providerBlocked: 0, duplicateBlocked: 0, skipped: 0, errors: [] };
   let autopayLock = null;
   try {
     autopayLock = await STATE_REPOSITORY.acquireJobLock('wheelsonauto-autopay');
@@ -21044,6 +21082,7 @@ async function runWheelsonAutoAutopay(options = {}) {
     const data = await readData();
     data.recurringPayments = Array.isArray(data.recurringPayments) ? data.recurringPayments : [];
     result.pickupSchedulesRecovered = repairCompletedPickupAutopayStates(data);
+    result.rapidSchedulesRepaired = repairInvalidRapidAutopaySchedules(data, runAt);
     for (const row of data.recurringPayments) {
       if (rapidAutopayIntervalMs(row)) continue;
       const dueKey = recurringDateKey(row);
@@ -21081,18 +21120,22 @@ async function runWheelsonAutoAutopay(options = {}) {
         const availableCredit = Math.max(0, Number(row.customerPortalCreditBalance || 0));
         if (weeklyAmount > 0 && availableCredit >= weeklyAmount) {
           applyCustomerPortalCreditToBilling(data, row, weeklyAmount, scheduledDueDate, { fullCoverage: true });
-          row.lastAutoChargeDate = dateKey;
-          row.lastAutoChargeAt = runAt.toISOString();
-          row.lastAutoChargeOccurrenceKey = scheduledDueDate;
-          row.nextRun = nextRun;
-          row.adminNextRun = nextRun;
-          row.paymentDay = /week/i.test(String(row.frequency || '')) ? calendarDayName(nextRun) : row.paymentDay;
-          row.chargeDay = /week/i.test(String(row.frequency || '')) ? calendarDayName(nextRun) : row.chargeDay;
-          row.status = 'Active';
-          row.tone = 'good';
-          row.retryCount = 0;
-          row.failedAttempts = 0;
-          row.lastAutoChargeResult = 'Paid with account credit';
+          const creditSuccessPatch = {
+            lastAutoChargeDate: dateKey,
+            lastAutoChargeAt: runAt.toISOString(),
+            lastAutoChargeOccurrenceKey: scheduledDueDate,
+            nextRun,
+            adminNextRun: nextRun,
+            paymentDay: /week/i.test(String(row.frequency || '')) ? calendarDayName(nextRun) : row.paymentDay,
+            chargeDay: /week/i.test(String(row.frequency || '')) ? calendarDayName(nextRun) : row.chargeDay,
+            status: 'Active',
+            tone: 'good',
+            retryCount: 0,
+            failedAttempts: 0,
+            lastAutoChargeResult: 'Paid with account credit'
+          };
+          Object.assign(row, creditSuccessPatch);
+          updateRecurringChargeState(data, row.id || row.cloverSubscriptionId, creditSuccessPatch);
           result.creditCovered += 1;
           continue;
         }
@@ -21109,15 +21152,20 @@ async function runWheelsonAutoAutopay(options = {}) {
         if (!charged || !charged.payment || String(charged.payment.status || '').toLowerCase() !== 'paid') {
           throw new Error(paymentProviderLabel(row.paymentProvider || row.provider || 'clover') + ' returned ' + String(charged && charged.payment && charged.payment.status || 'an unconfirmed result') + '. The next charge date was not advanced.');
         }
-        row.lastAutoChargeDate = dateKey;
-        row.lastAutoChargeAt = runAt.toISOString();
-        row.lastAutoChargeOccurrenceKey = scheduledDueDate;
-        row.nextRun = nextRun;
-        row.status = 'Active';
-        row.tone = 'good';
-        row.retryCount = 0;
-        row.failedAttempts = 0;
-        row.lastAutoChargeResult = 'Paid';
+        const providerSuccessPatch = {
+          lastAutoChargeDate: dateKey,
+          lastAutoChargeAt: runAt.toISOString(),
+          lastAutoChargeOccurrenceKey: scheduledDueDate,
+          nextRun,
+          adminNextRun: nextRun,
+          status: 'Active',
+          tone: 'good',
+          retryCount: 0,
+          failedAttempts: 0,
+          lastAutoChargeResult: 'Paid'
+        };
+        Object.assign(row, providerSuccessPatch);
+        updateRecurringChargeState(data, row.id || row.cloverSubscriptionId, providerSuccessPatch);
         if (creditToApply) {
           const creditPayment = applyCustomerPortalCreditToBilling(data, row, weeklyAmount, scheduledDueDate, { fullCoverage: false });
           if (creditPayment) {
@@ -31276,9 +31324,10 @@ const server = http.createServer(async (req, res) => {
       const recurring = findRecurringRow(data, id);
       if (!recurring) return json(res, 404, { ok: false, error: 'Recurring customer was not found.' });
       const migrationBeforeUpdate = stripeMigration.migrationRecord(recurring);
-      const nextRun = String(payload.nextRun || (recurring && recurring.nextRun) || '').trim();
       const frequency = String(payload.frequency || (recurring && recurring.frequency) || 'Weekly').trim();
       const rapidInterval = rapidAutopayIntervalMs(frequency) > 0;
+      const rawNextRun = String(payload.nextRun || (recurring && recurring.nextRun) || '').trim();
+      const nextRun = rapidInterval ? normalizedRapidAutopayNextRun(frequency, rawNextRun) : rawNextRun;
       const amount = payload.amount === undefined || payload.amount === '' ? undefined : Number(payload.amount);
       let status = String(payload.status || (recurring && recurring.status) || 'Active').trim();
       const requestedPaymentDay = String(payload.paymentDay || payload.chargeDay || (recurring && (recurring.paymentDay || recurring.chargeDay)) || '').trim();
@@ -31290,7 +31339,7 @@ const server = http.createServer(async (req, res) => {
       const retryRule = String(payload.retryRule || (recurring && recurring.retryRule) || 'Retry once then contact').trim();
       const managedBy = String(payload.autopayManagedBy || (recurring && recurring.autopayManagedBy) || '').trim();
       if (!id || !nextRun) return json(res, 400, { ok: false, error: 'Choose a recurring customer and a WheelsonAuto due date.' });
-      if (rapidInterval ? !validRecurringInstant(nextRun) : !validCalendarDateKey(nextRun)) return json(res, 400, { ok: false, error: rapidInterval ? 'Choose a valid first charge date and time for the rapid schedule.' : 'Choose a valid WheelsonAuto due date from the calendar.' });
+      if (rapidInterval ? !validRecurringInstant(nextRun) : !validCalendarDateKey(nextRun)) return json(res, 400, { ok: false, error: rapidInterval ? 'WheelsonAuto could not create the first rapid charge time.' : 'Choose a valid WheelsonAuto due date from the calendar.' });
       if (!rapidInterval && !/^([01]?\d|2[0-3]):[0-5]\d$/.test(chargeTime)) return json(res, 400, { ok: false, error: 'Choose a valid charge time.' });
       if (!frequency) return json(res, 400, { ok: false, error: 'Choose how often this customer should be charged.' });
       if (amount !== undefined && (!Number.isFinite(amount) || amount < 0)) return json(res, 400, { ok: false, error: 'Enter a valid autopay amount.' });
@@ -32153,6 +32202,8 @@ module.exports = {
   nextRecurringOccurrence,
   nextFutureRecurringDate,
   rapidAutopayIntervalMs,
+  normalizedRapidAutopayNextRun,
+  repairInvalidRapidAutopaySchedules,
   nextFutureRecurringRun,
   recurringBillingPeriodKey,
   allRecurringRows,
