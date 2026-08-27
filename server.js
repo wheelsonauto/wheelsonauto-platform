@@ -424,7 +424,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260827-autopay-schedule-fix-365';
+const ASSET_VERSION = 'platform-20260827-autopay-schedule-fix-366';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -13435,7 +13435,7 @@ function staffNextHtml(user = {}) {
   const bootstrap = JSON.stringify(safeUser).replace(/</g, '\\u003c');
   return '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="robots" content="noindex,nofollow"><title>WheelsonAuto Staff</title>'
     + BROWSER_ICON_LINKS + STAFF_PWA_HEAD
-    + '<link rel="stylesheet" href="/staff-dist/staff-next.css"><script>window.__WOA_STAFF_USER__=' + bootstrap + ';window.__WOA_RELEASE__=' + JSON.stringify(ASSET_VERSION) + ';</script><script type="module" src="/staff-dist/staff-next.js"></script></head><body><div id="staff-next-root"><main style="height:100%;display:grid;place-items:center;background:#090b0e;color:#ddd;font:15px system-ui">Opening staff workspace...</main></div></body></html>';
+    + '<link rel="stylesheet" href="/staff-dist/staff-next.css?v=' + ASSET_VERSION + '"><script>window.__WOA_STAFF_USER__=' + bootstrap + ';window.__WOA_RELEASE__=' + JSON.stringify(ASSET_VERSION) + ';</script><script type="module" src="/staff-dist/staff-next.js?v=' + ASSET_VERSION + '"></script></head><body><div id="staff-next-root"><main style="height:100%;display:grid;place-items:center;background:#090b0e;color:#ddd;font:15px system-ui">Opening staff workspace...</main></div></body></html>';
 }
 function customerNextHtml(account = {}, sessionUser = {}) {
   const safeAccount = {

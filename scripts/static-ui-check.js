@@ -202,6 +202,10 @@ assertIncludes('Server CSS cache-busting link', server, [
   "const ASSET_VERSION = '" + indexCssVersions[0] + "'",
   "const CSS_LINK = '<link rel=\"stylesheet\" href=\"/styles.css?v=' + ASSET_VERSION + '\">';"
 ]);
+assertIncludes('Staff React shell cache-busting', server, [
+  'staff-next.css?v=\' + ASSET_VERSION',
+  'staff-next.js?v=\' + ASSET_VERSION'
+]);
 assertIncludes('Versioned static asset caching', server, ['staticFile(req, res, pathname, searchParams)', 'public, max-age=31536000, immutable', "? 'public, max-age=31536000, immutable'", ": 'no-store'", "Vary: 'Accept-Encoding'", "'Content-Encoding'"]);
 assertIncludes('Native public journey no-store headers', server, ["nativeSite.homeHtml", "nativeSite.inventoryHtml", "nativeSite.applicationHtml", "'Cache-Control': 'no-store'"]);
 assertIncludes('Authenticated app shell no-store headers', server, ["appHtml({ publicMode: false, user })", "'Cache-Control': 'no-store'"]);
