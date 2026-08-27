@@ -190,8 +190,11 @@ function migrationRecord(row = {}) {
     else state = STATES.CLOVER_ACTIVE;
   }
   const currentProvider = provider(row.paymentProvider || row.provider);
-  const stripeOnlyCard = currentProvider === 'stripe' && hasStripeCard(row) && !hasCloverSource(row);
-  if (stripeOnlyCard && [STATES.CLOVER_ACTIVE, STATES.STRIPE_SETUP_SENT, STATES.STRIPE_CARD_SAVED].includes(state)) {
+  // Historical Clover customer/card references cannot create an independent
+  // recurring charge. Only an actual Clover subscription still needs the
+  // protected two-provider cutover once this plan already belongs to Stripe.
+  const stripeWithoutCloverSubscription = currentProvider === 'stripe' && hasStripeCard(row) && !cloverSubscriptionId(row);
+  if (stripeWithoutCloverSubscription && [STATES.CLOVER_ACTIVE, STATES.STRIPE_SETUP_SENT, STATES.STRIPE_CARD_SAVED].includes(state)) {
     state = STATES.STRIPE_ACTIVE;
   }
   return {
