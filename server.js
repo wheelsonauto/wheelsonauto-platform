@@ -424,7 +424,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260827-autopay-complete-state-377';
+const ASSET_VERSION = 'platform-20260827-autopay-terminal-repair-378';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -21185,7 +21185,7 @@ async function runWheelsonAutoAutopay(options = {}) {
   woaAutopayStatus.fatalError = '';
   const runAt = options.now instanceof Date ? options.now : new Date(options.now || Date.now());
   const dateKey = options.dateKey || localDateKey(runAt);
-  const result = { dateKey, charged: 0, creditCovered: 0, creditApplied: 0, pickupSchedulesRecovered: 0, rapidSchedulesRepaired: 0, stripeOutcomesReconciled: 0, reconciled: 0, failed: 0, notFound: 0, authenticationRequired: 0, confirmationPending: 0, providerBlocked: 0, duplicateBlocked: 0, skipped: 0, errors: [] };
+  const result = { dateKey, charged: 0, creditCovered: 0, creditApplied: 0, pickupSchedulesRecovered: 0, rapidSchedulesRepaired: 0, completedSchedulesDisabled: 0, stripeOutcomesReconciled: 0, reconciled: 0, failed: 0, notFound: 0, authenticationRequired: 0, confirmationPending: 0, providerBlocked: 0, duplicateBlocked: 0, skipped: 0, errors: [] };
   let autopayLock = null;
   try {
     autopayLock = await STATE_REPOSITORY.acquireJobLock('wheelsonauto-autopay');
@@ -21201,6 +21201,18 @@ async function runWheelsonAutoAutopay(options = {}) {
     result.stripeOutcomesReconciled = reconcileStripePaymentOutcomeContradictions(data);
     result.pickupSchedulesRecovered = repairCompletedPickupAutopayStates(data);
     result.rapidSchedulesRepaired = repairInvalidRapidAutopaySchedules(data, runAt);
+    for (const row of data.recurringPayments) {
+      if (!/^rapid test passed$/i.test(String(row.status || '')) || !row.autoChargeEnabled) continue;
+      const completedPatch = {
+        autoChargeEnabled: false,
+        autopayManagedBy: 'Completed - rapid Stripe test passed',
+        completedScheduleDisabledAt: new Date().toISOString(),
+        lastAutoChargeResult: row.lastAutoChargeResult || 'Paid - rapid Stripe test complete'
+      };
+      Object.assign(row, completedPatch);
+      updateRecurringChargeState(data, row.id || row.cloverSubscriptionId, completedPatch);
+      result.completedSchedulesDisabled += 1;
+    }
     for (const row of data.recurringPayments) {
       if (rapidAutopayIntervalMs(row)) continue;
       const dueKey = recurringDateKey(row);
@@ -21230,9 +21242,9 @@ async function runWheelsonAutoAutopay(options = {}) {
     }
     const eligibilityRows = data.recurringPayments.map(row => ({ row, eligibility: wheelsonAutoAutopayEligibility(row, dateKey, runAt) }));
     const due = eligibilityRows.filter(item => item.eligibility.eligible).map(item => item.row);
-    result.managedSchedules = eligibilityRows.filter(item => item.row && item.row.autoChargeEnabled).length;
+    result.managedSchedules = eligibilityRows.filter(item => item.row && item.row.autoChargeEnabled && !item.eligibility.completed).length;
     result.blockedReasons = eligibilityRows.reduce((summary, item) => {
-      if (item.eligibility.eligible || !item.row || !item.row.autoChargeEnabled) return summary;
+      if (item.eligibility.eligible || item.eligibility.completed || !item.row || !item.row.autoChargeEnabled) return summary;
       const reason = String(item.eligibility.reason || 'Unknown block');
       summary[reason] = Number(summary[reason] || 0) + 1;
       return summary;
@@ -21523,6 +21535,7 @@ async function runWheelsonAutoAutopay(options = {}) {
       duplicateBlocked: result.duplicateBlocked,
       pickupSchedulesRecovered: result.pickupSchedulesRecovered,
       rapidSchedulesRepaired: result.rapidSchedulesRepaired,
+      completedSchedulesDisabled: result.completedSchedulesDisabled,
       stripeOutcomesReconciled: result.stripeOutcomesReconciled,
       blockedReasons: result.blockedReasons
     }));

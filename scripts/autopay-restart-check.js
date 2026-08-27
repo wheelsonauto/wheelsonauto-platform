@@ -466,6 +466,16 @@ async function main() {
     assert(rapidRestartRow.autoChargeEnabled === false && rapidRestartRow.status === 'Rapid test passed', 'Completed-pickup recovery must not reactivate a one-shot rapid test after its provider result.');
     assert(saved.payments.filter(payment => payment.stripePaymentIntentId === rapidPaid.stripePaymentIntentId).length === 1, 'Paid Stripe reconciliation must leave exactly one authoritative transaction for a PaymentIntent.');
     assert(saved.payments.find(payment => payment.stripePaymentIntentId === rapidPaid.stripePaymentIntentId).status === 'Paid', 'The authoritative Stripe PaymentIntent must remain paid after contradiction cleanup.');
+
+    rapidRestartRow.autoChargeEnabled = true;
+    await fs.writeFile(path.join(dataDir, 'data.json'), JSON.stringify(saved, null, 2));
+    server = loadServer();
+    cookie = await ownerCookie(server);
+    const completedRepairRun = await request(server, 'POST', '/api/woa-autopay/run', { cookie, json: {} });
+    saved = await readSaved(dataDir);
+    const completedRepairRow = saved.recurringPayments.find(row => row.id === 'rec-rapid-minute-1');
+    assert(completedRepairRun.status === 200 && completedRepairRun.json.completedSchedulesDisabled === 1 && completedRepairRun.json.charged === 0 && chargeRequests.length === 3, 'A stale enabled flag on a passed rapid test must be durably disabled without another provider charge.');
+    assert(completedRepairRow.autoChargeEnabled === false && completedRepairRow.status === 'Rapid test passed', 'Terminal rapid repair must preserve the passed result while turning automatic charging off.');
     const recurringView = await request(server, 'GET', '/api/recurring-payments', { cookie });
     const rapidViewRow = recurringView.json.records.find(row => row.id === 'rec-rapid-minute-1');
     assert(recurringView.status === 200 && rapidViewRow.autopayComplete === true && rapidViewRow.autopayBlockedReason === '' && rapidViewRow.autopayNextAttemptAt === '', 'A passed one-shot rapid test must be exposed as completed, never as blocked or awaiting another attempt.');
