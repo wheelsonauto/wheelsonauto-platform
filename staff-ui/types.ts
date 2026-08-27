@@ -185,6 +185,14 @@ export type PaymentRecord = {
   provider?: string;
   paymentProvider?: string;
   notes?: string;
+  chargePurpose?: 'one_time' | 'dues';
+  reason?: string;
+  createsDue?: boolean;
+  balanceEffect?: 'none' | 'credit';
+  balanceRemaining?: number;
+  balanceStatus?: string;
+  dueAppliedAmount?: number;
+  dueRemainingAmount?: number;
   updatedAt?: string;
 };
 
@@ -198,6 +206,9 @@ export type ClaimRecord = {
   vehicleId?: string;
   type?: string;
   amount?: number;
+  originalAmount?: number;
+  amountPaid?: number;
+  remainingAmount?: number;
   status?: string;
   provider?: string;
   due?: string;
@@ -228,6 +239,7 @@ export type RecurringPaymentRecord = {
   tempTag?: string;
   tracker?: string;
   amount?: number;
+  outstandingBalance?: number;
   frequency?: string;
   nextRun?: string;
   chargeTime?: string;
