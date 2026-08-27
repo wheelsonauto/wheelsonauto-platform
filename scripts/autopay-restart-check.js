@@ -186,6 +186,7 @@ async function main() {
       paymentProvider: 'clover',
       provider: 'Clover',
       cloverCustomerId: 'clover_restart_customer_1',
+      cloverPaymentSource: 'clv_restart_source_1',
       cardSavedAt: new Date().toISOString(),
       paymentSetup: 'Card saved through WheelsonAuto',
       organizationId: 'org-wheelsonauto'
@@ -204,6 +205,7 @@ async function main() {
       autopayManagedBy: 'WheelsonAuto',
       paymentProvider: 'clover',
       cloverCustomerId: 'clover_reschedule_customer_1',
+      cloverPaymentSource: 'clv_reschedule_source_1',
       cardSavedAt: new Date().toISOString(),
       organizationId: 'org-wheelsonauto'
     }, {
@@ -323,6 +325,7 @@ async function main() {
       paymentProvider: 'clover',
       provider: 'Clover',
       cloverCustomerId: 'clover_rapid_customer_1',
+      cloverPaymentSource: 'clv_rapid_source_1',
       cardSavedAt: new Date().toISOString(),
       paymentSetup: 'Card saved through WheelsonAuto',
       organizationId: 'org-wheelsonauto'

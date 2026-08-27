@@ -424,7 +424,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260827-autopay-closeout-362';
+const ASSET_VERSION = 'platform-20260827-autopay-provider-fix-363';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -12082,7 +12082,7 @@ function recurringCardReadyForProvider(recurring, provider) {
     const verifiedMode = recurring.stripeLivemode === true || stripeMigration.isolatedProviderTestMode(process.env);
     return !!(verifiedMode && String(recurring.stripeCustomerId || '').trim() && String(recurring.stripePaymentMethodId || '').trim() && !stripeCardAuthenticationRequired(recurring));
   }
-  return !!(String(recurring.cloverPaymentSource || recurring.paymentSourceId || '').trim());
+  return !!recurringCardChargeSource(recurring);
 }
 function nativeOnboardingPaymentRequests(data, session, application, provider = '') {
   const wantedProvider = provider ? normalizedPaymentProvider(provider) : '';
@@ -19282,7 +19282,7 @@ async function completeStripeCardSetup(data, request, sessionInput) {
   const rows = stripeRecurringRowsForRequest(data, request);
   rows.forEach(row => {
     const currentProvider = normalizedPaymentProvider(row.paymentProvider || row.provider || 'clover');
-    const hasLiveClover = currentProvider === 'clover' && !!(row.cloverSubscriptionId || row.cloverPaymentSource || row.cloverCustomerId);
+    const hasLiveClover = currentProvider === 'clover' && stripeMigration.hasCloverSource(row);
     const currentMigration = stripeMigration.migrationRecord(row);
     const hasCloverHistory = stripeMigration.hasCloverSource(row);
     const nextMigrationState = hasCloverHistory
@@ -19675,7 +19675,9 @@ function retryDelayPassed(row, date = new Date()) {
   return date.getTime() - last.getTime() >= 60 * 60 * 1000;
 }
 function isWheelsonAutoManagedAutopay(row) {
-  return !!(row && row.autoChargeEnabled && hasWheelsonAutoSavedCard(row));
+  if (!row || !row.autoChargeEnabled) return false;
+  const provider = normalizedPaymentProvider(row.paymentProvider || row.provider || 'clover');
+  return recurringCardReadyForProvider(row, provider);
 }
 function stripeMigrationRecordPatch(migration) {
   return {
@@ -19849,8 +19851,11 @@ function wheelsonAutoAutopayEligibility(row, dateKey = localDateKey(), now = new
   if (attempts >= 2) return blocked('Two automatic attempts failed. Contact the customer before another charge.');
   if (status !== 'active' && !status.includes('1x failed') && !status.includes('confirmation pending')) return blocked('Autopay status is ' + (row && row.status || 'not active') + '.');
   if (!row || !row.autoChargeEnabled) return blocked('Automatic charging is turned off.');
-  if (!hasWheelsonAutoSavedCard(row)) return blocked('No saved-card authorization is connected.');
-  if (provider === 'stripe' && !recurringCardReadyForProvider(row, provider)) return blocked('The Stripe customer or saved card is not charge-ready.');
+  if (!recurringCardReadyForProvider(row, provider)) {
+    return blocked(provider === 'stripe'
+      ? 'The Stripe customer or saved card is not charge-ready.'
+      : 'Clover did not provide a chargeable ecommerce saved-card token. Send a Stripe card setup link or reconnect the exact Clover card source.');
+  }
   if (!stripeMigration.automaticChargeAllowed(row, provider, migrationDateKey)) return blocked('The protected Clover-to-Stripe migration state does not allow this provider to charge yet.');
   if (rapidAutopayIntervalMs(row)) {
     const dueAt = new Date(occurrence);
@@ -20794,7 +20799,7 @@ async function chargeSavedRecurringCard(data, payload, req) {
       data.integrations.clover.lastManualChargeLookupError = String(err && err.message || err);
     }
   }
-  const source = cardSource || (hasWheelsonAutoSavedCard(recurring) ? customerSource : '');
+  const source = cardSource;
   if (!source) throw new Error('Clover shows a card on file for this recurring customer, but it did not return a chargeable Ecommerce saved-card token. Use Pay link for this charge, or save the customer card through WheelsonAuto checkout before using Charge saved card.');
   const ref = chargeReference();
   const scheduledDueKey = chargeGuard.scheduledDueKey;

@@ -1021,7 +1021,7 @@ async function main() {
     );
     duplicateState.recurringPayments.unshift({ id: 'rec-direct-dispute-match', customer: 'Direct Recurring Dispute Customer', cloverCustomerId: 'direct-dispute-customer-id', phone: '3135550100', email: 'direct-dispute@example.com', vehicle: 'Direct Dispute Vehicle', amount: 111, status: 'Active' });
     duplicateState.recurringPayments.unshift({ id: 'rec-direct-manual-result', organizationId: 'org-wheelsonauto', customerId: 'cus-direct-manual-result', customer: 'Direct Manual Result Customer', phone: '3135550151', email: 'direct-manual-result@example.com', vehicleId: 'veh-direct-manual-result', vehicle: '2025 Direct Manual Result Car', vin: 'DIRECTMANUALRESULT', plate: 'DIR-MAN', tracker: 'TRK-MAN', amount: 125, frequency: 'Weekly', status: 'Active', nextRun: '2026-07-27', autoChargeEnabled: true });
-    duplicateState.recurringPayments.unshift({ id: 'rec-direct-pickup', organizationId: 'org-wheelsonauto', applicationId: 'application-direct-calendar', onboardingSessionId: 'onboard-direct-calendar', pickupAppointmentId: 'pickup-direct-calendar', customer: 'Direct Pickup Customer', vehicleId: 'veh-direct-pickup-car', vehicle: '2026 Direct Pickup Car', vin: 'DIRECTPICKUPVIN001', plate: 'DIR-PUP', amount: 229, status: 'Scheduled', nextRun: '2026-07-27', paymentDay: 'Monday', paymentProvider: 'clover', cloverPaymentSource: 'src-direct-pickup-card', autoChargeEnabled: true });
+    duplicateState.recurringPayments.unshift({ id: 'rec-direct-pickup', organizationId: 'org-wheelsonauto', applicationId: 'application-direct-calendar', onboardingSessionId: 'onboard-direct-calendar', pickupAppointmentId: 'pickup-direct-calendar', customer: 'Direct Pickup Customer', vehicleId: 'veh-direct-pickup-car', vehicle: '2026 Direct Pickup Car', vin: 'DIRECTPICKUPVIN001', plate: 'DIR-PUP', amount: 229, status: 'Scheduled', nextRun: '2026-07-27', paymentDay: 'Monday', paymentProvider: 'clover', cloverCustomerId: 'customer-direct-pickup-card', cloverPaymentSource: 'clv_direct_pickup_card', autoChargeEnabled: true });
     duplicateState.customers.unshift({ id: 'cus-direct-pickup', organizationId: 'org-wheelsonauto', applicationId: 'application-direct-calendar', recurringPaymentId: 'rec-direct-pickup', name: 'Direct Pickup Customer', vehicleId: 'veh-direct-pickup-car', vehicle: '2026 Direct Pickup Car', status: 'Approved - awaiting pickup' });
     duplicateState.customers.unshift({ id: 'cus-direct-manual-result', organizationId: 'org-wheelsonauto', recurringPaymentId: 'rec-direct-manual-result', name: 'Direct Manual Result Customer', phone: '3135550151', email: 'direct-manual-result@example.com', vehicleId: 'veh-direct-manual-result', vehicle: '2025 Direct Manual Result Car', status: 'Active' });
     duplicateState.customers.unshift({ id: 'cus-direct-assignment-command', organizationId: 'org-wheelsonauto', name: 'Direct Assignment Command Customer', phone: '3135550152', email: 'direct-assignment-command@example.com', status: 'Active' });
@@ -3981,6 +3981,7 @@ async function main() {
       autoChargeEnabled: true,
       autopayManagedBy: 'WheelsonAuto',
       cloverCustomerId: 'custfail001',
+      cloverPaymentSource: 'clv_fail_once_001',
       paymentSetup: 'Card saved through WheelsonAuto',
       cardSavedAt: new Date().toISOString()
     }, {
@@ -4001,6 +4002,7 @@ async function main() {
       autoChargeEnabled: true,
       autopayManagedBy: 'WheelsonAuto',
       cloverCustomerId: 'custfail002',
+      cloverPaymentSource: 'clv_fail_twice_002',
       paymentSetup: 'Card saved through WheelsonAuto',
       cardSavedAt: new Date().toISOString()
     }, {
@@ -4020,6 +4022,7 @@ async function main() {
       autoChargeEnabled: true,
       autopayManagedBy: 'WheelsonAuto',
       cloverCustomerId: 'custpaidstale001',
+      cloverPaymentSource: 'clv_paid_stale_001',
       paymentSetup: 'Card saved through WheelsonAuto',
       cardSavedAt: new Date().toISOString(),
       lastPaymentResult: 'Paid',
@@ -4042,6 +4045,7 @@ async function main() {
       autoChargeEnabled: true,
       autopayManagedBy: 'WheelsonAuto',
       cloverCustomerId: 'custsuccess001',
+      cloverPaymentSource: 'clv_success_overdue_001',
       paymentSetup: 'Card saved through WheelsonAuto',
       cardSavedAt: new Date().toISOString()
     }, {
@@ -4061,6 +4065,7 @@ async function main() {
       autoChargeEnabled: true,
       autopayManagedBy: 'WheelsonAuto',
       cloverCustomerId: 'custamount001',
+      cloverPaymentSource: 'clv_amount_edit_001',
       paymentSetup: 'Card saved through WheelsonAuto',
       cardSavedAt: new Date().toISOString()
     }, {
@@ -4080,6 +4085,7 @@ async function main() {
       autoChargeEnabled: true,
       autopayManagedBy: 'WheelsonAuto',
       cloverCustomerId: 'custeditlate001',
+      cloverPaymentSource: 'clv_edit_late_001',
       paymentSetup: 'Card saved through WheelsonAuto',
       cardSavedAt: new Date().toISOString()
     }, {
@@ -4099,6 +4105,7 @@ async function main() {
       autoChargeEnabled: true,
       autopayManagedBy: 'WheelsonAuto',
       cloverCustomerId: 'custpaidwindow001',
+      cloverPaymentSource: 'clv_paid_window_001',
       paymentSetup: 'Card saved through WheelsonAuto',
       cardSavedAt: new Date().toISOString()
     }, {
@@ -4118,6 +4125,7 @@ async function main() {
       autoChargeEnabled: true,
       autopayManagedBy: 'WheelsonAuto',
       cloverCustomerId: 'custrapid001',
+      cloverPaymentSource: 'clv_rapid_edit_001',
       paymentSetup: 'Card saved through WheelsonAuto',
       cardSavedAt: new Date().toISOString()
     });
@@ -4212,9 +4220,9 @@ async function main() {
     global.fetch = async (url, options = {}) => {
       if (String(url).includes('/v1/charges')) {
         const body = JSON.parse(String(options.body || '{}'));
-        if (body.source === 'custsuccess001' || body.source === 'custeditlate001') {
+        if (body.source === 'clv_success_overdue_001' || body.source === 'clv_edit_late_001') {
           successfulAutopayChargeCalls += 1;
-          return { ok: true, status: 200, async text() { return JSON.stringify({ id: body.source === 'custeditlate001' ? 'charge-direct-late-edit-001' : 'charge-direct-overdue-001', status: 'succeeded', paid: true, captured: true }); } };
+          return { ok: true, status: 200, async text() { return JSON.stringify({ id: body.source === 'clv_edit_late_001' ? 'charge-direct-late-edit-001' : 'charge-direct-overdue-001', status: 'succeeded', paid: true, captured: true }); } };
         }
         return { ok: false, status: 402, async text() { return JSON.stringify({ message: 'Direct card decline' }); } };
       }
@@ -4229,13 +4237,14 @@ async function main() {
     } finally {
       global.fetch = autopayOriginalFetch;
     }
-    assert([200, 207].includes(autopayRun.status) && autopayRun.json.notFound === 1 && autopayRun.json.charged === 2 && autopayRun.json.reconciled === 1, 'Autopay should charge the overdue row and the same-day late schedule edit, reconcile one already-paid stale row, and keep the payment-not-found path visible.');
+    assert([200, 207].includes(autopayRun.status) && autopayRun.json.notFound === 0 && autopayRun.json.charged === 2 && autopayRun.json.reconciled === 1, 'Autopay should charge the overdue row and the same-day late schedule edit, reconcile one already-paid stale row, and block a missing card before contacting the provider: ' + JSON.stringify(autopayRun.json));
     assert(successfulAutopayChargeCalls === 2 && secondAutopayRun.json.charged === 0, 'Repeating the autopay runner must not charge a completed scheduled occurrence twice.');
     const autopayRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
-    assert(autopayRead.json.messages.some(message => message.event === 'payment_not_found' && message.customer === 'Direct Missing Token'), 'Payment-not-found notification should be saved in Messages.');
+    const autopayDiagnostics = await request(server, 'GET', '/api/woa-autopay/status', { cookie: ownerCookie });
+    const missingTokenDiagnostic = autopayDiagnostics.json.autopay.diagnostics.find(row => row.id === 'direct-autopay-missing-token');
+    assert(missingTokenDiagnostic && missingTokenDiagnostic.eligible === false && /chargeable ecommerce saved-card token/i.test(missingTokenDiagnostic.reason || ''), 'A missing Clover card token must remain visible as an exact autopay diagnostic.');
     assert(autopayRead.json.messages.some(message => message.event === 'payment_failed' && message.customer === 'Direct Failed Once' && /1x failed/i.test(message.subject || '')), '1x failed payment notification should be saved in Messages.');
     assert(autopayRead.json.messages.some(message => message.event === 'payment_failed' && message.customer === 'Direct Failed Twice' && /2x failed/i.test(message.subject || '')), '2x failed payment notification should be saved in Messages.');
-    assert(autopayRead.json.payments.some(payment => payment.customer === 'Direct Missing Token' && String(payment.status || '').includes('Payment not found')), 'Payment-not-found transaction should be saved.');
     assert(autopayRead.json.payments.some(payment => payment.customer === 'Direct Failed Once' && String(payment.status || '').includes('1x failed') && payment.vin === 'DIRECTFAILEDONCE'), '1x failed autopay should save a named failed transaction with vehicle evidence.');
     assert(autopayRead.json.payments.some(payment => payment.customer === 'Direct Failed Twice' && String(payment.status || '').includes('2x failed') && payment.vin === 'DIRECTFAILEDTWICE'), '2x failed autopay should save a named failed transaction with vehicle evidence.');
     const failedTwiceRow = autopayRead.json.recurringPayments.find(row => row.id === 'direct-autopay-fail-twice');
@@ -4269,7 +4278,7 @@ async function main() {
       paymentProvider: 'clover',
       provider: 'Clover',
       cloverCustomerId: 'direct-clover-cutover-customer',
-      cloverPaymentSource: 'direct-clover-cutover-source',
+      cloverPaymentSource: 'clv_direct_cutover_source',
       stripeCustomerId: 'cus_direct_cutover',
       stripePaymentMethodId: 'pm_direct_cutover',
       stripeCardSavedAt: new Date().toISOString(),
@@ -4428,7 +4437,7 @@ async function main() {
       provider: 'Clover',
       cloverCustomerId: 'direct-shared-cutover-removal-customer',
       cloverSubscriptionId: 'direct-clover-sub-cutover-removal',
-      cloverPaymentSource: 'direct-clover-source-cutover-removal',
+      cloverPaymentSource: 'clv_direct_cutover_removal_source',
       stripeCustomerId: 'cus_direct_cutover_removal',
       stripePaymentMethodId: 'pm_direct_cutover_removal',
       stripeCardSavedAt: new Date().toISOString(),
@@ -4467,7 +4476,7 @@ async function main() {
       }
     });
     assert(reactivatedScheduledCutover.status === 201 && reactivatedScheduledCutover.json.reactivated === true, 'The exact removed recurring plan could not be reactivated.');
-    assert(reactivatedScheduledCutover.json.autopay.autoChargeEnabled === true && reactivatedScheduledCutover.json.autopay.paymentProvider === 'clover' && reactivatedScheduledCutover.json.autopay.cloverPaymentSource === 'direct-clover-source-cutover-removal' && reactivatedScheduledCutover.json.autopay.stripePaymentMethodId === 'pm_direct_cutover_removal' && reactivatedScheduledCutover.json.autopay.stripeMigration.state === 'stripe_card_saved' && !reactivatedScheduledCutover.json.autopay.stripeMigration.cutoverDate, 'Reactivation must preserve both provider vault references without reviving a cancelled cutover.');
+    assert(reactivatedScheduledCutover.json.autopay.autoChargeEnabled === true && reactivatedScheduledCutover.json.autopay.paymentProvider === 'clover' && reactivatedScheduledCutover.json.autopay.cloverPaymentSource === 'clv_direct_cutover_removal_source' && reactivatedScheduledCutover.json.autopay.stripePaymentMethodId === 'pm_direct_cutover_removal' && reactivatedScheduledCutover.json.autopay.stripeMigration.state === 'stripe_card_saved' && !reactivatedScheduledCutover.json.autopay.stripeMigration.cutoverDate, 'Reactivation must preserve both provider vault references without reviving a cancelled cutover.');
 
     const ambiguousPlanCustomer = 'Direct Shared Multi Plan Customer';
     const ambiguousPlanAId = 'direct-shared-plan-a';
@@ -4486,7 +4495,7 @@ async function main() {
         provider: 'Clover',
         cloverCustomerId: 'direct-shared-multi-plan-clover-customer',
         cloverSubscriptionId: 'direct-shared-multi-plan-sub-a',
-        cloverPaymentSource: 'direct-shared-multi-plan-source-a',
+        cloverPaymentSource: 'clv_direct_shared_multi_plan_source_a',
         paymentSetup: 'Clover card saved and chargeable'
       },
       {
@@ -4501,7 +4510,7 @@ async function main() {
         provider: 'Clover',
         cloverCustomerId: 'direct-shared-multi-plan-clover-customer',
         cloverSubscriptionId: 'direct-shared-multi-plan-sub-b',
-        cloverPaymentSource: 'direct-shared-multi-plan-source-b',
+        cloverPaymentSource: 'clv_direct_shared_multi_plan_source_b',
         paymentSetup: 'Clover card saved and chargeable'
       }
     );
@@ -4539,7 +4548,7 @@ async function main() {
       paymentProvider: 'clover',
       provider: 'Clover',
       cloverCustomerId: sharedCutoverCustomerId,
-      cloverPaymentSource: 'direct-shared-cutover-source',
+      cloverPaymentSource: 'clv_direct_shared_cutover_source',
       stripeCustomerId: sharedCutoverStripeId,
       stripePaymentMethodId: 'pm_direct_shared_cutover',
       stripeCardSavedAt: new Date().toISOString(),
@@ -4584,7 +4593,7 @@ async function main() {
       customer: 'Direct Stripe Cutover Clean',
       email: 'stripe-cutover-clean@example.com',
       cloverCustomerId: 'direct-clover-cutover-clean-customer',
-      cloverPaymentSource: 'direct-clover-cutover-clean-source',
+      cloverPaymentSource: 'clv_direct_cutover_clean_source',
       cloverSubscriptionId: 'direct-clover-sub-cutover-clean',
       stripeCustomerId: 'cus_direct_cutover_clean',
       stripePaymentMethodId: 'pm_direct_cutover_clean',
@@ -4621,7 +4630,7 @@ async function main() {
       json: { recurringPaymentId: cleanCutoverRecurringId, paymentProvider: 'stripe', action: 'activate', cloverStoppedConfirmed: true, cloverSubscriptionConfirmation: 'direct-clover-sub-cutover-clean', confirmed: true }
     });
     assert(activatedCutover.status === 200 && activatedCutover.json.activated && activatedCutover.json.paymentProvider === 'stripe', 'Stripe may activate only after the owner confirms Clover has stopped.');
-    assert(activatedCutover.json.recurring.stripeMigration.state === 'first_stripe_charge_pending' && activatedCutover.json.recurring.cloverPaymentSource === 'direct-clover-cutover-clean-source', 'Clover records must be retained through the protected first Stripe charge.');
+    assert(activatedCutover.json.recurring.stripeMigration.state === 'first_stripe_charge_pending' && activatedCutover.json.recurring.cloverPaymentSource === 'clv_direct_cutover_clean_source', 'Clover records must be retained through the protected first Stripe charge.');
     const syncedProviderPaymentState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     syncedProviderPaymentState.json.payments.unshift({
       id: 'direct-cutover-synced-payment',
@@ -4749,7 +4758,7 @@ async function main() {
       provider: 'Stripe',
       cloverCustomerId: 'cus_direct_timeout_clover',
       cloverSubscriptionId: 'sub_direct_timeout_clover',
-      cloverPaymentSource: 'card_direct_timeout_clover',
+      cloverPaymentSource: 'clv_direct_timeout_clover',
       stripeCustomerId: 'cus_direct_timeout',
       stripePaymentMethodId: 'pm_direct_timeout',
       stripeCardSavedAt: new Date().toISOString(),
@@ -5160,7 +5169,7 @@ async function main() {
       paymentProvider: 'stripe',
       provider: 'Stripe',
       cloverCustomerId: 'direct-clover-duplicate-review',
-      cloverPaymentSource: 'direct-clover-duplicate-review-source',
+      cloverPaymentSource: 'clv_direct_duplicate_review_source',
       stripeCustomerId: 'cus_direct_duplicate_review',
       stripePaymentMethodId: 'pm_direct_duplicate_review',
       stripeCardSavedAt: new Date().toISOString(),

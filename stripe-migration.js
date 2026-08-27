@@ -50,7 +50,10 @@ function paymentConsumesBillingPeriod(value) {
 }
 
 function hasCloverSource(row = {}) {
-  return !!(text(row.cloverSubscriptionId) || text(row.cloverPaymentSource) || text(row.cloverCustomerId));
+  // A Clover customer ID identifies a customer, not a recurring agreement or
+  // a chargeable ecommerce token. Treating it as a live billing source leaves
+  // otherwise Stripe-only plans permanently stuck behind the cutover gate.
+  return !!(text(row.cloverSubscriptionId || row.subscriptionId) || text(row.cloverPaymentSource));
 }
 
 function hasStripeCard(row = {}) {
@@ -185,6 +188,11 @@ function migrationRecord(row = {}) {
     else if (provider(row.paymentProvider || row.provider) === 'stripe') state = hasCloverSource(row) ? STATES.STRIPE_CARD_SAVED : STATES.STRIPE_ACTIVE;
     else if (hasCloverSource(row) && hasStripeCard(row)) state = STATES.STRIPE_CARD_SAVED;
     else state = STATES.CLOVER_ACTIVE;
+  }
+  const currentProvider = provider(row.paymentProvider || row.provider);
+  const stripeOnlyCard = currentProvider === 'stripe' && hasStripeCard(row) && !hasCloverSource(row);
+  if (stripeOnlyCard && [STATES.CLOVER_ACTIVE, STATES.STRIPE_SETUP_SENT, STATES.STRIPE_CARD_SAVED].includes(state)) {
+    state = STATES.STRIPE_ACTIVE;
   }
   return {
     state,

@@ -16,7 +16,10 @@ const {
   controlledStripePilotSelection,
   controlledStripePilotMoneyActionReview,
   lockControlledStripePilotCandidate,
-  repairControlledStripeTestPilotLock
+  repairControlledStripeTestPilotLock,
+  nextRecurringOccurrence,
+  nextFutureRecurringRun,
+  wheelsonAutoAutopayEligibility
 } = require('../server');
 const { runCliArgumentChecks } = require('./cli-argument-check');
 
@@ -521,9 +524,25 @@ async function main() {
     const legacyPureStripe = { paymentProvider: 'stripe', stripeCustomerId: 'cus_foundation_pure', stripePaymentMethodId: 'pm_foundation_pure' };
     assert.strictEqual(stripeMigration.migrationRecord(legacyPureStripe).state, stripeMigration.STATES.STRIPE_ACTIVE, 'A legacy Stripe-only customer must remain Stripe-active without an unnecessary Clover cutover state.');
     assert.strictEqual(stripeMigration.automaticChargeAllowed(legacyPureStripe, 'stripe', '2026-07-24'), true, 'A Stripe-only customer should remain eligible for its normal Stripe autopay run.');
+    const stripeWithHistoricalCloverCustomer = { ...legacyPureStripe, cloverCustomerId: 'clover-customer-history-only', stripeMigration: { state: stripeMigration.STATES.STRIPE_CARD_SAVED } };
+    assert.strictEqual(stripeMigration.hasCloverSource(stripeWithHistoricalCloverCustomer), false, 'A historical Clover customer ID alone must not pretend an active Clover billing source exists.');
+    assert.strictEqual(stripeMigration.migrationRecord(stripeWithHistoricalCloverCustomer).state, stripeMigration.STATES.STRIPE_ACTIVE, 'A Stripe-ready plan with only a historical Clover customer reference must recover from a stale card-saved migration label.');
+    assert.strictEqual(stripeMigration.automaticChargeAllowed(stripeWithHistoricalCloverCustomer, 'stripe', '2026-07-24'), true, 'A historical Clover customer reference must not block an otherwise Stripe-only autopay plan.');
     const ambiguousLegacyStripe = { ...legacyPureStripe, cloverCustomerId: 'clover-foundation-legacy', cloverPaymentSource: 'clover-foundation-source' };
     assert.strictEqual(stripeMigration.migrationRecord(ambiguousLegacyStripe).state, stripeMigration.STATES.STRIPE_CARD_SAVED, 'A legacy Stripe row that still has a Clover source must fail closed into the protected cutover state.');
     assert.strictEqual(stripeMigration.automaticChargeAllowed(ambiguousLegacyStripe, 'stripe', '2026-07-24'), false, 'An ambiguous legacy Stripe/Clover row must not autocharge until the owner completes the controlled cutover.');
+    const stripeAutopayRow = { ...stripeWithHistoricalCloverCustomer, status: 'Active', autoChargeEnabled: true, stripeLivemode: true, frequency: 'Weekly', nextRun: '2026-07-24', chargeTime: '00:00' };
+    assert.strictEqual(wheelsonAutoAutopayEligibility(stripeAutopayRow, '2026-07-24', new Date('2026-07-24T23:00:00.000Z')).eligible, true, 'A due Stripe-only weekly plan must remain eligible even when the customer profile retains a historical Clover customer ID.');
+    const cloverWithoutChargeToken = { status: 'Active', autoChargeEnabled: true, paymentProvider: 'clover', cloverCustomerId: 'identity-not-token', cardSavedAt: '2026-07-20T12:00:00.000Z', frequency: 'Weekly', nextRun: '2026-07-24', chargeTime: '00:00' };
+    const missingCloverTokenEligibility = wheelsonAutoAutopayEligibility(cloverWithoutChargeToken, '2026-07-24', new Date('2026-07-24T23:00:00.000Z'));
+    assert.strictEqual(missingCloverTokenEligibility.eligible, false, 'A Clover customer ID must never be submitted as though it were a chargeable saved-card token.');
+    assert.match(missingCloverTokenEligibility.reason, /ecommerce saved-card token/i, 'A blocked Clover plan must explain the exact missing token instead of silently missing autopay.');
+    assert.strictEqual(nextRecurringOccurrence({ frequency: 'Daily' }, '2026-07-24'), '2026-07-25', 'Daily schedules must advance by one day.');
+    assert.strictEqual(nextRecurringOccurrence({ frequency: 'Bi-weekly' }, '2026-07-24'), '2026-08-07', 'Biweekly schedules must advance by fourteen days.');
+    assert.strictEqual(nextRecurringOccurrence({ frequency: 'Monthly', monthlyDay: 31 }, '2026-07-31'), '2026-08-31', 'Monthly schedules must preserve the requested day when it exists.');
+    assert.strictEqual(nextRecurringOccurrence({ frequency: 'Monthly', monthlyDay: 31 }, '2026-08-31'), '2026-09-30', 'Monthly schedules must safely clamp to the last day of shorter months.');
+    assert.strictEqual(nextFutureRecurringRun({ frequency: 'Every hour', nextRun: '2026-07-24T10:00:00.000Z' }, new Date('2026-07-24T12:30:00.000Z')), '2026-07-24T13:00:00.000Z', 'Hourly schedules must advance to the first future hour.');
+    assert.strictEqual(nextFutureRecurringRun({ frequency: 'Every minute', nextRun: '2026-07-24T10:00:00.000Z' }, new Date('2026-07-24T10:02:30.000Z')), '2026-07-24T10:03:00.000Z', 'Minute schedules must advance to the first future minute.');
     const multiPlanCustomer = {
       recurringPayments: [
         { id: 'rec-plan-a', status: 'Active', paymentProvider: 'clover', customer: 'Same Customer', cloverCustomerId: 'clover-same-customer', cloverPaymentSource: 'source-plan-a', cloverSubscriptionId: 'sub-plan-a' },
