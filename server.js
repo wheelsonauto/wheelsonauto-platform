@@ -424,7 +424,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260827-stripe-provider-active-370';
+const ASSET_VERSION = 'platform-20260827-autopay-local-time-371';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -464,10 +464,11 @@ const woaAutopayStatus = {
   lastFinishedAt: '',
   lastError: '',
   fatalError: '',
-  lastResult: null
+  lastResult: null,
+  nextScheduledWakeupAt: ''
 };
-let rapidAutopayWakeupTimer = null;
-let rapidAutopayWakeupAt = '';
+let autopayWakeupTimer = null;
+let autopayWakeupAt = '';
 const twilioInboundPollStatus = {
   inFlight: false,
   lastCheckedAt: '',
@@ -13457,7 +13458,7 @@ function staffNextHtml(user = {}) {
   const bootstrap = JSON.stringify(safeUser).replace(/</g, '\\u003c');
   return '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="robots" content="noindex,nofollow"><title>WheelsonAuto Staff</title>'
     + BROWSER_ICON_LINKS + STAFF_PWA_HEAD
-    + '<link rel="stylesheet" href="/staff-dist/staff-next.css?v=' + ASSET_VERSION + '"><script>window.__WOA_STAFF_USER__=' + bootstrap + ';window.__WOA_RELEASE__=' + JSON.stringify(ASSET_VERSION) + ';</script><script type="module" src="/staff-dist/staff-next.js?v=' + ASSET_VERSION + '"></script></head><body><div id="staff-next-root"><main style="height:100%;display:grid;place-items:center;background:#090b0e;color:#ddd;font:15px system-ui">Opening staff workspace...</main></div></body></html>';
+    + '<link rel="stylesheet" href="/staff-dist/staff-next.css?v=' + ASSET_VERSION + '"><script>window.__WOA_STAFF_USER__=' + bootstrap + ';window.__WOA_RELEASE__=' + JSON.stringify(ASSET_VERSION) + ';</script><script type="module" src="/staff-dist/staff-next.js"></script></head><body><div id="staff-next-root"><main style="height:100%;display:grid;place-items:center;background:#090b0e;color:#ddd;font:15px system-ui">Opening staff workspace...</main></div></body></html>';
 }
 function customerNextHtml(account = {}, sessionUser = {}) {
   const safeAccount = {
@@ -19721,6 +19722,37 @@ function businessMinutesNow(date = new Date()) {
   const minute = Number((parts.find(part => part.type === 'minute') || {}).value || 0);
   return hour * 60 + minute;
 }
+function businessDateTimeInstant(dateKey, time = '18:00') {
+  const dateMatch = String(dateKey || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const timeMatch = String(time || '').match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  if (!dateMatch || !timeMatch) return null;
+  const desiredParts = {
+    year: Number(dateMatch[1]),
+    month: Number(dateMatch[2]),
+    day: Number(dateMatch[3]),
+    hour: Number(timeMatch[1]),
+    minute: Number(timeMatch[2]),
+    second: Number(timeMatch[3] || 0)
+  };
+  if (desiredParts.hour > 23 || desiredParts.minute > 59 || desiredParts.second > 59) return null;
+  const desiredWallTime = Date.UTC(desiredParts.year, desiredParts.month - 1, desiredParts.day, desiredParts.hour, desiredParts.minute, desiredParts.second);
+  let candidateTime = desiredWallTime;
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: WOA_TIME_ZONE,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hourCycle: 'h23', hour: '2-digit', minute: '2-digit', second: '2-digit'
+  });
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const parts = formatter.formatToParts(new Date(candidateTime));
+    const value = type => Number((parts.find(part => part.type === type) || {}).value || 0);
+    const actualWallTime = Date.UTC(value('year'), value('month') - 1, value('day'), value('hour'), value('minute'), value('second'));
+    const correction = desiredWallTime - actualWallTime;
+    if (!correction) break;
+    candidateTime += correction;
+  }
+  const candidate = new Date(candidateTime);
+  return Number.isFinite(candidate.getTime()) ? candidate : null;
+}
 function retryDelayPassed(row, date = new Date()) {
   const attempts = Number(row && (row.retryCount || row.failedAttempts) || 0);
   const confirmationPending = stripeChargeAttemptIsPending(row && row.stripeChargeAttempt) || /confirmation pending/.test(String(row && row.status || ''));
@@ -19918,40 +19950,55 @@ function wheelsonAutoAutopayEligibility(row, dateKey = localDateKey(), now = new
   if (!dueKey) return blocked('The next charge date is missing or invalid.');
   if (dueKey > dateKey) return blocked('Waiting for the next charge date.', dueKey + 'T' + String(row.chargeTime || '18:00') + ':00');
   if (dueKey === dateKey && businessMinutesNow(nowAt) < chargeTimeMinutes(row)) return blocked('Waiting for today\'s charge time.', dueKey + 'T' + String(row.chargeTime || '18:00') + ':00');
-  if (!retryDelayPassed(row, nowAt)) return blocked('Waiting for the protected one-hour retry.');
+  if (!retryDelayPassed(row, nowAt)) {
+    const last = new Date(String(row.lastAutoChargeAttemptAt || row.lastFailedAt || ''));
+    return blocked('Waiting for the protected one-hour retry.', Number.isFinite(last.getTime()) ? new Date(last.getTime() + 60 * 60 * 1000).toISOString() : '');
+  }
   if (String(row.lastAutoChargeDate || '') === dateKey) return blocked('Today\'s automatic charge was already processed.');
   return { eligible: true, reason: 'Due now.', occurrence: dueKey, nextAttemptAt: dueKey, provider };
 }
 function isDueForWheelsonAutoAutopay(row, dateKey = localDateKey(), now = new Date()) {
   return wheelsonAutoAutopayEligibility(row, dateKey, now).eligible;
 }
-function scheduleNextRapidAutopayWakeup(rows = []) {
-  if (rapidAutopayWakeupTimer) clearTimeout(rapidAutopayWakeupTimer);
-  rapidAutopayWakeupTimer = null;
-  rapidAutopayWakeupAt = '';
+function autopayEligibilityTarget(row, eligibility, now = new Date()) {
+  if (eligibility && eligibility.eligible) return new Date(now.getTime() + 250);
+  if (!eligibility || !eligibility.nextAttemptAt) return null;
+  if (rapidAutopayIntervalMs(row) || /(?:Z|[+-]\d{2}:?\d{2})$/i.test(String(eligibility.nextAttemptAt))) {
+    const target = new Date(eligibility.nextAttemptAt);
+    return Number.isFinite(target.getTime()) ? target : null;
+  }
+  const dueKey = recurringDateKey(row);
+  const target = businessDateTimeInstant(dueKey, row.chargeTime || row.paymentTime || row.autopayTime || '18:00');
+  return target && Number.isFinite(target.getTime()) ? target : null;
+}
+function scheduleNextAutopayWakeup(rows = []) {
+  if (autopayWakeupTimer) clearTimeout(autopayWakeupTimer);
+  autopayWakeupTimer = null;
+  autopayWakeupAt = '';
   const now = new Date();
-  const candidates = (Array.isArray(rows) ? rows : []).filter(row => rapidAutopayIntervalMs(row)).map(row => {
+  const candidates = (Array.isArray(rows) ? rows : []).map(row => {
     const eligibility = wheelsonAutoAutopayEligibility(row, localDateKey(now), now);
-    const target = new Date(eligibility.nextAttemptAt || eligibility.occurrence || '');
-    return eligibility.eligible || /waiting for the saved rapid charge time|waiting for the protected one-hour retry/i.test(eligibility.reason)
-      ? { row, target }
-      : null;
+    const target = autopayEligibilityTarget(row, eligibility, now);
+    return target ? { row, target } : null;
   }).filter(item => item && Number.isFinite(item.target.getTime())).sort((left, right) => left.target.getTime() - right.target.getTime());
   if (!candidates.length) {
+    woaAutopayStatus.nextScheduledWakeupAt = '';
     woaAutopayStatus.nextRapidWakeupAt = '';
     return '';
   }
   const targetAt = Math.max(Date.now() + 250, candidates[0].target.getTime() + 250);
-  rapidAutopayWakeupAt = new Date(targetAt).toISOString();
-  woaAutopayStatus.nextRapidWakeupAt = rapidAutopayWakeupAt;
-  rapidAutopayWakeupTimer = setTimeout(() => {
-    rapidAutopayWakeupTimer = null;
-    rapidAutopayWakeupAt = '';
+  autopayWakeupAt = new Date(targetAt).toISOString();
+  woaAutopayStatus.nextScheduledWakeupAt = autopayWakeupAt;
+  woaAutopayStatus.nextRapidWakeupAt = rapidAutopayIntervalMs(candidates[0].row) ? autopayWakeupAt : '';
+  autopayWakeupTimer = setTimeout(() => {
+    autopayWakeupTimer = null;
+    autopayWakeupAt = '';
+    woaAutopayStatus.nextScheduledWakeupAt = '';
     woaAutopayStatus.nextRapidWakeupAt = '';
-    void runWheelsonAutoAutopay({ source: 'rapid schedule wakeup' }).catch(err => reportBackgroundTaskFailure('autopay-run', err, { route: 'WheelsonAuto rapid autopay wakeup', source: 'rapid schedule' }, 'Rapid WOA autopay'));
+    void runWheelsonAutoAutopay({ source: 'scheduled wakeup' }).catch(err => reportBackgroundTaskFailure('autopay-run', err, { route: 'WheelsonAuto scheduled autopay wakeup', source: 'saved schedule' }, 'Scheduled WOA autopay'));
   }, Math.min(2147483000, Math.max(250, targetAt - Date.now())));
-  if (rapidAutopayWakeupTimer.unref) rapidAutopayWakeupTimer.unref();
-  return rapidAutopayWakeupAt;
+  if (autopayWakeupTimer.unref) autopayWakeupTimer.unref();
+  return autopayWakeupAt;
 }
 function patchRecurringAdminState(data, id, patch) {
   const stamp = new Date().toISOString();
@@ -21330,7 +21377,7 @@ async function runWheelsonAutoAutopay(options = {}) {
       lastResult: result
     };
     await writeData(data);
-    scheduleNextRapidAutopayWakeup(data.recurringPayments);
+    scheduleNextAutopayWakeup(data.recurringPayments);
     woaAutopayStatus.lastFinishedAt = data.integrations.wheelsonAutoAutopay.lastFinishedAt;
     woaAutopayStatus.lastResult = result;
     woaAutopayStatus.lastError = result.errors[0] || '';
@@ -30199,7 +30246,7 @@ const server = http.createServer(async (req, res) => {
         const eligibility = wheelsonAutoAutopayEligibility(row, localDateKey(now), now);
         return { id: row.id || '', customer: row.customer || '', frequency: row.frequency || '', nextRun: row.nextRun || '', status: row.status || '', eligible: eligibility.eligible, reason: eligibility.reason, nextAttemptAt: eligibility.nextAttemptAt || '' };
       });
-      return json(res, 200, { ok: true, autopay: { ...woaAutopayStatus, nextRapidWakeupAt: rapidAutopayWakeupAt || woaAutopayStatus.nextRapidWakeupAt || '', diagnostics } });
+      return json(res, 200, { ok: true, autopay: { ...woaAutopayStatus, nextScheduledWakeupAt: autopayWakeupAt || woaAutopayStatus.nextScheduledWakeupAt || '', nextRapidWakeupAt: woaAutopayStatus.nextRapidWakeupAt || '', diagnostics } });
     }
     if (url.pathname === '/api/woa-autopay/run' && req.method === 'POST') {
       const result = await runWheelsonAutoAutopay({ source: 'dashboard' });
@@ -31304,7 +31351,7 @@ const server = http.createServer(async (req, res) => {
       appendAuditLog(data, user, existingAutopay ? 'Autopay reactivated' : 'Autopay created', [autopay.customer || 'Unknown customer', moneyText(autopay.amount || 0), autopay.frequency || 'Schedule', autopay.nextRun || 'No next date', autopay.vehicle || autopay.vin || 'No vehicle linked']);
       await protectConcurrentLocalWrites(data, { preferIncoming: true });
       await writeData(data);
-      scheduleNextRapidAutopayWakeup(data.recurringPayments);
+      scheduleNextAutopayWakeup(data.recurringPayments);
       return json(res, 201, { ok: true, autopay: existingAutopay || autopay, reactivated: !!existingAutopay });
     }
     if (url.pathname === '/api/recurring-payments/update' && req.method === 'POST') {
@@ -31435,7 +31482,7 @@ const server = http.createServer(async (req, res) => {
       enrichLinkedProfiles(data);
       appendAuditLog(data, user, scheduleChanged ? 'Autopay schedule updated' : (amountChanged ? 'Autopay amount updated' : 'Autopay reviewed'), [recurring && recurring.customer || id, moneyText(amount !== undefined ? amount : recurring && recurring.amount || 0), frequency, nextRun + ' ' + chargeTime, status]);
       await writeData(data);
-      scheduleNextRapidAutopayWakeup(data.recurringPayments);
+      scheduleNextAutopayWakeup(data.recurringPayments);
       return json(res, 200, { ok: true, nextRun, frequency, amount: amount !== undefined ? amount : recurring && recurring.amount, status, paymentDay, chargeTime, monthlyDay, retryRule, autopayManagedBy: patch.autopayManagedBy, autoChargeEnabled: enableWheelsonAutoCharge, amountChanged, scheduleChanged, retryReset, cutoverRescheduled, stripeCutoverDate: cutoverRescheduled ? nextRun : migrationBeforeUpdate.cutoverDate || '' });
     }
     if (url.pathname === '/api/recurring-payments/remove' && req.method === 'POST') {
@@ -32205,6 +32252,8 @@ module.exports = {
   findRecurringRow,
   successfulRecurringPaymentEvidence,
   retryDelayPassed,
+  businessDateTimeInstant,
+  autopayEligibilityTarget,
   wheelsonAutoAutopayEligibility,
   isDueForWheelsonAutoAutopay,
   cloverAutomaticChargeAttemptNumber,

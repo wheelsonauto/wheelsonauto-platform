@@ -333,13 +333,13 @@ export async function updateAutopay(input: {
   autopayManagedBy?: string;
   note?: string;
   autoChargeEnabled?: boolean;
-}): Promise<{ ok: boolean; nextRun: string; frequency: string; amount: number; status: string; autoChargeEnabled: boolean }> {
+}): Promise<{ ok: boolean; nextRun: string; frequency: string; amount: number; status: string; chargeTime: string; autoChargeEnabled: boolean }> {
   const response = await fetch('/api/recurring-payments/update', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify(input)
   });
-  const result = await parseJson<{ ok: boolean; nextRun: string; frequency: string; amount: number; status: string; autoChargeEnabled: boolean }>(response);
+  const result = await parseJson<{ ok: boolean; nextRun: string; frequency: string; amount: number; status: string; chargeTime: string; autoChargeEnabled: boolean }>(response);
   invalidateCachedPaths('/api/recurring-payments', '/api/customers', '/api/payments', '/api/app-notifications');
   return result;
 }

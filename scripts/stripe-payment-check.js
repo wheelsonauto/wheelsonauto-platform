@@ -253,6 +253,17 @@ async function run() {
   assert.strictEqual(repairState.recurringPayments[0].nextRun, '2026-08-27T21:00:00.000Z', 'A repaired hourly schedule must point to the next hour, not remain blocked.');
   const stripeDuePlan = { id: 'rec-stripe-active', customer: 'Stripe Customer', status: 'Active', autoChargeEnabled: true, paymentProvider: 'stripe', provider: 'Stripe', stripeCustomerId: 'cus_active', stripePaymentMethodId: 'pm_active', stripeLivemode: true, frequency: 'Every minute', nextRun: '2026-08-27T19:59:00.000Z', amount: 229 };
   assert.strictEqual(serverRuntime.wheelsonAutoAutopayEligibility(stripeDuePlan, '2026-08-27', policyNow).eligible, true, 'A charge-ready due Stripe plan must be eligible without owner pilot approval.');
+  const weeklyLocalInstant = serverRuntime.businessDateTimeInstant('2026-08-27', '11:46');
+  assert.strictEqual(weeklyLocalInstant.toISOString(), '2026-08-27T15:46:00.000Z', 'A saved 11:46 AM New Jersey schedule must remain Aug 27 at 11:46 AM instead of shifting to the prior evening.');
+  const weeklyWaitingPlan = { ...stripeDuePlan, id: 'rec-weekly-waiting', frequency: 'Weekly', nextRun: '2026-08-27', chargeTime: '11:46' };
+  const weeklyWaitingAt = new Date('2026-08-27T15:45:00.000Z');
+  const weeklyWaitingEligibility = serverRuntime.wheelsonAutoAutopayEligibility(weeklyWaitingPlan, '2026-08-27', weeklyWaitingAt);
+  assert.strictEqual(weeklyWaitingEligibility.eligible, false, 'A weekly plan must wait until its exact New Jersey charge time.');
+  assert.strictEqual(serverRuntime.autopayEligibilityTarget(weeklyWaitingPlan, weeklyWaitingEligibility, weeklyWaitingAt).toISOString(), '2026-08-27T15:46:00.000Z', 'The scheduler must create an exact wakeup for an ordinary weekly plan, not rely on a broad polling interval.');
+  assert.strictEqual(serverRuntime.wheelsonAutoAutopayEligibility(weeklyWaitingPlan, '2026-08-27', weeklyLocalInstant).eligible, true, 'The weekly plan must become eligible exactly at the selected New Jersey time.');
+  const retryWaitingPlan = { ...weeklyWaitingPlan, id: 'rec-weekly-retry', chargeTime: '10:00', status: '1x failed - retrying', retryCount: 1, failedAttempts: 1, lastAutoChargeAttemptAt: '2026-08-27T15:00:00.000Z' };
+  const retryWaitingEligibility = serverRuntime.wheelsonAutoAutopayEligibility(retryWaitingPlan, '2026-08-27', new Date('2026-08-27T15:10:00.000Z'));
+  assert.strictEqual(serverRuntime.autopayEligibilityTarget(retryWaitingPlan, retryWaitingEligibility, new Date('2026-08-27T15:10:00.000Z')).toISOString(), '2026-08-27T16:00:00.000Z', 'The protected retry must wake exactly one hour after the failed attempt.');
   const stripeWithHistoricalClover = { ...stripeDuePlan, id: 'rec-stripe-with-clover-history', cloverSubscriptionId: 'legacy-clover-subscription', cloverCustomerId: 'legacy-clover-customer', stripeMigration: { state: 'stripe_card_saved' } };
   assert.strictEqual(serverRuntime.wheelsonAutoAutopayEligibility(stripeWithHistoricalClover, '2026-08-27', policyNow).eligible, true, 'Historical Clover identifiers must not block a plan whose selected provider is Stripe.');
   assert.doesNotThrow(

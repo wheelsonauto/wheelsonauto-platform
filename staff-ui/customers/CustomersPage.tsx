@@ -94,6 +94,18 @@ function scheduleText(value?: string) {
   return String(value || '').includes('T') ? dateTime(value) : shortDate(value);
 }
 
+function clockTime(value?: string) {
+  const match = String(value || '').match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) return 'time not set';
+  const hour = Number(match[1]);
+  const minute = match[2];
+  return `${hour % 12 || 12}:${minute} ${hour >= 12 ? 'PM' : 'AM'}`;
+}
+
+function autopayStartText(frequency: string, nextRun: string, chargeTime: string) {
+  return rapidFrequency(frequency) ? dateTime(nextRun) : `${shortDate(nextRun)} at ${clockTime(chargeTime)}`;
+}
+
 function operationId() {
   return `staff-payment-${window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`}`;
 }
@@ -363,7 +375,7 @@ export function CustomersPage({ onNavigate, onOpenRental }: { onNavigate: (works
           const nextRun = scheduleValue(paymentDraft.frequency, paymentDraft.nextRun);
           if (!nextRun) throw new Error(rapidFrequency(paymentDraft.frequency) ? 'Choose the exact next charge date and time.' : 'Choose the exact next charge date.');
           const updated = await updateAutopay({ recurringPaymentId: selectedSchedule.id, nextRun, frequency: paymentDraft.frequency, amount, status: paymentDraft.status, chargeTime: rapidFrequency(paymentDraft.frequency) ? '' : paymentDraft.chargeTime, retryRule: 'Retry once then contact', autopayManagedBy: selectedSchedule.autopayManagedBy || 'WheelsonAuto', note: paymentDraft.note, autoChargeEnabled: paymentDraft.autoChargeEnabled });
-          setNotice(`Autopay saved: ${updated.frequency} starting ${dateTime(updated.nextRun)}. Automatic charging is ${updated.autoChargeEnabled ? 'enabled' : 'off'}.`);
+          setNotice(`Autopay saved: ${updated.frequency} starting ${autopayStartText(updated.frequency, updated.nextRun, updated.chargeTime)}. Automatic charging is ${updated.autoChargeEnabled ? 'enabled' : 'off'}.`);
         }
         if (paymentAction === 'remove') {
           await removeAutopay(selectedSchedule.id, paymentDraft.note || 'Removed from WheelsonAuto autopay by admin.');
