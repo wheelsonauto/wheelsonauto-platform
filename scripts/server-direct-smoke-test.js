@@ -4025,6 +4025,9 @@ async function main() {
       cloverPaymentSource: 'clv_paid_stale_001',
       paymentSetup: 'Card saved through WheelsonAuto',
       cardSavedAt: new Date().toISOString(),
+      lastAutoChargeOccurrenceKey: stalePaidDueDate,
+      lastAutoChargeResult: 'Paid',
+      lastAutoChargeAt: new Date().toISOString(),
       lastPaymentResult: 'Paid',
       lastPaymentAt: new Date().toISOString(),
       lastCloverChargeId: 'charge-paid-stale-001'
@@ -4677,12 +4680,21 @@ async function main() {
     const syncedProviderPaymentRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     const syncedProviderRecurring = syncedProviderPaymentRead.json.recurringPayments.find(row => row.id === cleanCutoverRecurringId);
     const syncedPaymentEvidence = successfulRecurringPaymentEvidence(syncedProviderPaymentRead.json, syncedProviderRecurring, autopayTodayKey, autopayTodayKey);
-    assert(syncedPaymentEvidence && syncedPaymentEvidence.id === 'direct-cutover-synced-payment', 'A provider-synced paid payment must remain linked to its recurring record for duplicate protection: ' + JSON.stringify(syncedPaymentEvidence));
+    assert(!syncedPaymentEvidence, 'An unmarked same-day provider payment must not silently consume a newly selected recurring occurrence.');
+    const exactProviderPayment = syncedProviderPaymentRead.json.payments.find(payment => payment.id === 'direct-cutover-synced-payment');
+    exactProviderPayment.scheduledDueDate = autopayTodayKey;
+    exactProviderPayment.billingPeriodKey = 'due:' + autopayTodayKey;
+    const exactProviderPaymentWrite = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: syncedProviderPaymentRead.json });
+    assert(exactProviderPaymentWrite.status === 200 && exactProviderPaymentWrite.json.ok, 'Exact provider payment evidence setup failed.');
+    const exactProviderPaymentRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const exactProviderRecurring = exactProviderPaymentRead.json.recurringPayments.find(row => row.id === cleanCutoverRecurringId);
+    const exactSyncedPaymentEvidence = successfulRecurringPaymentEvidence(exactProviderPaymentRead.json, exactProviderRecurring, autopayTodayKey, autopayTodayKey);
+    assert(exactSyncedPaymentEvidence && exactSyncedPaymentEvidence.id === 'direct-cutover-synced-payment', 'An exact provider-synced paid payment must remain linked to its recurring occurrence for duplicate protection: ' + JSON.stringify(exactSyncedPaymentEvidence));
     const fallbackDuplicateBlock = await request(server, 'POST', '/api/integrations/payments/manual-charge', {
       cookie: ownerCookie,
       json: { recurringPaymentId: cleanCutoverRecurringId, scheduledDueDate: autopayTodayKey }
     });
-    assert(fallbackDuplicateBlock.status === 409 && fallbackDuplicateBlock.json.duplicateBlocked, 'A synced paid provider transaction without a billing marker must still block a duplicate Stripe charge: ' + JSON.stringify(fallbackDuplicateBlock.json || fallbackDuplicateBlock.text));
+    assert(fallbackDuplicateBlock.status === 409 && fallbackDuplicateBlock.json.duplicateBlocked, 'A synced paid provider transaction with an exact billing marker must block a duplicate Stripe charge: ' + JSON.stringify(fallbackDuplicateBlock.json || fallbackDuplicateBlock.text));
 
     const stripeConcurrentRecurringId = 'direct-stripe-concurrent-charge';
     const stripeConcurrentState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });

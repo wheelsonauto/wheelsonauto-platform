@@ -261,6 +261,13 @@ async function run() {
   assert.strictEqual(weeklyWaitingEligibility.eligible, false, 'A weekly plan must wait until its exact New Jersey charge time.');
   assert.strictEqual(serverRuntime.autopayEligibilityTarget(weeklyWaitingPlan, weeklyWaitingEligibility, weeklyWaitingAt).toISOString(), '2026-08-27T15:46:00.000Z', 'The scheduler must create an exact wakeup for an ordinary weekly plan, not rely on a broad polling interval.');
   assert.strictEqual(serverRuntime.wheelsonAutoAutopayEligibility(weeklyWaitingPlan, '2026-08-27', weeklyLocalInstant).eligible, true, 'The weekly plan must become eligible exactly at the selected New Jersey time.');
+  const rapidReceiptFromSameDay = { id: 'pay-earlier-rapid', recurringPaymentId: 'rec-cadence-proof', status: 'Paid', createdAt: '2026-08-27T14:00:00.000Z', scheduledDueDate: '2026-08-27T13:59:00.000Z', billingPeriodKey: 'interval:2026-08-27T13:59:00.000Z' };
+  ['Daily', 'Weekly', 'Bi-weekly', 'Semi-monthly', 'Monthly'].forEach(frequency => {
+    const cadence = { ...weeklyWaitingPlan, id: 'rec-cadence-proof', frequency, nextRun: '2026-08-27', lastAutoChargeOccurrenceKey: '2026-08-27T13:59:00.000Z', lastAutoChargeResult: 'Paid', lastAutoChargeAt: rapidReceiptFromSameDay.createdAt };
+    assert.strictEqual(serverRuntime.successfulRecurringPaymentEvidence({ payments: [rapidReceiptFromSameDay] }, cadence, '2026-08-27', '2026-08-27'), null, `${frequency} must not treat a same-day rapid receipt as proof that its exact scheduled occurrence was paid.`);
+    const exactReceipt = { ...rapidReceiptFromSameDay, id: 'pay-exact-' + frequency, scheduledDueDate: '2026-08-27', billingPeriodKey: 'due:2026-08-27' };
+    assert(serverRuntime.successfulRecurringPaymentEvidence({ payments: [exactReceipt] }, cadence, '2026-08-27', '2026-08-27'), `${frequency} must recognize paid evidence for its exact scheduled occurrence.`);
+  });
   const retryWaitingPlan = { ...weeklyWaitingPlan, id: 'rec-weekly-retry', chargeTime: '10:00', status: '1x failed - retrying', retryCount: 1, failedAttempts: 1, lastAutoChargeAttemptAt: '2026-08-27T15:00:00.000Z' };
   const retryWaitingEligibility = serverRuntime.wheelsonAutoAutopayEligibility(retryWaitingPlan, '2026-08-27', new Date('2026-08-27T15:10:00.000Z'));
   assert.strictEqual(serverRuntime.autopayEligibilityTarget(retryWaitingPlan, retryWaitingEligibility, new Date('2026-08-27T15:10:00.000Z')).toISOString(), '2026-08-27T16:00:00.000Z', 'The protected retry must wake exactly one hour after the failed attempt.');

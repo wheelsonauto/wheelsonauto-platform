@@ -201,6 +201,37 @@ export type PaymentRecord = {
   updatedAt?: string;
 };
 
+export type ScheduledPaymentRecord = {
+  id: string;
+  operationId?: string;
+  recurringPaymentId: string;
+  customerId?: string;
+  customerAccountId?: string;
+  organizationId?: string;
+  customer?: string;
+  vehicle?: string;
+  vehicleId?: string;
+  vin?: string;
+  plate?: string;
+  amount: number;
+  reason?: string;
+  note?: string;
+  scheduledFor: string;
+  status: string;
+  paymentProvider?: string;
+  provider?: string;
+  cardLabel?: string;
+  cardLast4?: string;
+  paymentId?: string;
+  stripePaymentIntentId?: string;
+  lastResult?: string;
+  lastError?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  completedAt?: string;
+  cancelledAt?: string;
+};
+
 export type ClaimRecord = {
   id: string;
   organizationId?: string;

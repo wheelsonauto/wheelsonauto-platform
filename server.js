@@ -1038,6 +1038,7 @@ function repairDataIds(data) {
   data.pickupAppointments = Array.isArray(data.pickupAppointments) ? data.pickupAppointments : [];
   data.contractTemplates = Array.isArray(data.contractTemplates) ? data.contractTemplates : [];
   data.refundRequests = Array.isArray(data.refundRequests) ? data.refundRequests : [];
+  data.scheduledPayments = Array.isArray(data.scheduledPayments) ? data.scheduledPayments : [];
   data.verificationCases = Array.isArray(data.verificationCases) ? data.verificationCases : [];
   data.ledgerEntries = Array.isArray(data.ledgerEntries) ? data.ledgerEntries : [];
   data.accountingAdjustments = Array.isArray(data.accountingAdjustments) ? data.accountingAdjustments : [];
@@ -1111,10 +1112,10 @@ function addVehicleImportIndexKeys(indexes, vehicle, index) {
 const STATE_WRITE_META = Symbol('wheelsonauto.stateWriteMeta');
 const STATE_READ_META = Symbol('wheelsonauto.stateReadMeta');
 let stateRecoveryGeneration = 0;
-const CONCURRENT_COLLECTIONS = ['rentalFiles', 'cardSetupRequests', 'paymentRequests', 'recurringPayments', 'vehicles', 'onlineVehicles', 'contracts', 'maintenance', 'claims', 'messages', 'documents', 'eSignatures', 'onboardingSessions', 'pickupAppointments', 'contractTemplates', 'refundRequests', 'verificationCases', 'trackerEvents', 'trackerUnmatched', 'marketingEvents', 'subscriptions', 'billingInvoices', 'billingEvents', 'ledgerEntries', 'accountingAdjustments', 'accountingPeriods', 'calendarEvents', 'applications', 'tasks', 'apiProviders', 'staffAccounts', 'customerAccounts', 'organizations', 'dailyCloseouts', 'auditLogs', 'websiteLeads'];
+const CONCURRENT_COLLECTIONS = ['rentalFiles', 'cardSetupRequests', 'paymentRequests', 'scheduledPayments', 'recurringPayments', 'vehicles', 'onlineVehicles', 'contracts', 'maintenance', 'claims', 'messages', 'documents', 'eSignatures', 'onboardingSessions', 'pickupAppointments', 'contractTemplates', 'refundRequests', 'verificationCases', 'trackerEvents', 'trackerUnmatched', 'marketingEvents', 'subscriptions', 'billingInvoices', 'billingEvents', 'ledgerEntries', 'accountingAdjustments', 'accountingPeriods', 'calendarEvents', 'applications', 'tasks', 'apiProviders', 'staffAccounts', 'customerAccounts', 'organizations', 'dailyCloseouts', 'auditLogs', 'websiteLeads'];
 
 function emptyPlatformState() {
-  return { rentalFiles: [], vehicles: [], onlineVehicles: [], applications: [], customers: [], contracts: [], payments: [], maintenance: [], claims: [], messages: [], messageTemplates: [], staffAccounts: [], customerAccounts: [], organizations: [], subscriptions: [], billingInvoices: [], billingEvents: [], recurringPayments: [], tasks: [], documents: [], eSignatures: [], onboardingSessions: [], pickupAppointments: [], contractTemplates: [], refundRequests: [], verificationCases: [], trackerEvents: [], trackerUnmatched: [], marketingEvents: [], ledgerEntries: [], accountingAdjustments: [], accountingPeriods: [], calendarEvents: [], dailyCloseouts: [], websiteLeads: [], apiProviders: [], auditLogs: [], publicSite: {}, integrations: { clover: {}, shopify: {} } };
+  return { rentalFiles: [], vehicles: [], onlineVehicles: [], applications: [], customers: [], contracts: [], payments: [], maintenance: [], claims: [], messages: [], messageTemplates: [], staffAccounts: [], customerAccounts: [], organizations: [], subscriptions: [], billingInvoices: [], billingEvents: [], recurringPayments: [], scheduledPayments: [], tasks: [], documents: [], eSignatures: [], onboardingSessions: [], pickupAppointments: [], contractTemplates: [], refundRequests: [], verificationCases: [], trackerEvents: [], trackerUnmatched: [], marketingEvents: [], ledgerEntries: [], accountingAdjustments: [], accountingPeriods: [], calendarEvents: [], dailyCloseouts: [], websiteLeads: [], apiProviders: [], auditLogs: [], publicSite: {}, integrations: { clover: {}, shopify: {} } };
 }
 function baseRecordIds(data = {}) {
   const result = {};
@@ -19780,20 +19781,26 @@ function successfulRecurringPaymentEvidence(data, row, dueKey, throughDateKey) {
   const through = validCalendarDateKey(throughDateKey);
   if (!due || !through) return null;
   const candidates = [];
+  const duePeriodKey = recurringBillingPeriodKey(row, due);
   const paidStatus = value => {
     const status = String(value || '').trim().toLowerCase();
     return !!status && !/(fail|declin|void|refund|dispute|not found|rejected|needs verification|awaiting verification)/.test(status) && (/^paid\b/.test(status) || /succeed|success|captur|complete/.test(status));
   };
-  const add = (status, at, source, id) => {
+  const exactOccurrence = (scheduledDueDate, billingPeriodKey) => {
+    const scheduledDate = validCalendarDateKey(scheduledDueDate);
+    if (scheduledDate) return scheduledDate === due;
+    return !!duePeriodKey && String(billingPeriodKey || '').trim() === duePeriodKey;
+  };
+  const add = (status, at, source, id, scheduledDueDate, billingPeriodKey) => {
     if (!paidStatus(status)) return;
+    if (!exactOccurrence(scheduledDueDate, billingPeriodKey)) return;
     const dateKey = paymentEventDateKey(at);
     if (dateKey && dateKey >= due && dateKey <= through) candidates.push({ dateKey, source, id: id || '' });
   };
-  add(row && row.lastPaymentResult, row && row.lastPaymentAt, 'recurring payment result', row && row.lastCloverChargeId);
-  add(row && row.lastAutoChargeResult, row && (row.lastAutoChargeAt || row.lastPaymentAt), 'autopay result', row && row.lastCloverChargeId);
+  add(row && row.lastAutoChargeResult, row && (row.lastAutoChargeAt || row.lastPaymentAt), 'autopay result', row && row.lastCloverChargeId, row && row.lastAutoChargeOccurrenceKey, row && row.lastBillingPeriodKey);
   (data && data.payments || []).forEach(payment => {
     if (!payment || String(payment.recurringPaymentId || '') !== String(row && row.id || '')) return;
-    add(payment.status, payment.createdAt || payment.date, payment.source || payment.method || 'linked payment', payment.cloverPaymentId || payment.id);
+    add(payment.status, payment.createdAt || payment.date, payment.source || payment.method || 'linked payment', payment.cloverPaymentId || payment.id, payment.scheduledDueDate || payment.dueDate, payment.billingPeriodKey);
   });
   candidates.sort((a, b) => b.dateKey.localeCompare(a.dateKey));
   return candidates[0] || null;
@@ -20100,16 +20107,45 @@ function autopayEligibilityTarget(row, eligibility, now = new Date()) {
   const target = businessDateTimeInstant(dueKey, row.chargeTime || row.paymentTime || row.autopayTime || '18:00');
   return target && Number.isFinite(target.getTime()) ? target : null;
 }
-function scheduleNextAutopayWakeup(rows = []) {
+function scheduledOneTimePaymentInstant(row = {}) {
+  const scheduled = new Date(String(row.scheduledFor || ''));
+  return Number.isFinite(scheduled.getTime()) ? scheduled : null;
+}
+function scheduledOneTimePaymentOpen(row = {}) {
+  return /^scheduled$/i.test(String(row.status || ''));
+}
+function scheduledOneTimePaymentRunnable(row = {}) {
+  return /^(scheduled|processing|confirmation pending)$/i.test(String(row.status || ''));
+}
+function scheduledOneTimePaymentTarget(row = {}) {
+  const scheduled = scheduledOneTimePaymentInstant(row);
+  if (!scheduled || !scheduledOneTimePaymentRunnable(row)) return null;
+  if (scheduledOneTimePaymentOpen(row)) return scheduled;
+  const retry = new Date(String(row.nextAttemptAt || ''));
+  if (Number.isFinite(retry.getTime())) return retry.getTime() > scheduled.getTime() ? retry : scheduled;
+  const attempted = new Date(String(row.lastAttemptAt || row.updatedAt || ''));
+  const delayMs = /^processing$/i.test(String(row.status || '')) ? 2 * 60 * 1000 : 5 * 60 * 1000;
+  return Number.isFinite(attempted.getTime()) ? new Date(Math.max(scheduled.getTime(), attempted.getTime() + delayMs)) : scheduled;
+}
+function scheduledOneTimePaymentDue(row = {}, now = new Date()) {
+  const target = scheduledOneTimePaymentTarget(row);
+  return !!target && target.getTime() <= now.getTime();
+}
+function scheduleNextAutopayWakeup(rows = [], scheduledRows = []) {
   if (autopayWakeupTimer) clearTimeout(autopayWakeupTimer);
   autopayWakeupTimer = null;
   autopayWakeupAt = '';
   const now = new Date();
-  const candidates = (Array.isArray(rows) ? rows : []).map(row => {
+  const recurringCandidates = (Array.isArray(rows) ? rows : []).map(row => {
     const eligibility = wheelsonAutoAutopayEligibility(row, localDateKey(now), now);
     const target = autopayEligibilityTarget(row, eligibility, now);
-    return target ? { row, target } : null;
-  }).filter(item => item && Number.isFinite(item.target.getTime())).sort((left, right) => left.target.getTime() - right.target.getTime());
+    return target ? { row, target, kind: 'recurring' } : null;
+  });
+  const oneTimeCandidates = (Array.isArray(scheduledRows) ? scheduledRows : []).filter(scheduledOneTimePaymentRunnable).map(row => {
+    const target = scheduledOneTimePaymentTarget(row);
+    return target ? { row, target, kind: 'one-time' } : null;
+  });
+  const candidates = recurringCandidates.concat(oneTimeCandidates).filter(item => item && Number.isFinite(item.target.getTime())).sort((left, right) => left.target.getTime() - right.target.getTime());
   if (!candidates.length) {
     woaAutopayStatus.nextScheduledWakeupAt = '';
     woaAutopayStatus.nextRapidWakeupAt = '';
@@ -20118,7 +20154,7 @@ function scheduleNextAutopayWakeup(rows = []) {
   const targetAt = Math.max(Date.now() + 250, candidates[0].target.getTime() + 250);
   autopayWakeupAt = new Date(targetAt).toISOString();
   woaAutopayStatus.nextScheduledWakeupAt = autopayWakeupAt;
-  woaAutopayStatus.nextRapidWakeupAt = rapidAutopayIntervalMs(candidates[0].row) ? autopayWakeupAt : '';
+  woaAutopayStatus.nextRapidWakeupAt = candidates[0].kind === 'recurring' && rapidAutopayIntervalMs(candidates[0].row) ? autopayWakeupAt : '';
   autopayWakeupTimer = setTimeout(() => {
     autopayWakeupTimer = null;
     autopayWakeupAt = '';
@@ -20414,6 +20450,8 @@ function savePaymentNotFoundResult(data, row, payload = {}, err, options = {}) {
     notes: [String(payload.note || '').trim(), message].filter(Boolean).join(' | '),
     reason: String(payload.reason || '').trim(),
     chargePurpose: manualChargePurpose(payload) || undefined,
+    scheduledOneTimePaymentId: String(payload.scheduledOneTimePaymentId || '').trim(),
+    scheduledOneTimeFor: String(payload.scheduledOneTimeFor || '').trim(),
     createsDue,
     balanceEffect: createsDue ? undefined : 'none',
     balanceRemaining: createsDue ? amount : 0,
@@ -20555,6 +20593,8 @@ function saveStripeAuthenticationRequiredResult(data, row, payload = {}, err, op
     notes: [String(payload.note || '').trim(), message].filter(Boolean).join(' | '),
     reason: String(payload.reason || '').trim(),
     chargePurpose: manualChargePurpose(payload) || undefined,
+    scheduledOneTimePaymentId: String(payload.scheduledOneTimePaymentId || '').trim(),
+    scheduledOneTimeFor: String(payload.scheduledOneTimeFor || '').trim(),
     createsDue,
     balanceEffect: createsDue ? undefined : 'none',
     balanceRemaining: createsDue ? amount : 0,
@@ -20627,6 +20667,8 @@ function saveFailedChargeResult(data, row, payload = {}, err, options = {}) {
     notes: [String(payload.note || '').trim(), message].filter(Boolean).join(' | '),
     reason: String(payload.reason || '').trim(),
     chargePurpose: manualChargePurpose(payload) || undefined,
+    scheduledOneTimePaymentId: String(payload.scheduledOneTimePaymentId || '').trim(),
+    scheduledOneTimeFor: String(payload.scheduledOneTimeFor || '').trim(),
     createsDue,
     balanceEffect: createsDue ? undefined : 'none',
     balanceRemaining: createsDue ? amount : 0,
@@ -20845,7 +20887,9 @@ async function chargeStripeSavedCard(data, recurring, payload = {}) {
         chargeAutomatic: payload.automatic === true ? 'true' : 'false',
         chargeAdditionalManual: additionalManualCharge ? 'true' : 'false',
         chargePurpose,
-        chargeReason: String(payload.reason || '').slice(0, 250)
+        chargeReason: String(payload.reason || '').slice(0, 250),
+        scheduledOneTimePaymentId: String(payload.scheduledOneTimePaymentId || '').slice(0, 160),
+        scheduledOneTimeFor: String(payload.scheduledOneTimeFor || '').slice(0, 80)
       })
     }, idempotencyKey, { timeoutMs: 10000 });
   } catch (error) {
@@ -20855,7 +20899,11 @@ async function chargeStripeSavedCard(data, recurring, payload = {}) {
         confirmationPendingAt: new Date().toISOString(),
         providerError: String(error && (error.providerError || error.message) || '').slice(0, 500)
       });
-      updateRecurringChargeState(data, recurring.id || recurring.cloverSubscriptionId, {
+      updateRecurringChargeState(data, recurring.id || recurring.cloverSubscriptionId, additionalManualCharge ? {
+        lastManualChargeResult: 'Stripe confirmation pending',
+        lastManualChargeError: pendingAttempt.providerError || 'Stripe confirmation is pending.',
+        lastManualChargeAttemptAt: pendingAttempt.confirmationPendingAt
+      } : {
         status: 'Stripe confirmation pending',
         tone: 'warn',
         retryCount: Number(recurring.retryCount || recurring.failedAttempts || 0),
@@ -20898,7 +20946,11 @@ async function chargeStripeSavedCard(data, recurring, payload = {}) {
         paymentIntentId: stripeObjectId(intent),
         confirmationPendingAt: new Date().toISOString()
       });
-      updateRecurringChargeState(data, recurring.id || recurring.cloverSubscriptionId, {
+      updateRecurringChargeState(data, recurring.id || recurring.cloverSubscriptionId, additionalManualCharge ? {
+        lastManualChargeResult: 'Stripe confirmation pending',
+        lastManualChargeError: 'Stripe is still processing the saved-card payment.',
+        lastManualChargeAttemptAt: pendingAttempt.confirmationPendingAt
+      } : {
         status: 'Stripe confirmation pending',
         tone: 'warn',
         retryCount: Number(recurring.retryCount || recurring.failedAttempts || 0),
@@ -20968,6 +21020,8 @@ async function chargeStripeSavedCard(data, recurring, payload = {}) {
     notes: [String(payload.reason || '').trim(), String(payload.note || '').trim()].filter(Boolean).join(' | '),
     reason: String(payload.reason || '').trim(),
     chargePurpose: chargePurpose || undefined,
+    scheduledOneTimePaymentId: String(payload.scheduledOneTimePaymentId || '').trim(),
+    scheduledOneTimeFor: String(payload.scheduledOneTimeFor || '').trim(),
     createsDue: false,
     balanceEffect: chargePurpose === 'dues' ? 'credit' : 'none',
     scheduledDueDate: scheduledDueKey,
@@ -21285,6 +21339,119 @@ function applyCustomerPortalCreditToBilling(data, recurring, amount, scheduledDu
   ensurePaymentReceiptDocument(data, payment, { paymentProvider: 'internal', title: payment.paymentType, customer: payment.customer, vehicle: payment.vehicle });
   return payment;
 }
+function scheduledPaymentSystemUser(row = {}) {
+  return {
+    name: row.scheduledBy || 'WheelsonAuto scheduler',
+    role: 'System',
+    organizationId: row.organizationId || MAIN_ORG_ID,
+    companyName: 'WheelsonAuto'
+  };
+}
+function settleScheduledOneTimePayment(data, row, payment, status = 'Paid') {
+  if (!row || !payment) return;
+  const stamp = payment.createdAt || new Date().toISOString();
+  Object.assign(row, {
+    status,
+    paymentId: payment.id || '',
+    stripePaymentIntentId: payment.stripePaymentIntentId || payment.providerPaymentId || '',
+    completedAt: stamp,
+    updatedAt: stamp,
+    lastResult: payment.status || status,
+    lastError: '',
+    nextAttemptAt: ''
+  });
+  payment.scheduledOneTimePaymentId = row.id || '';
+  payment.scheduledOneTimeFor = row.scheduledFor || '';
+  payment.paymentType = payment.paymentType || 'Scheduled one-time payment';
+}
+async function runDueScheduledOneTimePayments(data, runAt = new Date()) {
+  data.scheduledPayments = Array.isArray(data.scheduledPayments) ? data.scheduledPayments : [];
+  const due = data.scheduledPayments.filter(row => scheduledOneTimePaymentDue(row, runAt));
+  const result = { due: due.length, charged: 0, failed: 0, confirmationPending: 0, authenticationRequired: 0, blocked: 0, errors: [] };
+  for (const row of due) {
+    const currentScheduledRow = () => (data.scheduledPayments || []).find(candidate => String(candidate.id || '') === String(row.id || '')) || row;
+    const recurring = findRecurringRow(data, row.recurringPaymentId);
+    if (!recurring) {
+      Object.assign(row, { status: 'Needs review', lastError: 'The linked recurring customer was not found.', updatedAt: new Date().toISOString() });
+      result.blocked += 1;
+      result.errors.push((row.customer || row.id) + ': recurring customer not found');
+      continue;
+    }
+    if (normalizedPaymentProvider(recurring.paymentProvider || recurring.provider || 'clover') !== 'stripe') {
+      Object.assign(row, { status: 'Needs review', lastError: 'Scheduled one-time saved-card payments require Stripe.', updatedAt: new Date().toISOString() });
+      result.blocked += 1;
+      result.errors.push((row.customer || row.id) + ': Stripe card required');
+      continue;
+    }
+    const attemptAt = new Date().toISOString();
+    Object.assign(row, { status: 'Processing', lastAttemptAt: attemptAt, nextAttemptAt: new Date(Date.parse(attemptAt) + 2 * 60 * 1000).toISOString(), attemptCount: Number(row.attemptCount || 0) + 1, updatedAt: attemptAt });
+    try {
+      const charged = await chargeSavedRecurringCard(data, {
+        recurringPaymentId: recurring.id,
+        amount: Number(row.amount || 0),
+        automatic: false,
+        allowAdditionalManualCharge: true,
+        chargePurpose: 'one_time',
+        operationId: row.operationId,
+        idempotencyKey: row.idempotencyKey,
+        reason: row.reason || 'Scheduled one-time payment',
+        note: row.note || 'Owner-scheduled one-time Stripe charge.',
+        scheduledOneTimePaymentId: row.id,
+        scheduledOneTimeFor: row.scheduledFor
+      }, null);
+      if (!charged || !charged.payment || !stripeMigration.paymentIsPaid(charged.payment.status)) throw new Error('Stripe did not return a paid one-time payment.');
+      const scheduledRow = currentScheduledRow();
+      settleScheduledOneTimePayment(data, scheduledRow, charged.payment);
+      appendAuditLog(data, scheduledPaymentSystemUser(scheduledRow), 'Scheduled one-time payment completed', [scheduledRow.customer || recurring.customer || 'Unknown customer', moneyText(scheduledRow.amount), scheduledRow.scheduledFor, charged.payment.stripePaymentIntentId || charged.payment.id]);
+      schedulePaymentOutcomeEmail(recurring, charged.payment, '', '/api/scheduled-payments');
+      result.charged += 1;
+    } catch (error) {
+      const stamp = new Date().toISOString();
+      const scheduledRow = currentScheduledRow();
+      if (isStripeConfirmationPendingError(error)) {
+        Object.assign(scheduledRow, { status: 'Confirmation pending', nextAttemptAt: new Date(Date.parse(stamp) + 5 * 60 * 1000).toISOString(), lastError: String(error && error.message || error), updatedAt: stamp });
+        result.confirmationPending += 1;
+        continue;
+      }
+      if (isStripeAuthenticationRequired(error)) {
+        const payment = saveStripeAuthenticationRequiredResult(data, recurring, {
+          amount: scheduledRow.amount,
+          reason: scheduledRow.reason,
+          note: scheduledRow.note,
+          scheduledOneTimePaymentId: scheduledRow.id,
+          scheduledOneTimeFor: scheduledRow.scheduledFor
+        }, error, { source: 'Scheduled one-time Stripe authentication required', createsDue: false });
+        payment.scheduledOneTimePaymentId = scheduledRow.id;
+        payment.scheduledOneTimeFor = scheduledRow.scheduledFor;
+        Object.assign(scheduledRow, { status: 'Card update required', nextAttemptAt: '', paymentId: payment.id || '', lastError: String(error && error.message || error), updatedAt: stamp });
+        schedulePaymentOutcomeEmail(recurring, payment, error && error.message || '', '/api/scheduled-payments');
+        result.authenticationRequired += 1;
+        continue;
+      }
+      if (isStripeLaunchGuardError(error)) {
+        Object.assign(scheduledRow, { status: 'Needs review', nextAttemptAt: '', lastError: String(error && error.message || error), updatedAt: stamp });
+        result.blocked += 1;
+        result.errors.push((scheduledRow.customer || scheduledRow.id) + ': ' + scheduledRow.lastError);
+        continue;
+      }
+      const payment = saveFailedChargeResult(data, recurring, {
+        amount: scheduledRow.amount,
+        reason: scheduledRow.reason,
+        note: scheduledRow.note,
+        scheduledOneTimePaymentId: scheduledRow.id,
+        scheduledOneTimeFor: scheduledRow.scheduledFor
+      }, error, { attempts: 1, createsDue: false, preserveRecurringState: true, method: 'Stripe saved card', source: 'Scheduled one-time Stripe charge failed' });
+      payment.scheduledOneTimePaymentId = scheduledRow.id;
+      payment.scheduledOneTimeFor = scheduledRow.scheduledFor;
+      Object.assign(scheduledRow, { status: 'Failed', nextAttemptAt: '', paymentId: payment.id || '', lastResult: payment.status || 'Failed', lastError: String(error && error.message || error), failedAt: stamp, updatedAt: stamp });
+      appendAuditLog(data, scheduledPaymentSystemUser(scheduledRow), 'Scheduled one-time payment failed', [scheduledRow.customer || recurring.customer || 'Unknown customer', moneyText(scheduledRow.amount), scheduledRow.scheduledFor, scheduledRow.lastError]);
+      schedulePaymentOutcomeEmail(recurring, payment, scheduledRow.lastError, '/api/scheduled-payments');
+      result.failed += 1;
+      result.errors.push((scheduledRow.customer || scheduledRow.id) + ': ' + scheduledRow.lastError);
+    }
+  }
+  return result;
+}
 async function runWheelsonAutoAutopay(options = {}) {
   if (woaAutopayStatus.inFlight) return { ok: true, skipped: true, reason: 'already running', status: woaAutopayStatus };
   woaAutopayStatus.inFlight = true;
@@ -21293,7 +21460,7 @@ async function runWheelsonAutoAutopay(options = {}) {
   woaAutopayStatus.fatalError = '';
   const runAt = options.now instanceof Date ? options.now : new Date(options.now || Date.now());
   const dateKey = options.dateKey || localDateKey(runAt);
-  const result = { dateKey, charged: 0, creditCovered: 0, creditApplied: 0, pickupSchedulesRecovered: 0, rapidSchedulesRepaired: 0, completedSchedulesDisabled: 0, stripeOutcomesReconciled: 0, reconciled: 0, failed: 0, notFound: 0, authenticationRequired: 0, confirmationPending: 0, providerBlocked: 0, duplicateBlocked: 0, skipped: 0, errors: [] };
+  const result = { dateKey, charged: 0, creditCovered: 0, creditApplied: 0, scheduledOneTimeDue: 0, scheduledOneTimeCharged: 0, scheduledOneTimeFailed: 0, scheduledOneTimeBlocked: 0, pickupSchedulesRecovered: 0, rapidSchedulesRepaired: 0, completedSchedulesDisabled: 0, stripeOutcomesReconciled: 0, reconciled: 0, failed: 0, notFound: 0, authenticationRequired: 0, confirmationPending: 0, providerBlocked: 0, duplicateBlocked: 0, skipped: 0, errors: [] };
   let autopayLock = null;
   try {
     autopayLock = await STATE_REPOSITORY.acquireJobLock('wheelsonauto-autopay');
@@ -21306,6 +21473,7 @@ async function runWheelsonAutoAutopay(options = {}) {
     }
     const data = await readData();
     data.recurringPayments = Array.isArray(data.recurringPayments) ? data.recurringPayments : [];
+    data.scheduledPayments = Array.isArray(data.scheduledPayments) ? data.scheduledPayments : [];
     data.recurringPayments.forEach(normalizeStripeChargeAttemptTerminalEvidence);
     result.stripeOutcomesReconciled = reconcileStripePaymentOutcomeContradictions(data);
     result.pickupSchedulesRecovered = repairCompletedPickupAutopayStates(data);
@@ -21322,6 +21490,14 @@ async function runWheelsonAutoAutopay(options = {}) {
       updateRecurringChargeState(data, row.id || row.cloverSubscriptionId, completedPatch);
       result.completedSchedulesDisabled += 1;
     }
+    const scheduledOneTime = await runDueScheduledOneTimePayments(data, runAt);
+    result.scheduledOneTimeDue = scheduledOneTime.due;
+    result.scheduledOneTimeCharged = scheduledOneTime.charged;
+    result.scheduledOneTimeFailed = scheduledOneTime.failed;
+    result.scheduledOneTimeBlocked = scheduledOneTime.blocked;
+    result.authenticationRequired += scheduledOneTime.authenticationRequired;
+    result.confirmationPending += scheduledOneTime.confirmationPending;
+    result.errors.push(...scheduledOneTime.errors);
     for (const row of data.recurringPayments) {
       if (rapidAutopayIntervalMs(row)) continue;
       const dueKey = recurringDateKey(row);
@@ -21596,7 +21772,7 @@ async function runWheelsonAutoAutopay(options = {}) {
       lastResult: result
     };
     await writeData(data);
-    scheduleNextAutopayWakeup(data.recurringPayments);
+    scheduleNextAutopayWakeup(data.recurringPayments, data.scheduledPayments);
     woaAutopayStatus.lastFinishedAt = data.integrations.wheelsonAutoAutopay.lastFinishedAt;
     woaAutopayStatus.lastResult = result;
     woaAutopayStatus.lastError = result.errors[0] || '';
@@ -21607,6 +21783,9 @@ async function runWheelsonAutoAutopay(options = {}) {
       managedSchedules: result.managedSchedules,
       due: due.length,
       charged: result.charged,
+      scheduledOneTimeDue: result.scheduledOneTimeDue,
+      scheduledOneTimeCharged: result.scheduledOneTimeCharged,
+      scheduledOneTimeFailed: result.scheduledOneTimeFailed,
       failed: result.failed,
       providerBlocked: result.providerBlocked,
       duplicateBlocked: result.duplicateBlocked,
@@ -22385,6 +22564,8 @@ function applyStripePaymentIntentSucceeded(data, intent = {}) {
     notes: appendUniqueNote(appendUniqueNote(appendUniqueNote(existing && existing.notes || '', 'Verified by signed Stripe payment webhook.'), duplicateNote), providerReviewNote),
     reason: String(metadata.chargeReason || existing && existing.reason || '').trim(),
     chargePurpose: claim.chargePurpose || existing && existing.chargePurpose,
+    scheduledOneTimePaymentId: String(metadata.scheduledOneTimePaymentId || existing && existing.scheduledOneTimePaymentId || '').trim(),
+    scheduledOneTimeFor: String(metadata.scheduledOneTimeFor || existing && existing.scheduledOneTimeFor || '').trim(),
     createsDue: false,
     balanceEffect: claim.chargePurpose === 'dues' ? 'credit' : 'none',
     scheduledDueDate: scheduledDueKey,
@@ -22407,6 +22588,8 @@ function applyStripePaymentIntentSucceeded(data, intent = {}) {
     stripeMigrationStateAtWebhook: stripeMigration.migrationRecord(recurring).state
   };
   payment = upsertAuthoritativeStripePaidPayment(data, payment).payment;
+  const scheduledOneTime = payment.scheduledOneTimePaymentId && (data.scheduledPayments || []).find(row => String(row.id || '') === String(payment.scheduledOneTimePaymentId));
+  if (scheduledOneTime && String(scheduledOneTime.recurringPaymentId || '') === String(recurring.id || '')) settleScheduledOneTimePayment(data, scheduledOneTime, payment);
   if (claim.chargePurpose === 'dues') applySuccessfulPaymentToCustomerDues(data, recurring, payment, amount);
   const attempts = Array.isArray(recurring.paymentAttempts) ? recurring.paymentAttempts.slice() : [];
   if (!attempts.some(row => String(row && row.stripePaymentIntentId || '') === intentId)) attempts.unshift({
@@ -29218,6 +29401,85 @@ const server = http.createServer(async (req, res) => {
       const page = paginatedResource(viewResourceRows(data, 'payments', user), url, { searchFields: ['id', 'customer', 'vehicle', 'vin', 'plate', 'method', 'source', 'status', 'createdAt', 'date', 'cloverPaymentId', 'stripePaymentIntentId', 'providerPaymentId'], defaultLimit: 75, maxLimit: 5000 });
       return json(res, 200, safeResourcePayload({ ok: true, ...page }), { 'Cache-Control': 'private, no-store' });
     }
+    if (url.pathname === '/api/scheduled-payments' && req.method === 'GET') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can view scheduled saved-card payments.' });
+      const data = await readViewData();
+      const records = viewResourceRows(data, 'scheduledPayments', user).slice().sort((left, right) => String(right.scheduledFor || right.createdAt || '').localeCompare(String(left.scheduledFor || left.createdAt || '')));
+      const page = paginatedResource(records, url, { searchFields: ['id', 'customer', 'vehicle', 'reason', 'status', 'scheduledFor', 'cardLast4'], defaultLimit: 100, maxLimit: 500 });
+      return json(res, 200, safeResourcePayload({ ok: true, ...page }), { 'Cache-Control': 'private, no-store' });
+    }
+    if (url.pathname === '/api/scheduled-payments' && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can schedule a saved-card payment.' });
+      const payload = await readJsonBody(req);
+      if (payload.confirmed !== true) return json(res, 400, { ok: false, error: 'Confirm the exact customer, amount, and scheduled time.' });
+      const data = await readData();
+      data.scheduledPayments = Array.isArray(data.scheduledPayments) ? data.scheduledPayments : [];
+      const recurring = findRecurringRow(data, payload.recurringPaymentId || payload.id);
+      if (!recurring) return json(res, 404, { ok: false, error: 'The exact recurring customer was not found.' });
+      const provider = normalizedPaymentProvider(recurring.paymentProvider || recurring.provider || 'clover');
+      if (provider !== 'stripe' || !recurringCardReadyForProvider(recurring, provider)) return json(res, 409, { ok: false, error: 'A charge-ready Stripe card is required before scheduling a one-time payment.' });
+      const amount = Number(payload.amount);
+      if (!Number.isFinite(amount) || amount <= 0) return json(res, 400, { ok: false, error: 'Enter a valid one-time payment amount.' });
+      const scheduledForDate = new Date(String(payload.scheduledFor || ''));
+      if (!Number.isFinite(scheduledForDate.getTime())) return json(res, 400, { ok: false, error: 'Choose a valid one-time payment date and time.' });
+      if (scheduledForDate.getTime() <= Date.now()) return json(res, 400, { ok: false, error: 'Choose a future time for the one-time payment.' });
+      const operationId = String(payload.operationId || '').trim() || ('scheduled-' + crypto.randomBytes(12).toString('hex'));
+      if (!/^[a-zA-Z0-9:_-]{8,160}$/.test(operationId)) return json(res, 400, { ok: false, error: 'The scheduled payment operation ID is invalid. Refresh the customer file and try again.' });
+      const existing = data.scheduledPayments.find(row => String(row.operationId || '') === operationId);
+      if (existing) return json(res, 200, { ok: true, duplicate: true, scheduledPayment: existing });
+      const identity = recurringPaymentIdentity(data, recurring, payload);
+      const now = new Date().toISOString();
+      const id = 'scheduled-payment-' + crypto.randomBytes(12).toString('hex');
+      const scheduledPayment = {
+        id,
+        operationId,
+        idempotencyKey: 'woa-scheduled-once-' + operationId,
+        recurringPaymentId: recurring.id || '',
+        customerId: recurring.customerId || '',
+        customerAccountId: recurring.customerAccountId || '',
+        organizationId: recurring.organizationId || userOrganizationId(user),
+        customer: recurring.customer || '',
+        phone: recurring.phone || '',
+        email: recurring.email || '',
+        vehicle: identity.vehicle || recurring.vehicle || '',
+        vehicleId: identity.vehicleId || recurring.vehicleId || '',
+        vin: identity.vin || recurring.vin || '',
+        plate: identity.plate || recurring.plate || recurring.licensePlate || '',
+        amount: Number(amount.toFixed(2)),
+        reason: cleanResourceText(payload.reason || 'Scheduled one-time payment', 240),
+        note: cleanResourceText(payload.note || '', 1000),
+        scheduledFor: scheduledForDate.toISOString(),
+        status: 'Scheduled',
+        paymentProvider: 'stripe',
+        provider: 'Stripe',
+        cardLabel: recurringCardLabel(recurring),
+        cardLast4: recurringCardLast4(recurring),
+        scheduledBy: user.name || user.username || 'Owner',
+        createdAt: now,
+        updatedAt: now
+      };
+      data.scheduledPayments.unshift(scheduledPayment);
+      appendAuditLog(data, user, 'One-time payment scheduled', [scheduledPayment.customer || 'Unknown customer', moneyText(scheduledPayment.amount), scheduledPayment.scheduledFor, scheduledPayment.reason]);
+      await writeData(data);
+      scheduleNextAutopayWakeup(data.recurringPayments, data.scheduledPayments);
+      return json(res, 201, { ok: true, scheduledPayment });
+    }
+    if (url.pathname === '/api/scheduled-payments/cancel' && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can cancel a scheduled payment.' });
+      const payload = await readJsonBody(req);
+      if (payload.confirmed !== true) return json(res, 400, { ok: false, error: 'Confirm the exact scheduled payment before cancelling it.' });
+      const data = await readData();
+      data.scheduledPayments = Array.isArray(data.scheduledPayments) ? data.scheduledPayments : [];
+      const scheduledPayment = data.scheduledPayments.find(row => String(row.id || '') === String(payload.scheduledPaymentId || payload.id || ''));
+      if (!scheduledPayment) return json(res, 404, { ok: false, error: 'Scheduled payment was not found.' });
+      if (!scheduledOneTimePaymentOpen(scheduledPayment)) return json(res, 409, { ok: false, error: 'Only a pending scheduled payment can be cancelled. Its current status is ' + (scheduledPayment.status || 'unknown') + '.' });
+      const now = new Date().toISOString();
+      Object.assign(scheduledPayment, { status: 'Cancelled', cancelledAt: now, cancelledBy: user.name || user.username || 'Owner', cancelReason: cleanResourceText(payload.reason || 'Cancelled by owner', 500), updatedAt: now });
+      appendAuditLog(data, user, 'Scheduled one-time payment cancelled', [scheduledPayment.customer || 'Unknown customer', moneyText(scheduledPayment.amount), scheduledPayment.scheduledFor, scheduledPayment.cancelReason]);
+      await writeData(data);
+      scheduleNextAutopayWakeup(data.recurringPayments, data.scheduledPayments);
+      return json(res, 200, { ok: true, scheduledPayment });
+    }
     if (url.pathname === '/api/dashboard/priority-feed' && req.method === 'GET') {
       const role = String(user.role || '').toLowerCase();
       if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'This dashboard feed is available to owner and manager accounts.' });
@@ -31697,7 +31959,7 @@ const server = http.createServer(async (req, res) => {
       appendAuditLog(data, user, existingAutopay ? 'Autopay reactivated' : 'Autopay created', [autopay.customer || 'Unknown customer', moneyText(autopay.amount || 0), autopay.frequency || 'Schedule', autopay.nextRun || 'No next date', autopay.vehicle || autopay.vin || 'No vehicle linked']);
       await protectConcurrentLocalWrites(data, { preferIncoming: true });
       await writeData(data);
-      scheduleNextAutopayWakeup(data.recurringPayments);
+      scheduleNextAutopayWakeup(data.recurringPayments, data.scheduledPayments);
       return json(res, 201, { ok: true, autopay: existingAutopay || autopay, reactivated: !!existingAutopay });
     }
     if (url.pathname === '/api/recurring-payments/update' && req.method === 'POST') {
@@ -31852,7 +32114,7 @@ const server = http.createServer(async (req, res) => {
       enrichLinkedProfiles(data);
       appendAuditLog(data, user, scheduleChanged ? 'Autopay schedule updated' : (amountChanged ? 'Autopay amount updated' : 'Autopay reviewed'), [recurring && recurring.customer || id, moneyText(amount !== undefined ? amount : recurring && recurring.amount || 0), frequency, nextRun + ' ' + chargeTime, status]);
       await writeData(data);
-      scheduleNextAutopayWakeup(data.recurringPayments);
+      scheduleNextAutopayWakeup(data.recurringPayments, data.scheduledPayments);
       return json(res, 200, { ok: true, nextRun, frequency, amount: amount !== undefined ? amount : recurring && recurring.amount, status, paymentDay, chargeTime, monthlyDay, retryRule, autopayManagedBy: patch.autopayManagedBy, autoChargeEnabled: enableWheelsonAutoCharge, amountChanged, scheduleChanged, retryReset, processedScheduleStateReset, cutoverRescheduled, stripeCutoverDate: cutoverRescheduled ? nextRun : migrationBeforeUpdate.cutoverDate || '' });
     }
     if (url.pathname === '/api/recurring-payments/remove' && req.method === 'POST') {

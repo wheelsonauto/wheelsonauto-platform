@@ -1,4 +1,4 @@
-import type { AccountDirectory, ApplicationFeed, ClaimRecord, CustomerAccountRecord, CustomerRecord, DashboardPriorityFeed, MaintenanceRecord, MessageFeed, MessageRecord, NotificationFeed, OrganizationRecord, PagedFeed, PaymentRecord, ProviderRecord, RecurringPaymentRecord, RentalDetail, RentalRecord, StaffAccountRecord, StarCoachState, TaskRecord, VehicleRecord } from './types';
+import type { AccountDirectory, ApplicationFeed, ClaimRecord, CustomerAccountRecord, CustomerRecord, DashboardPriorityFeed, MaintenanceRecord, MessageFeed, MessageRecord, NotificationFeed, OrganizationRecord, PagedFeed, PaymentRecord, ProviderRecord, RecurringPaymentRecord, RentalDetail, RentalRecord, ScheduledPaymentRecord, StaffAccountRecord, StarCoachState, TaskRecord, VehicleRecord } from './types';
 
 async function parseJson<T>(response: Response): Promise<T> {
   const payload = await response.json().catch(() => ({}));
@@ -175,6 +175,32 @@ export function loadPayments(signal?: AbortSignal, force = false): Promise<Paged
   return loadPaged<PaymentRecord>('/api/payments?limit=5000', signal, force);
 }
 
+export function loadScheduledPayments(signal?: AbortSignal, force = false): Promise<PagedFeed<ScheduledPaymentRecord>> {
+  return loadPaged<ScheduledPaymentRecord>('/api/scheduled-payments?limit=500', signal, force);
+}
+
+export async function scheduleOneTimePayment(input: { recurringPaymentId: string; amount: number; scheduledFor: string; reason?: string; note?: string; operationId: string; confirmed: true }): Promise<{ ok: boolean; duplicate?: boolean; scheduledPayment: ScheduledPaymentRecord }> {
+  const response = await fetch('/api/scheduled-payments', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify(input)
+  });
+  const result = await parseJson<{ ok: boolean; duplicate?: boolean; scheduledPayment: ScheduledPaymentRecord }>(response);
+  invalidateCachedPaths('/api/scheduled-payments', '/api/app-notifications');
+  return result;
+}
+
+export async function cancelScheduledPayment(scheduledPaymentId: string, reason = 'Cancelled by owner'): Promise<{ ok: boolean; scheduledPayment: ScheduledPaymentRecord }> {
+  const response = await fetch('/api/scheduled-payments/cancel', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ scheduledPaymentId, reason, confirmed: true })
+  });
+  const result = await parseJson<{ ok: boolean; scheduledPayment: ScheduledPaymentRecord }>(response);
+  invalidateCachedPaths('/api/scheduled-payments', '/api/app-notifications');
+  return result;
+}
+
 export function loadClaims(signal?: AbortSignal, force = false): Promise<PagedFeed<ClaimRecord>> {
   return loadPaged<ClaimRecord>('/api/claims?limit=500', signal, force);
 }
@@ -191,7 +217,7 @@ export function prewarmStaffFeeds(role: string) {
   const normalized = role.toLowerCase();
   const requests: Promise<unknown>[] = [loadVehicles(), loadTasks(), loadMaintenance()];
   if (normalized !== 'mechanic') requests.push(loadCustomers(), loadMessageFeed(), loadApplications());
-  if (normalized === 'owner') requests.push(loadPayments(), loadAutopay());
+  if (normalized === 'owner') requests.push(loadPayments(), loadAutopay(), loadScheduledPayments());
   void Promise.allSettled(requests);
 }
 

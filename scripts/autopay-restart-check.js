@@ -271,7 +271,7 @@ async function main() {
       },
       organizationId: 'org-wheelsonauto'
     }],
-    payments: [], paymentRequests: [], refundRequests: [], cardSetupRequests: [], applications: [], websiteLeads: [], contracts: [], maintenance: [], claims: [], messages: [], tasks: [], documents: [], eSignatures: [], onboardingSessions: [], pickupAppointments: [], contractTemplates: [], customerAccounts: [], staffAccounts: [], dailyCloseouts: [], auditLogs: [], apiProviders: [], verificationCases: [],
+    payments: [], paymentRequests: [], scheduledPayments: [], refundRequests: [], cardSetupRequests: [], applications: [], websiteLeads: [], contracts: [], maintenance: [], claims: [], messages: [], tasks: [], documents: [], eSignatures: [], onboardingSessions: [], pickupAppointments: [], contractTemplates: [], customerAccounts: [], staffAccounts: [], dailyCloseouts: [], auditLogs: [], apiProviders: [], verificationCases: [],
     organizations: [{ id: 'org-wheelsonauto', name: 'WheelsonAuto', status: 'Active' }],
     integrations: { clover: {}, stripe: {}, messaging: {} }
   };
@@ -283,6 +283,7 @@ async function main() {
     assert(scheduler.nextRecurringOccurrence({ frequency: 'Daily' }, today) === localDateKey(1), 'Daily autopay must advance one calendar day.');
     assert(scheduler.nextRecurringOccurrence({ frequency: 'Weekly' }, today) === localDateKey(7), 'Weekly autopay must advance seven calendar days.');
     assert(scheduler.nextRecurringOccurrence({ frequency: 'Bi-weekly' }, today) === localDateKey(14), 'Bi-weekly autopay must advance fourteen calendar days.');
+    assert(scheduler.nextRecurringOccurrence({ frequency: 'Semi-monthly' }, today) === localDateKey(15), 'Semi-monthly autopay must advance fifteen calendar days.');
     assert(scheduler.nextRecurringOccurrence({ frequency: 'Monthly' }, today) === addUtcMonths(today, 1), 'Monthly autopay must advance one calendar month without drifting at month end.');
     const rapidHourDue = new Date(Date.now() - 2 * 60 * 1000).toISOString();
     const rapidHourNext = scheduler.nextFutureRecurringRun({ frequency: 'Every hour', nextRun: rapidHourDue }, new Date(), rapidHourDue);
@@ -557,7 +558,12 @@ async function main() {
     const recurringView = await request(server, 'GET', '/api/recurring-payments', { cookie });
     const rapidViewRow = recurringView.json.records.find(row => row.id === 'rec-rapid-minute-1');
     assert(recurringView.status === 200 && rapidViewRow.autopayComplete === false && rapidViewRow.status === 'Active' && rapidViewRow.nextRun === resumedRapidAt && /^Waiting for/.test(rapidViewRow.autopayBlockedReason), 'A resumed rapid schedule must expose its next exact timestamp instead of a terminal completed state.');
-    const regularNextRun = localDateKey(14);
+    saved = await readSaved(dataDir);
+    saved.recurringPayments.find(row => row.id === 'rec-rapid-minute-1').customerPortalCreditBalance = 0;
+    await fs.writeFile(path.join(dataDir, 'data.json'), JSON.stringify(saved, null, 2));
+    server = loadServer();
+    cookie = await ownerCookie(server);
+    const regularNextRun = today;
     const regularActivation = await request(server, 'POST', '/api/recurring-payments/update', {
       cookie,
       json: {
@@ -565,7 +571,7 @@ async function main() {
         amount: 1,
         frequency: 'Weekly',
         nextRun: regularNextRun,
-        chargeTime: '18:00',
+        chargeTime: '00:00',
         status: 'Active',
         autoChargeEnabled: true
       }
@@ -573,9 +579,107 @@ async function main() {
     assert(regularActivation.status === 200 && regularActivation.json.status === 'Active' && regularActivation.json.autoChargeEnabled === true, 'Converting a completed rapid test to an enabled weekly schedule must reactivate it instead of preserving a terminal test status.');
     const regularView = await request(server, 'GET', '/api/recurring-payments', { cookie });
     const regularViewRow = regularView.json.records.find(row => row.id === 'rec-rapid-minute-1');
-    assert(regularViewRow.status === 'Active' && regularViewRow.frequency === 'Weekly' && regularViewRow.nextRun === regularNextRun && regularViewRow.autopayComplete === false && /^Waiting for/.test(regularViewRow.autopayBlockedReason), 'The converted weekly schedule must enter the shared normal scheduler and wait for its exact future due date.');
+    assert(regularViewRow.status === 'Active' && regularViewRow.frequency === 'Weekly' && regularViewRow.nextRun === regularNextRun && regularViewRow.autopayComplete === false && regularViewRow.autopayEligible === true, 'The converted weekly schedule must preserve today as due even though earlier rapid-test payments exist on the same calendar date.');
+    const convertedWeeklyRun = await request(server, 'POST', '/api/woa-autopay/run', { cookie, json: {} });
+    assert(convertedWeeklyRun.status === 200 && convertedWeeklyRun.json.charged === 1 && convertedWeeklyRun.json.reconciled === 0 && chargeRequests.length === 5, 'A weekly schedule starting today must make a new exact-period Stripe charge instead of treating an earlier rapid payment as weekly payment evidence.');
+    saved = await readSaved(dataDir);
+    const convertedWeeklyRow = saved.recurringPayments.find(row => row.id === 'rec-rapid-minute-1');
+    assert(convertedWeeklyRow.nextRun === localDateKey(7) && convertedWeeklyRow.lastAutoChargeOccurrenceKey === today, 'The weekly due date must advance exactly seven days only after its own successful charge.');
+    const convertedWeeklyPayment = saved.payments.find(payment => payment.recurringPaymentId === 'rec-rapid-minute-1' && payment.scheduledDueDate === today && payment.status === 'Paid');
+    assert(convertedWeeklyPayment && convertedWeeklyPayment.billingPeriodKey === 'due:' + today, 'The converted weekly payment must retain exact due-date evidence that is distinct from rapid interval receipts.');
 
-    console.log('Autopay restart check passed: all schedule cadences, repeated rapid charges, durable timestamp advancement, Stripe success authority, contradiction cleanup, attempt keys, one-hour delay, retry success, and restart recovery are protected.');
+    const weeklyNextRunBeforeOneTime = convertedWeeklyRow.nextRun;
+    const scheduleOneTime = await request(server, 'POST', '/api/scheduled-payments', {
+      cookie,
+      json: {
+        recurringPaymentId: 'rec-rapid-minute-1',
+        amount: 1,
+        scheduledFor: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+        operationId: 'scheduled-regression-once',
+        reason: 'Regression one-time payment',
+        confirmed: true
+      }
+    });
+    assert(scheduleOneTime.status === 201 && scheduleOneTime.json.scheduledPayment && scheduleOneTime.json.scheduledPayment.status === 'Scheduled', 'The owner must be able to schedule an exact future one-time Stripe payment.');
+    const scheduledPaymentId = scheduleOneTime.json.scheduledPayment.id;
+    saved = await readSaved(dataDir);
+    saved.scheduledPayments.find(row => row.id === scheduledPaymentId).scheduledFor = new Date(Date.now() - 1000).toISOString();
+    await fs.writeFile(path.join(dataDir, 'data.json'), JSON.stringify(saved, null, 2));
+    server = loadServer();
+    cookie = await ownerCookie(server);
+    const oneTimeRun = await request(server, 'POST', '/api/woa-autopay/run', { cookie, json: {} });
+    assert(oneTimeRun.status === 200 && oneTimeRun.json.scheduledOneTimeDue === 1 && oneTimeRun.json.scheduledOneTimeCharged === 1 && chargeRequests.length === 6, 'A due one-time schedule must make one protected Stripe charge.');
+    saved = await readSaved(dataDir);
+    const completedOneTime = saved.scheduledPayments.find(row => row.id === scheduledPaymentId);
+    const oneTimePayment = saved.payments.find(payment => payment.scheduledOneTimePaymentId === scheduledPaymentId && payment.status === 'Paid');
+    const recurringAfterOneTime = saved.recurringPayments.find(row => row.id === 'rec-rapid-minute-1');
+    assert(completedOneTime && oneTimePayment && completedOneTime.status === 'Paid' && completedOneTime.paymentId === oneTimePayment.id, 'The one-time instruction and Stripe transaction must retain an exact durable link. Got ' + JSON.stringify({ completedOneTime, oneTimePayment }));
+    assert(oneTimePayment.chargePurpose === 'one_time' && oneTimePayment.scheduledOneTimeFor === completedOneTime.scheduledFor, 'The paid transaction must be labeled as the exact scheduled one-time charge.');
+    assert(recurringAfterOneTime.nextRun === weeklyNextRunBeforeOneTime && recurringAfterOneTime.frequency === 'Weekly', 'A scheduled one-time charge must never advance or rewrite recurring autopay.');
+
+    server = loadServer();
+    cookie = await ownerCookie(server);
+    const oneTimeRestartRun = await request(server, 'POST', '/api/woa-autopay/run', { cookie, json: {} });
+    assert(oneTimeRestartRun.status === 200 && oneTimeRestartRun.json.scheduledOneTimeDue === 0 && oneTimeRestartRun.json.scheduledOneTimeCharged === 0 && chargeRequests.length === 6, 'A paid one-time instruction must not charge again after a restart.');
+
+    const scheduleThenCancel = await request(server, 'POST', '/api/scheduled-payments', {
+      cookie,
+      json: {
+        recurringPaymentId: 'rec-rapid-minute-1',
+        amount: 1,
+        scheduledFor: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+        operationId: 'scheduled-regression-cancel',
+        reason: 'Regression cancellation',
+        confirmed: true
+      }
+    });
+    assert(scheduleThenCancel.status === 201, 'A second future one-time payment must be schedulable.');
+    const cancelled = await request(server, 'POST', '/api/scheduled-payments/cancel', {
+      cookie,
+      json: { scheduledPaymentId: scheduleThenCancel.json.scheduledPayment.id, confirmed: true, reason: 'Regression cancellation proof' }
+    });
+    assert(cancelled.status === 200 && cancelled.json.scheduledPayment.status === 'Cancelled', 'A pending one-time payment must be cancellable without contacting Stripe.');
+    assert(chargeRequests.length === 6, 'Cancelling a future one-time payment must not contact Stripe.');
+
+    saved = await readSaved(dataDir);
+    const cadenceExpectations = [
+      ['Daily', localDateKey(1)],
+      ['Bi-weekly', localDateKey(14)],
+      ['Semi-monthly', localDateKey(15)],
+      ['Monthly', addUtcMonths(today, 1)]
+    ];
+    cadenceExpectations.forEach(([frequency], index) => saved.recurringPayments.push({
+      id: 'rec-cadence-' + index,
+      customer: frequency + ' Cadence Customer',
+      amount: 1,
+      frequency,
+      nextRun: today,
+      chargeTime: '00:00',
+      status: 'Active',
+      autoChargeEnabled: true,
+      autopayManagedBy: 'WheelsonAuto',
+      paymentProvider: 'stripe',
+      provider: 'Stripe',
+      stripeCustomerId: 'cus_cadence_' + index,
+      stripePaymentMethodId: 'pm_cadence_' + index,
+      stripeLivemode: false,
+      cardSavedAt: new Date().toISOString(),
+      organizationId: 'org-wheelsonauto'
+    }));
+    await fs.writeFile(path.join(dataDir, 'data.json'), JSON.stringify(saved, null, 2));
+    server = loadServer();
+    cookie = await ownerCookie(server);
+    const cadenceRun = await request(server, 'POST', '/api/woa-autopay/run', { cookie, json: {} });
+    assert(cadenceRun.status === 200 && cadenceRun.json.charged === cadenceExpectations.length && chargeRequests.length === 10, 'Daily, bi-weekly, semi-monthly, and monthly schedules must each make one exact due charge.');
+    saved = await readSaved(dataDir);
+    cadenceExpectations.forEach(([frequency, expectedNextRun], index) => {
+      const cadenceRow = saved.recurringPayments.find(row => row.id === 'rec-cadence-' + index);
+      const cadencePayment = saved.payments.find(payment => payment.recurringPaymentId === cadenceRow.id && payment.scheduledDueDate === today && payment.status === 'Paid');
+      assert(cadenceRow.nextRun === expectedNextRun && cadenceRow.lastAutoChargeOccurrenceKey === today, `${frequency} must advance to ${expectedNextRun} only after its own Stripe success.`);
+      assert(cadencePayment && cadencePayment.billingPeriodKey === 'due:' + today, `${frequency} must retain exact paid evidence for the processed occurrence.`);
+    });
+
+    console.log('Autopay restart check passed: all schedule cadences, repeated rapid charges, rapid-to-weekly conversion, exact-period evidence, durable timestamp advancement, scheduled one-time charge/cancel isolation, Stripe success authority, contradiction cleanup, attempt keys, one-hour delay, retry success, and restart recovery are protected.');
   } finally {
     global.fetch = originalFetch;
     await fs.rm(dataDir, { recursive: true, force: true });
