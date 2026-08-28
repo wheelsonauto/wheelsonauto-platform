@@ -40,8 +40,11 @@ const entryPath = path.join(dist, 'staff-next.js');
 const cssPath = path.join(dist, 'staff-next.css');
 
 assert(api.includes("loadCachedJson<DashboardPriorityFeed>('/api/dashboard/priority-feed'"), 'Dashboard must load the dedicated operational priority feed.');
-assert(dashboard.includes('priority.failedTwice') && dashboard.includes('priority.todayDue') && dashboard.includes('priority.priorDue') && dashboard.includes('priority.overdueDues') && dashboard.includes('priority.serviceNeeded'), 'Dashboard priority queue must combine current and overdue money with unscheduled service needs.');
-assert(dashboard.includes('Today and past due') && dashboard.includes('priority.pickups') && dashboard.includes('priority.returns') && dashboard.includes('priority.transactionsToday') && dashboard.includes('priority.completedToday'), 'Dashboard must expose live payment, pickup, return, transaction, and completed-action summaries.');
+assert(dashboard.includes('Today’s customers') && dashboard.includes('priority.todayCustomers') && dashboard.includes("todayStatusCounts['Failed twice']"), 'Dashboard must show every customer due today with live payment status.');
+assert(dashboard.includes('Transactions') && dashboard.includes('priority.transactions') && dashboard.includes('Search name, vehicle, card, amount') && dashboard.includes('card ending'), 'Dashboard must provide searchable current and historical transactions with card evidence.');
+assert(dashboard.includes('Today’s appointments') && dashboard.includes('priority.maintenanceAppointments') && dashboard.includes('priority.pickups') && dashboard.includes('priority.returns'), 'Dashboard must consolidate today’s pickups, returns, inspections, and services.');
+assert(dashboard.includes('Overdue maintenance &amp; service') && dashboard.includes('priority.overdueService') && dashboard.includes('Past-due customer balances') && dashboard.includes('priority.overdueBalances'), 'Dashboard must separate overdue fleet work from ordered customer balances.');
+assert(dashboard.includes('dashboard-panel-switch') && dashboard.includes('panelSwipe') && css.includes('.dashboard-focus-panel.mobile-hidden'), 'The dashboard must remain compact by using tappable and swipeable focused panels on phones.');
 assert(server.includes('function dashboardPriorityFeed(data = {}, dateKeyValue = localDateKey())') && server.includes('/complete|closed|fixed|done|cancel/') && server.includes('/scheduled|appointment|confirmed/'), 'Backend dashboard feed must exclude scheduled or completed service work.');
 
 assert(fs.existsSync(entryPath) && fs.existsSync(cssPath), 'Build the React staff module before running this check.');

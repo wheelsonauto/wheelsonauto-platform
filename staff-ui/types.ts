@@ -187,6 +187,8 @@ export type PaymentRecord = {
   createdAt?: string;
   provider?: string;
   paymentProvider?: string;
+  cardLabel?: string;
+  cardLast4?: string;
   notes?: string;
   chargePurpose?: 'one_time' | 'dues';
   reason?: string;
@@ -271,12 +273,14 @@ export type DashboardPaymentItem = {
   vehicleId?: string;
   amount: number;
   nextRun?: string;
+  due?: string;
   chargeTime?: string;
   status: string;
   retryCount: number;
   paymentProvider?: string;
   daysLate?: number;
   customerNotified?: boolean;
+  cardLast4?: string;
 };
 
 export type DashboardServiceItem = {
@@ -288,6 +292,19 @@ export type DashboardServiceItem = {
   due?: string;
   status: string;
   daysLate?: number;
+  kind?: string;
+};
+
+export type DashboardBalanceItem = {
+  id: string;
+  customer: string;
+  vehicle?: string;
+  vehicleId?: string;
+  amount: number;
+  due: string;
+  daysLate: number;
+  status: string;
+  reason: string;
 };
 
 export type DashboardDueItem = {
@@ -324,6 +341,7 @@ export type DashboardTransactionItem = {
   method?: string;
   date?: string;
   reason?: string;
+  cardLast4?: string;
 };
 
 export type DashboardCompletedItem = {
@@ -348,7 +366,12 @@ export type DashboardPriorityFeed = {
   inspections: DashboardServiceItem[];
   pickups: DashboardAppointmentItem[];
   returns: DashboardAppointmentItem[];
+  todayCustomers: DashboardPaymentItem[];
+  transactions: DashboardTransactionItem[];
   transactionsToday: DashboardTransactionItem[];
+  maintenanceAppointments: DashboardAppointmentItem[];
+  overdueService: DashboardServiceItem[];
+  overdueBalances: DashboardBalanceItem[];
   completedToday: DashboardCompletedItem[];
 };
 

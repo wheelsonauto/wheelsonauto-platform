@@ -424,7 +424,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260828-stale-attempt-recovery-380';
+const ASSET_VERSION = 'platform-20260828-dashboard-command-center-381';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -4923,6 +4923,40 @@ function dashboardPaidForRecurringDue(data = {}, recurring = {}, dueKey = '') {
     return !!paidKey && paidKey >= dueKey;
   });
 }
+function dashboardPaymentCardLast4(payment = {}) {
+  return [payment.cardLast4, payment.stripeCardLast4, payment.last4]
+    .map(value => String(value || '').trim())
+    .find(value => /^\d{4}$/.test(value)) || '';
+}
+function dashboardTransactionItem(data = {}, payment = {}, recurringRows = allRecurringRows(data)) {
+  return {
+    id: payment.id || payment.providerPaymentId || payment.cloverPaymentId || '',
+    customer: closeoutPaymentCustomerName(data, payment, recurringRows),
+    vehicle: payment.vehicle || '',
+    vehicleId: payment.vehicleId || '',
+    amount: Number(payment.amount || 0),
+    status: payment.status || 'Recorded',
+    method: payment.method || payment.paymentProvider || payment.provider || '',
+    date: payment.createdAt || payment.date || '',
+    reason: payment.reason || payment.paymentType || payment.source || '',
+    cardLast4: dashboardPaymentCardLast4(payment)
+  };
+}
+function dashboardTodayPaymentStatus(data = {}, recurring = {}, dateKeyValue = localDateKey(), payments = []) {
+  const matching = payments.filter(payment => dashboardRecordDate(payment, ['createdAt', 'date', 'paidAt', 'failedAt']) === dateKeyValue && closeoutPaymentStronglyMatchesRecurring(data, payment, recurring));
+  if (matching.some(closeoutPaymentPaid)) return 'Paid';
+  const state = closeoutRecurringState(recurring, dateKeyValue);
+  if (state === 'Failed twice') return 'Failed twice';
+  if (state === 'Failed once') return 'Failed once';
+  const latestText = matching.map(payment => String([payment.status, payment.source, payment.notes].filter(Boolean).join(' '))).join(' ');
+  if (/2x|failed twice|contact customer/i.test(latestText)) return 'Failed twice';
+  if (/1x|failed once|retry/i.test(latestText)) return 'Failed once';
+  return 'Pending';
+}
+function dashboardOperationalDueIsReasonable(dueKey = '', dateKeyValue = localDateKey()) {
+  const daysLate = dashboardDayDistance(dueKey, dateKeyValue);
+  return !!dueKey && daysLate >= 0 && daysLate <= 730;
+}
 function dashboardPriorityFeed(data = {}, dateKeyValue = localDateKey()) {
   const recurringRows = uniqueOperationalRecurringRows(allRecurringRows(data)).filter(recurringEligibleForToday);
   const recurringItem = row => ({
@@ -4932,12 +4966,14 @@ function dashboardPriorityFeed(data = {}, dateKeyValue = localDateKey()) {
     vehicleId: row.vehicleId || '',
     amount: Number(row.amount || row.weeklyAmount || 0),
     nextRun: recurringDateKey(row) || row.nextRun || '',
+    due: recurringDateKey(row) || row.nextRun || '',
     chargeTime: row.chargeTime || row.paymentTime || '',
     status: closeoutRecurringState(row, dateKeyValue),
     retryCount: Math.max(Number(row.retryCount || 0), Number(row.failedAttempts || 0)),
     paymentProvider: normalizedPaymentProvider(row.paymentProvider || row.provider || 'clover'),
     daysLate: Math.max(0, dashboardDayDistance(recurringDateKey(row), dateKeyValue)),
-    customerNotified: dashboardCustomerWasNotified(data, row, dateKeyValue)
+    customerNotified: dashboardCustomerWasNotified(data, row, dateKeyValue),
+    cardLast4: recurringCardLast4(row)
   });
   const failedOnce = recurringRows
     .filter(row => closeoutRecurringState(row, dateKeyValue) === 'Failed once')
@@ -5006,6 +5042,29 @@ function dashboardPriorityFeed(data = {}, dateKeyValue = localDateKey()) {
       status: row.status || 'Past due', kind: row.type || row.issue || 'Toll, violation, or fee'
     };
   }).sort((left, right) => right.daysLate - left.daysLate);
+  const maintenanceAppointments = (data.maintenance || []).filter(row => {
+    if (/complete|closed|fixed|done|cancel/i.test(String(row.status || ''))) return false;
+    return dashboardRecordDate(row, ['appointmentDate', 'scheduledDate', 'due', 'nextDue', 'date']) === dateKeyValue;
+  }).map(row => ({
+    id: row.id || '', customer: row.customer || 'Customer', vehicle: row.vehicle || 'Vehicle service', vehicleId: row.vehicleId || '',
+    date: dashboardRecordDate(row, ['appointmentDate', 'scheduledDate', 'due', 'nextDue', 'date']),
+    time: row.appointmentTime || row.scheduledTime || row.time || '', status: row.status || 'Scheduled',
+    address: row.address || '5150 NJ-42, Blackwood, NJ 08012', method: /inspection|monthly/i.test(String([row.type, row.issue, row.title].filter(Boolean).join(' '))) ? 'Inspection' : 'Service'
+  })).sort((left, right) => String(left.time || '').localeCompare(String(right.time || '')));
+  const overdueService = (data.maintenance || []).filter(row => {
+    if (/complete|closed|fixed|done|cancel/i.test(String(row.status || ''))) return false;
+    const due = dashboardRecordDate(row, ['appointmentDate', 'scheduledDate', 'due', 'nextDue', 'date']);
+    return !!due && due < dateKeyValue && dashboardOperationalDueIsReasonable(due, dateKeyValue);
+  }).map(row => {
+    const due = dashboardRecordDate(row, ['appointmentDate', 'scheduledDate', 'due', 'nextDue', 'date']);
+    const inspection = /inspection|monthly/i.test(String([row.type, row.issue, row.title].filter(Boolean).join(' ')));
+    return {
+      id: row.id || '', customer: row.customer || 'Customer', vehicle: row.vehicle || 'Vehicle', vehicleId: row.vehicleId || '',
+      issue: row.issue || row.type || row.title || (inspection ? 'Monthly inspection' : 'Service'), due,
+      daysLate: Math.max(0, dashboardDayDistance(due, dateKeyValue)), status: row.status || (inspection ? 'Inspection overdue' : 'Service overdue'),
+      kind: inspection ? 'Inspection' : 'Service'
+    };
+  }).sort((left, right) => right.daysLate - left.daysLate || String(left.due || '').localeCompare(String(right.due || '')));
   const appointmentItem = row => {
     const date = dashboardRecordDate(row, ['requestedPickupDate', 'pickupDate', 'date', 'due']);
     return {
@@ -5026,13 +5085,22 @@ function dashboardPriorityFeed(data = {}, dateKeyValue = localDateKey()) {
     .map(appointmentItem)
     .filter(row => row.date && dashboardDayDistance(dateKeyValue, row.date) >= 0 && dashboardDayDistance(dateKeyValue, row.date) <= 7)
     .sort((left, right) => String(left.date + left.time).localeCompare(String(right.date + right.time)));
-  const transactionsToday = uniqueCloseoutPayments((data.payments || []).filter(payment => payment.controlledStripePilotTest !== true && dashboardRecordDate(payment, ['createdAt', 'date', 'paidAt', 'failedAt']) === dateKeyValue))
-    .map(payment => ({
-      id: payment.id || payment.providerPaymentId || '', customer: payment.customer || 'Customer', vehicle: payment.vehicle || '', vehicleId: payment.vehicleId || '',
-      amount: Number(payment.amount || 0), status: payment.status || 'Recorded', method: payment.method || payment.paymentProvider || payment.provider || '',
-      date: payment.createdAt || payment.date || '', reason: payment.reason || payment.paymentType || payment.source || ''
-    }))
-    .sort((left, right) => Date.parse(right.date || 0) - Date.parse(left.date || 0));
+  const paymentRows = uniqueCloseoutPayments((data.payments || []).filter(payment => payment.controlledStripePilotTest !== true));
+  const transactions = paymentRows.map(payment => dashboardTransactionItem(data, payment, recurringRows))
+    .sort((left, right) => Date.parse(right.date || 0) - Date.parse(left.date || 0))
+    .slice(0, 2000);
+  const transactionsToday = transactions.filter(payment => dashboardRecordDate(payment, ['date']) === dateKeyValue);
+  const dailyMoney = dailyCloseoutMoneyTruth(data, dateKeyValue, recurringRows);
+  const todayStatusRank = { 'Failed twice': 0, 'Failed once': 1, Pending: 2, Paid: 3 };
+  const todayCustomers = dailyMoney.expectedRows.map(row => ({
+    ...recurringItem(row),
+    due: dateKeyValue,
+    status: dashboardTodayPaymentStatus(data, row, dateKeyValue, paymentRows)
+  })).sort((left, right) => (todayStatusRank[left.status] ?? 9) - (todayStatusRank[right.status] ?? 9) || String(left.customer).localeCompare(String(right.customer)));
+  const overdueBalances = [
+    ...priorDue.map(row => ({ ...row, due: row.nextRun || '', reason: 'Recurring payment' })),
+    ...overdueDues.map(row => ({ ...row, reason: row.kind || 'Toll, violation, ticket, or fee' }))
+  ].sort((left, right) => Number(right.daysLate || 0) - Number(left.daysLate || 0) || Number(right.amount || 0) - Number(left.amount || 0));
   const paidToday = transactionsToday.filter(payment => closeoutPaymentPaid(payment));
   const completedToday = [
     ...transactionsToday.filter(closeoutPaymentPaid).map(row => ({ ...row, title: 'Payment completed', detail: [row.customer, moneyText(row.amount), row.reason].filter(Boolean).join(' - '), status: 'Done' })),
@@ -5065,7 +5133,12 @@ function dashboardPriorityFeed(data = {}, dateKeyValue = localDateKey()) {
     inspections,
     pickups,
     returns,
+    todayCustomers,
+    transactions,
     transactionsToday,
+    maintenanceAppointments,
+    overdueService,
+    overdueBalances,
     completedToday
   };
 }
@@ -15565,6 +15638,11 @@ function mapCloverPayment(payment) {
   const externalCustomerReference = cloverExternalCustomerReference(payment);
   const externalReferenceId = cloverExternalReference(payment);
   const customer = cloverPersonName(customerSource) || usefulPaymentName(payment.customerName) || usefulPaymentName(externalCustomerReference) || cloverPaymentDescriptionName(payment) || cloverPaymentFallbackName(payment) || '';
+  const tenderCard = payment.tender && (payment.tender.cardDetails || payment.tender.card || payment.tender.cardTransaction) || {};
+  const cardTransaction = payment.cardTransaction || payment.cardDetails || {};
+  const cardLast4 = [payment.cardLast4, payment.last4, tenderCard.cardLast4, tenderCard.last4, cardTransaction.cardLast4, cardTransaction.last4]
+    .map(value => String(value || '').trim())
+    .find(value => /^\d{4}$/.test(value)) || '';
   return {
     id: 'clover-payment-' + payment.id,
     cloverPaymentId: payment.id,
@@ -15577,6 +15655,7 @@ function mapCloverPayment(payment) {
     createdAt: validCreatedAt.toISOString(),
     customer: customer || 'Unmatched Clover payment',
     method: payment.tender && payment.tender.label ? payment.tender.label : 'Clover',
+    cardLast4,
     amount,
     status: payment.result === 'SUCCESS' ? 'Paid' : (payment.result || 'Recorded'),
     source: 'Clover',
@@ -20488,6 +20567,8 @@ function saveStripeAuthenticationRequiredResult(data, row, payload = {}, err, op
     stripeIdempotencyKey: String(protectedAttempt.idempotencyKey || ''),
     stripeCustomerId: row.stripeCustomerId || '',
     stripePaymentMethodId: row.stripePaymentMethodId || '',
+    cardLabel: recurringCardLabel(row),
+    cardLast4: recurringCardLast4(row),
     ...identity
   };
   data.payments.unshift(payment);
@@ -20559,6 +20640,8 @@ function saveFailedChargeResult(data, row, payload = {}, err, options = {}) {
     cloverIdempotencyKey: paymentProvider === 'clover' ? String(options.cloverIdempotencyKey || row.lastCloverChargeIdempotencyKey || '') : '',
     cloverCustomerId: row.cloverCustomerId || '',
     cloverSubscriptionId: row.cloverSubscriptionId || '',
+    cardLabel: recurringCardLabel(row),
+    cardLast4: recurringCardLast4(row),
     ...identity
   };
   data.payments = Array.isArray(data.payments) ? data.payments : [];
@@ -20892,6 +20975,8 @@ async function chargeStripeSavedCard(data, recurring, payload = {}) {
     recurringPaymentId: recurring.id || '',
     stripeCustomerId: customerId,
     stripePaymentMethodId: paymentMethodId,
+    cardLabel: recurringCardLabel(recurring),
+    cardLast4: recurringCardLast4(recurring),
     stripeLivemode: intent.livemode === true,
     stripeIdempotencyKey: idempotencyKey
   };
@@ -21089,6 +21174,8 @@ async function chargeSavedRecurringCard(data, payload, req) {
     recurringPaymentId: recurring.id || '',
     cloverCustomerId: recurring.cloverCustomerId || '',
     cloverSubscriptionId: recurring.cloverSubscriptionId || '',
+    cardLabel: recurringCardLabel(recurring),
+    cardLast4: recurringCardLast4(recurring),
     cloverIdempotencyKey: idempotencyKey
   };
   data.payments = Array.isArray(data.payments) ? data.payments : [];
@@ -22307,6 +22394,8 @@ function applyStripePaymentIntentSucceeded(data, intent = {}) {
     recurringPaymentId: recurring.id || '',
     stripeCustomerId: stripeObjectId(intent.customer) || recurring.stripeCustomerId || '',
     stripePaymentMethodId: stripeObjectId(intent.payment_method) || recurring.stripePaymentMethodId || '',
+    cardLabel: recurringCardLabel(recurring),
+    cardLast4: recurringCardLast4(recurring),
     stripeLivemode: intent.livemode === true,
     stripeIdempotencyKey: claim.idempotencyKey,
     duplicateBillingPeriod,
