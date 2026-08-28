@@ -424,7 +424,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260828-recurring-rapid-autopay-379';
+const ASSET_VERSION = 'platform-20260828-stale-attempt-recovery-380';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -20091,7 +20091,28 @@ function cloverRecurringChargeIdempotencyKey(recurring, payload = {}, scheduledD
   return String(['woa-manual', recurringId, cents(amount), Date.now()].join('-')).slice(0, 255);
 }
 function stripeChargeAttemptIsPending(attempt) {
-  return !!(attempt && ['requesting', 'confirmation_pending', 'processing'].includes(String(attempt.status || '').toLowerCase()));
+  if (!attempt) return false;
+  if (attempt.succeededAt || attempt.failedAt || attempt.authenticationRequiredAt || attempt.cancelledAt) return false;
+  return ['requesting', 'confirmation_pending', 'processing'].includes(String(attempt.status || '').toLowerCase());
+}
+function normalizeStripeChargeAttemptTerminalEvidence(row) {
+  const attempt = row && row.stripeChargeAttempt;
+  if (!attempt) return false;
+  let terminalStatus = '';
+  if (attempt.succeededAt) terminalStatus = 'succeeded';
+  else if (attempt.failedAt) terminalStatus = 'failed';
+  else if (attempt.authenticationRequiredAt) terminalStatus = 'authentication_required';
+  else if (attempt.cancelledAt) terminalStatus = 'cancelled';
+  if (!terminalStatus || String(attempt.status || '').toLowerCase() === terminalStatus) return false;
+  row.stripeChargeAttempt = {
+    ...attempt,
+    status: terminalStatus,
+    updatedAt: attempt.updatedAt || new Date().toISOString(),
+    normalizedFromStatus: String(attempt.status || ''),
+    normalizedAt: new Date().toISOString()
+  };
+  if (terminalStatus === 'succeeded' && /confirmation pending/i.test(String(row.status || ''))) row.status = 'Active';
+  return true;
 }
 function pendingStripeChargeAttempt(row, scheduledDueKey = '') {
   const attempt = row && row.stripeChargeAttempt;
@@ -21198,6 +21219,7 @@ async function runWheelsonAutoAutopay(options = {}) {
     }
     const data = await readData();
     data.recurringPayments = Array.isArray(data.recurringPayments) ? data.recurringPayments : [];
+    data.recurringPayments.forEach(normalizeStripeChargeAttemptTerminalEvidence);
     result.stripeOutcomesReconciled = reconcileStripePaymentOutcomeContradictions(data);
     result.pickupSchedulesRecovered = repairCompletedPickupAutopayStates(data);
     result.rapidSchedulesRepaired = repairInvalidRapidAutopaySchedules(data, runAt);
@@ -31624,6 +31646,7 @@ const server = http.createServer(async (req, res) => {
         || savedChargeTime !== chargeTime
         || (monthlyDay !== undefined && Number(recurring.monthlyDay || 0) !== monthlyDay);
       const amountOrScheduleChanged = amountChanged || scheduleChanged;
+      normalizeStripeChargeAttemptTerminalEvidence(recurring);
       const providerConfirmationPending = stripeChargeAttemptIsPending(recurring.stripeChargeAttempt)
         || /confirmation pending/i.test(String(recurring.status || ''));
       if (amountOrScheduleChanged && providerConfirmationPending) {

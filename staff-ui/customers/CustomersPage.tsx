@@ -122,7 +122,7 @@ function actionDraft(row: RecurringPaymentRecord | null, customer: CustomerRecor
     frequency,
     nextRun: rapidFrequency(frequency) ? dateTimeInput(row?.nextRun) : dateInput(row?.nextRun),
     chargeTime: rapidFrequency(frequency) ? '' : row?.chargeTime || '18:00',
-    status: action === 'edit' && completedAutopay(row) ? 'Active' : row?.status || 'Active',
+    status: action === 'edit' && (completedAutopay(row) || /setup/i.test(row?.status || '')) ? 'Active' : row?.status || 'Active',
     result: 'Paid',
     method: 'Paid outside app',
     reason: action === 'link' ? 'Payment needs attention' : action === 'card' ? 'Change card on file' : '',

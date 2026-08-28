@@ -249,6 +249,27 @@ async function main() {
         amountCents: 18800
       },
       organizationId: 'org-wheelsonauto'
+    }, {
+      id: 'rec-stale-success-edit-1',
+      customer: 'Stale Success Customer',
+      amount: 1,
+      frequency: 'Every minute',
+      nextRun: new Date(Date.now() - 60 * 1000).toISOString(),
+      status: 'Setup needed',
+      autoChargeEnabled: true,
+      paymentProvider: 'stripe',
+      stripeCustomerId: 'cus_stale_success_edit',
+      stripePaymentMethodId: 'pm_stale_success_edit',
+      stripeChargeAttempt: {
+        status: 'requesting',
+        idempotencyKey: 'woa-stale-success-edit',
+        scheduledDueDate: new Date(Date.now() - 60 * 1000).toISOString(),
+        amountCents: 100,
+        paymentIntentId: 'pi_stale_success_edit',
+        chargeId: 'ch_stale_success_edit',
+        succeededAt: new Date(Date.now() - 55 * 1000).toISOString()
+      },
+      organizationId: 'org-wheelsonauto'
     }],
     payments: [], paymentRequests: [], refundRequests: [], cardSetupRequests: [], applications: [], websiteLeads: [], contracts: [], maintenance: [], claims: [], messages: [], tasks: [], documents: [], eSignatures: [], onboardingSessions: [], pickupAppointments: [], contractTemplates: [], customerAccounts: [], staffAccounts: [], dailyCloseouts: [], auditLogs: [], apiProviders: [], verificationCases: [],
     organizations: [{ id: 'org-wheelsonauto', name: 'WheelsonAuto', status: 'Active' }],
@@ -298,6 +319,23 @@ async function main() {
       }
     });
     assert(blockedPendingEdit.status === 409 && blockedPendingEdit.json.confirmationPending === true, 'An unresolved provider charge must block amount/date edits until reconciliation.');
+
+    const staleSuccessNextRun = new Date(Date.now() + 2 * 60 * 1000).toISOString();
+    const repairedStaleSuccessEdit = await request(server, 'POST', '/api/recurring-payments/update', {
+      cookie,
+      json: {
+        recurringPaymentId: 'rec-stale-success-edit-1',
+        amount: 1,
+        frequency: 'Every minute',
+        nextRun: staleSuccessNextRun,
+        status: 'Active',
+        autoChargeEnabled: true
+      }
+    });
+    assert(repairedStaleSuccessEdit.status === 200 && repairedStaleSuccessEdit.json.status === 'Active', 'Provider success evidence must release a stale requesting marker and allow the next rapid schedule edit.');
+    saved = await readSaved(dataDir);
+    const repairedStaleSuccessRow = saved.recurringPayments.find(row => row.id === 'rec-stale-success-edit-1');
+    assert(repairedStaleSuccessRow.stripeChargeAttempt.status === 'succeeded' && repairedStaleSuccessRow.stripeChargeAttempt.normalizedFromStatus === 'requesting', 'The stale requesting marker must be normalized to succeeded while retaining its original status as audit evidence.');
 
     const rescheduled = await request(server, 'POST', '/api/recurring-payments/update', {
       cookie,
