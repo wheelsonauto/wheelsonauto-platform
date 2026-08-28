@@ -418,16 +418,41 @@ async function main() {
     assert(chargeRequests.length === 3 && chargeRequests[2].idempotencyKey.includes('rec-rapid-minute-1'), 'The rapid charge must use its own protected recurring occurrence key.');
     saved = await readSaved(dataDir);
     const rapidRow = saved.recurringPayments.find(row => row.id === 'rec-rapid-minute-1');
-    assert(rapidRow.status === 'Rapid test passed' && rapidRow.frequency === 'Every minute' && rapidRow.autoChargeEnabled === false, 'A successful rapid charge must preserve its test frequency and turn rapid autocharge off after one provider result.');
+    assert(rapidRow.status === 'Active' && rapidRow.frequency === 'Every minute' && rapidRow.autoChargeEnabled === true, 'A successful rapid charge must stay active so the next exact interval can run.');
     assert(rapidRun.json.pickupSchedulesRecovered === 1, 'The regression fixture must exercise completed-pickup autopay recovery before the rapid charge.');
     assert(rapidRun.json.rapidSchedulesRepaired === 0, 'Completed-pickup recovery must preserve the exact rapid instant instead of rewriting it into a date-only weekly anchor.');
     assert(Date.parse(rapidRow.nextRun) > Date.parse(rapidDueAt) && rapidRow.lastAutoChargeOccurrenceKey === rapidDueAt, 'A successful rapid charge must advance beyond the processed minute and preserve the exact occurrence.');
-    assert(rapidRow.customerPortalCreditBalance === 50, 'A rapid Stripe verification must not consume customer account credit instead of testing the saved card.');
-    assert(rapidRow.lastAutoChargeResult === 'Paid - rapid Stripe test complete', 'A rapid success must leave an explicit provider-test result on the recurring plan.');
+    assert(rapidRow.customerPortalCreditBalance === 50, 'A rapid Stripe schedule must not consume customer account credit instead of charging the saved card.');
+    assert(rapidRow.lastAutoChargeResult === 'Paid', 'A rapid success must leave the shared paid autopay result on the recurring plan.');
     assert(rapidRow.stripeMigrationReconciliationRequired === true, 'Incomplete historical Clover audit fields may require reconciliation, but must never relabel a successful Stripe charge as failed.');
     const rapidPaid = saved.payments.find(payment => payment.recurringPaymentId === 'rec-rapid-minute-1' && payment.status === 'Paid');
-    assert(rapidPaid && rapidPaid.stripePaymentIntentId, 'The rapid Stripe verification must persist one authoritative paid PaymentIntent.');
+    assert(rapidPaid && rapidPaid.stripePaymentIntentId, 'The rapid Stripe occurrence must persist one authoritative paid PaymentIntent.');
     assert(saved.payments.filter(payment => payment.recurringPaymentId === 'rec-rapid-minute-1').length === 1, 'A successful provider result must not create a contradictory failed transaction.');
+
+    server = loadServer();
+    cookie = await ownerCookie(server);
+    const rapidBeforeNextMinute = await request(server, 'POST', '/api/woa-autopay/run', { cookie, json: {} });
+    assert(rapidBeforeNextMinute.status === 200 && rapidBeforeNextMinute.json.charged === 0 && chargeRequests.length === 3, 'A restart before the advanced rapid timestamp must not charge early or replay the first interval.');
+
+    saved = await readSaved(dataDir);
+    const forcedSecondRapidDue = new Date(Date.now() - 1000).toISOString();
+    Object.assign(saved.recurringPayments.find(row => row.id === 'rec-rapid-minute-1'), {
+      nextRun: forcedSecondRapidDue,
+      adminNextRun: forcedSecondRapidDue
+    });
+    await fs.writeFile(path.join(dataDir, 'data.json'), JSON.stringify(saved, null, 2));
+    server = loadServer();
+    cookie = await ownerCookie(server);
+    const secondRapidRun = await request(server, 'POST', '/api/woa-autopay/run', { cookie, json: {} });
+    assert(secondRapidRun.status === 200 && secondRapidRun.json.charged === 1 && chargeRequests.length === 4, 'The following every-minute occurrence must make a second real provider charge.');
+    assert(chargeRequests[3].idempotencyKey !== chargeRequests[2].idempotencyKey, 'Consecutive rapid occurrences must use different Stripe idempotency keys.');
+    saved = await readSaved(dataDir);
+    const secondRapidRow = saved.recurringPayments.find(row => row.id === 'rec-rapid-minute-1');
+    assert(secondRapidRow.status === 'Active' && secondRapidRow.autoChargeEnabled === true && secondRapidRow.lastAutoChargeOccurrenceKey === forcedSecondRapidDue, 'The second rapid success must remain enabled and preserve its exact processed occurrence.');
+    assert(Date.parse(secondRapidRow.nextRun) > Date.now(), 'The second rapid success must advance the displayed next charge timestamp into the future.');
+    assert(saved.payments.filter(payment => payment.recurringPaymentId === 'rec-rapid-minute-1' && payment.status === 'Paid').length === 2, 'Two due rapid occurrences must create exactly two authoritative paid transactions.');
+    const secondRapidPaid = saved.payments.find(payment => payment.recurringPaymentId === 'rec-rapid-minute-1' && payment.stripePaymentIntentId === 'pi_restart_success_4');
+    assert(secondRapidPaid, 'The second rapid provider result must be retained for restart and webhook reconciliation.');
 
     saved.payments.unshift({
       id: 'legacy-contradictory-failure',
@@ -437,10 +462,11 @@ async function main() {
       amount: 1,
       status: '1x failed - retrying',
       paymentProvider: 'stripe',
+      stripePaymentIntentId: secondRapidPaid.stripePaymentIntentId,
       source: 'Legacy post-success failure bug',
-      date: new Date(Date.parse(rapidPaid.createdAt) + 1000).toLocaleString('en-US')
+      date: new Date(Date.parse(secondRapidPaid.createdAt) + 1000).toLocaleString('en-US')
     });
-    Object.assign(rapidRow, {
+    Object.assign(secondRapidRow, {
       status: 'Rapid test failed',
       tone: 'warn',
       autoChargeEnabled: true,
@@ -451,22 +477,23 @@ async function main() {
       paymentAttempts: [{
         id: 'legacy-contradictory-attempt',
         result: '1x failed - retrying',
-        stripePaymentIntentId: rapidPaid.stripePaymentIntentId,
+        stripePaymentIntentId: secondRapidPaid.stripePaymentIntentId,
         recurringPaymentId: 'rec-rapid-minute-1'
-      }].concat(rapidRow.paymentAttempts || [])
+      }].concat(secondRapidRow.paymentAttempts || [])
     });
     await fs.writeFile(path.join(dataDir, 'data.json'), JSON.stringify(saved, null, 2));
 
     server = loadServer();
     cookie = await ownerCookie(server);
     const rapidRestartRun = await request(server, 'POST', '/api/woa-autopay/run', { cookie, json: {} });
-    assert(rapidRestartRun.status === 200 && rapidRestartRun.json.charged === 0 && rapidRestartRun.json.stripeOutcomesReconciled === 1 && chargeRequests.length === 3, 'Restarting after a rapid success must reconcile a historical paid/failed contradiction without charging the same minute twice.');
+    assert(rapidRestartRun.status === 200 && rapidRestartRun.json.charged === 0 && rapidRestartRun.json.stripeOutcomesReconciled === 1 && chargeRequests.length === 4, 'Restarting after a rapid success must reconcile a historical paid/failed contradiction without charging the same minute twice.');
     saved = await readSaved(dataDir);
     const rapidRestartRow = saved.recurringPayments.find(row => row.id === 'rec-rapid-minute-1');
-    assert(rapidRestartRow.autoChargeEnabled === false && rapidRestartRow.status === 'Rapid test passed', 'Completed-pickup recovery must not reactivate a one-shot rapid test after its provider result.');
-    assert(saved.payments.filter(payment => payment.stripePaymentIntentId === rapidPaid.stripePaymentIntentId).length === 1, 'Paid Stripe reconciliation must leave exactly one authoritative transaction for a PaymentIntent.');
-    assert(saved.payments.find(payment => payment.stripePaymentIntentId === rapidPaid.stripePaymentIntentId).status === 'Paid', 'The authoritative Stripe PaymentIntent must remain paid after contradiction cleanup.');
+    assert(rapidRestartRow.autoChargeEnabled === true && rapidRestartRow.status === 'Active', 'Paid reconciliation must restore a recurring rapid schedule without disabling its next occurrence.');
+    assert(saved.payments.filter(payment => payment.stripePaymentIntentId === secondRapidPaid.stripePaymentIntentId).length === 1, 'Paid Stripe reconciliation must leave exactly one authoritative transaction for a PaymentIntent.');
+    assert(saved.payments.find(payment => payment.stripePaymentIntentId === secondRapidPaid.stripePaymentIntentId).status === 'Paid', 'The authoritative Stripe PaymentIntent must remain paid after contradiction cleanup.');
 
+    rapidRestartRow.status = 'Rapid test passed';
     rapidRestartRow.autoChargeEnabled = true;
     await fs.writeFile(path.join(dataDir, 'data.json'), JSON.stringify(saved, null, 2));
     server = loadServer();
@@ -474,11 +501,24 @@ async function main() {
     const completedRepairRun = await request(server, 'POST', '/api/woa-autopay/run', { cookie, json: {} });
     saved = await readSaved(dataDir);
     const completedRepairRow = saved.recurringPayments.find(row => row.id === 'rec-rapid-minute-1');
-    assert(completedRepairRun.status === 200 && completedRepairRun.json.completedSchedulesDisabled === 1 && completedRepairRun.json.charged === 0 && chargeRequests.length === 3, 'A stale enabled flag on a passed rapid test must be durably disabled without another provider charge.');
+    assert(completedRepairRun.status === 200 && completedRepairRun.json.completedSchedulesDisabled === 1 && completedRepairRun.json.charged === 0 && chargeRequests.length === 4, 'A stale enabled flag on a legacy passed rapid test must be durably disabled without another provider charge.');
     assert(completedRepairRow.autoChargeEnabled === false && completedRepairRow.status === 'Rapid test passed', 'Terminal rapid repair must preserve the passed result while turning automatic charging off.');
+    const resumedRapidAt = new Date(Date.now() + 2 * 60 * 1000).toISOString();
+    const resumedRapid = await request(server, 'POST', '/api/recurring-payments/update', {
+      cookie,
+      json: {
+        recurringPaymentId: 'rec-rapid-minute-1',
+        amount: 1,
+        frequency: 'Every minute',
+        nextRun: resumedRapidAt,
+        status: 'Active',
+        autoChargeEnabled: true
+      }
+    });
+    assert(resumedRapid.status === 200 && resumedRapid.json.status === 'Active' && resumedRapid.json.autoChargeEnabled === true, 'Editing and enabling a legacy completed rapid test must resume it as a recurring rapid schedule.');
     const recurringView = await request(server, 'GET', '/api/recurring-payments', { cookie });
     const rapidViewRow = recurringView.json.records.find(row => row.id === 'rec-rapid-minute-1');
-    assert(recurringView.status === 200 && rapidViewRow.autopayComplete === true && rapidViewRow.autopayBlockedReason === '' && rapidViewRow.autopayNextAttemptAt === '', 'A passed one-shot rapid test must be exposed as completed, never as blocked or awaiting another attempt.');
+    assert(recurringView.status === 200 && rapidViewRow.autopayComplete === false && rapidViewRow.status === 'Active' && rapidViewRow.nextRun === resumedRapidAt && /^Waiting for/.test(rapidViewRow.autopayBlockedReason), 'A resumed rapid schedule must expose its next exact timestamp instead of a terminal completed state.');
     const regularNextRun = localDateKey(14);
     const regularActivation = await request(server, 'POST', '/api/recurring-payments/update', {
       cookie,
@@ -488,7 +528,7 @@ async function main() {
         frequency: 'Weekly',
         nextRun: regularNextRun,
         chargeTime: '18:00',
-        status: 'Rapid test passed',
+        status: 'Active',
         autoChargeEnabled: true
       }
     });
@@ -497,7 +537,7 @@ async function main() {
     const regularViewRow = regularView.json.records.find(row => row.id === 'rec-rapid-minute-1');
     assert(regularViewRow.status === 'Active' && regularViewRow.frequency === 'Weekly' && regularViewRow.nextRun === regularNextRun && regularViewRow.autopayComplete === false && /^Waiting for/.test(regularViewRow.autopayBlockedReason), 'The converted weekly schedule must enter the shared normal scheduler and wait for its exact future due date.');
 
-    console.log('Autopay restart check passed: all schedule cadences, Stripe success authority, contradiction cleanup, attempt keys, one-hour delay, one-shot rapid provider testing, retry success, and restart recovery are protected.');
+    console.log('Autopay restart check passed: all schedule cadences, repeated rapid charges, durable timestamp advancement, Stripe success authority, contradiction cleanup, attempt keys, one-hour delay, retry success, and restart recovery are protected.');
   } finally {
     global.fetch = originalFetch;
     await fs.rm(dataDir, { recursive: true, force: true });

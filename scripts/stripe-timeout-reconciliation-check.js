@@ -277,6 +277,55 @@ async function main() {
     assert(recurring.status === 'Active' && recurring.retryCount === 0, 'The customer must remain active and paid after the out-of-order failure is ignored.');
     assert(saved.payments.filter(row => row.stripePaymentIntentId === 'pi_timeout_late_success').length === 1, 'All reconciliation paths must retain one canonical Stripe transaction.');
 
+    const rapidDueAt = new Date(Date.now() - 1000).toISOString();
+    saved.recurringPayments.find(row => row.id === 'rec-cutover-failure-1').autoChargeEnabled = false;
+    saved.recurringPayments.push({
+      id: 'rec-timeout-rapid-1',
+      customer: 'Rapid Timeout Customer',
+      phone: '8565550144',
+      email: 'rapid-timeout@example.com',
+      vehicle: '1999 test test',
+      vehicleId: 'veh-timeout-1',
+      vin: 'ML32A3HJ9KH000001',
+      amount: 1,
+      frequency: 'Every minute',
+      nextRun: rapidDueAt,
+      status: 'Active',
+      autoChargeEnabled: true,
+      paymentProvider: 'stripe',
+      provider: 'Stripe',
+      stripeCustomerId: 'cus_timeout_rapid_1',
+      stripePaymentMethodId: 'pm_timeout_rapid_1',
+      stripeCardSavedAt: new Date().toISOString(),
+      organizationId: 'org-wheelsonauto'
+    });
+    await fs.writeFile(path.join(dataDir, 'data.json'), JSON.stringify(saved, null, 2));
+    const rapidTimedOut = await request(server, 'POST', '/api/woa-autopay/run', { cookie: ownerCookie, json: {} });
+    assert(rapidTimedOut.status === 200 && rapidTimedOut.json.confirmationPending === 1 && stripeState.paymentIntentPosts === 2, 'A timed-out every-minute occurrence must remain pending with exactly one Stripe request.');
+    const rapidMetadata = { ...stripeState.metadata };
+    assert(rapidMetadata.scheduledDueDate === rapidDueAt && rapidMetadata.billingPeriodKey === 'interval:' + rapidDueAt, 'Rapid Stripe metadata must preserve the exact interval timestamp.');
+    const rapidSucceededIntent = {
+      id: 'pi_timeout_rapid_late_success',
+      object: 'payment_intent',
+      status: 'succeeded',
+      amount: 100,
+      amount_received: 100,
+      created: Math.floor(Date.now() / 1000),
+      customer: 'cus_timeout_rapid_1',
+      payment_method: 'pm_timeout_rapid_1',
+      latest_charge: 'ch_timeout_rapid_late_success',
+      metadata: rapidMetadata
+    };
+    const rapidSuccessEvent = { id: 'evt_timeout_rapid_late_success', type: 'payment_intent.succeeded', created: rapidSucceededIntent.created, data: { object: rapidSucceededIntent } };
+    const rapidSuccessRaw = JSON.stringify(rapidSuccessEvent);
+    const rapidLateSuccess = await request(server, 'POST', '/api/webhooks/stripe', { raw: rapidSuccessRaw, headers: { 'content-type': 'application/json', 'stripe-signature': stripeSignature(webhookSecret, rapidSuccessRaw) } });
+    assert(rapidLateSuccess.status === 200 && rapidLateSuccess.json.stripePaymentIntentResult.advanced === true, 'A signed late rapid success must advance the exact recurring interval.');
+    saved = await readSaved(dataDir);
+    const rapidTimeoutRow = saved.recurringPayments.find(row => row.id === 'rec-timeout-rapid-1');
+    assert(rapidTimeoutRow.status === 'Active' && rapidTimeoutRow.autoChargeEnabled === true, 'Webhook recovery must keep a successful rapid schedule enabled.');
+    assert(Date.parse(rapidTimeoutRow.nextRun) > Date.now() && rapidTimeoutRow.lastAutoChargeOccurrenceKey === rapidDueAt, 'Webhook recovery must move the displayed next rapid charge into the future and preserve the processed timestamp.');
+    assert(saved.payments.filter(row => row.stripePaymentIntentId === rapidSucceededIntent.id && row.status === 'Paid').length === 1, 'Webhook recovery must retain one authoritative paid rapid transaction.');
+
     const cutoverFailureIntent = attempt => ({
       id: 'pi_cutover_failure_' + attempt,
       object: 'payment_intent',
@@ -315,7 +364,7 @@ async function main() {
     assert(failedCutoverRow.status === '2x failed - contact customer' && failedCutoverRow.retryCount === 2, 'Two protected first-charge declines must enter the contact-customer workflow without returning to Clover.');
     assert(saved.payments.filter(row => row.recurringPaymentId === 'rec-cutover-failure-1' && /failed/i.test(row.status)).length === 2, 'Each distinct failed PaymentIntent must remain visible as one payment attempt.');
 
-    console.log('Stripe timeout reconciliation passed: timeout recovery, out-of-order events, duplicate protection, and failed first-cutover evidence remain provider-safe.');
+    console.log('Stripe timeout reconciliation passed: weekly and rapid timeout recovery, durable next-run advancement, out-of-order events, duplicate protection, and failed first-cutover evidence remain provider-safe.');
   } finally {
     global.fetch = originalFetch;
     if (server && typeof server.close === 'function') server.close();
