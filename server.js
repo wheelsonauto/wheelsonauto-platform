@@ -330,6 +330,12 @@ function assertResourceRevision(record, payload) {
   }
 }
 
+function nextResourceUpdatedAt(record) {
+  const now = Date.now();
+  const previous = Date.parse(record && record.updatedAt || '');
+  return new Date(Number.isFinite(previous) ? Math.max(now, previous + 1) : now).toISOString();
+}
+
 function cleanResourceText(value, maxLength) {
   return String(value == null ? '' : value).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, ' ').trim().slice(0, maxLength);
 }
@@ -424,7 +430,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260828-dashboard-billing-policy-384';
+const ASSET_VERSION = 'platform-20260828-fleet-lifecycle-385';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -1111,6 +1117,31 @@ function addVehicleImportIndexKeys(indexes, vehicle, index) {
 }
 const STATE_WRITE_META = Symbol('wheelsonauto.stateWriteMeta');
 const STATE_READ_META = Symbol('wheelsonauto.stateReadMeta');
+const FLEET_RESOURCE_PROJECTION = Object.freeze({
+  resourceTypes: Object.freeze(['vehicle', 'online_vehicle', 'audit_log']),
+  identityResourceTypes: Object.freeze(['vehicle'])
+});
+const FLEET_MAINTENANCE_PROJECTION = Object.freeze({
+  resourceTypes: Object.freeze(['vehicle', 'maintenance', 'audit_log'])
+});
+const FLEET_ASSIGNMENT_PROJECTION = Object.freeze({
+  resourceTypes: Object.freeze(['vehicle', 'online_vehicle', 'customer', 'customer_file', 'customer_account', 'application', 'rental_file', 'recurring_payment', 'payment', 'maintenance', 'claim', 'audit_log']),
+  syncRentalRelations: true,
+  syncActiveAssignments: true
+});
+const STATE_PROJECTION_SCOPES_BY_REASON = Object.freeze({
+  'Add exact fleet vehicle': FLEET_RESOURCE_PROJECTION,
+  'Upload exact vehicle photo': FLEET_RESOURCE_PROJECTION,
+  'Archive exact vehicle photo': FLEET_RESOURCE_PROJECTION,
+  'Change exact vehicle fleet state': FLEET_RESOURCE_PROJECTION,
+  'Remove unassigned vehicle resource from active fleet': FLEET_RESOURCE_PROJECTION,
+  'Update exact vehicle resource': Object.freeze({ ...FLEET_ASSIGNMENT_PROJECTION, identityResourceTypes: Object.freeze(['vehicle']) }),
+  'Save exact maintenance job': FLEET_MAINTENANCE_PROJECTION,
+  'Complete exact maintenance job': FLEET_MAINTENANCE_PROJECTION,
+  'Change exact customer vehicle assignment': FLEET_ASSIGNMENT_PROJECTION,
+  'Complete canonical Rental File return': FLEET_ASSIGNMENT_PROJECTION,
+  'End exact customer contract and return vehicle': FLEET_ASSIGNMENT_PROJECTION
+});
 let stateRecoveryGeneration = 0;
 const CONCURRENT_COLLECTIONS = ['rentalFiles', 'cardSetupRequests', 'paymentRequests', 'scheduledPayments', 'recurringPayments', 'vehicles', 'onlineVehicles', 'contracts', 'maintenance', 'claims', 'messages', 'documents', 'eSignatures', 'onboardingSessions', 'pickupAppointments', 'contractTemplates', 'refundRequests', 'verificationCases', 'trackerEvents', 'trackerUnmatched', 'marketingEvents', 'subscriptions', 'billingInvoices', 'billingEvents', 'ledgerEntries', 'accountingAdjustments', 'accountingPeriods', 'calendarEvents', 'applications', 'tasks', 'apiProviders', 'staffAccounts', 'customerAccounts', 'organizations', 'dailyCloseouts', 'auditLogs', 'websiteLeads'];
 
@@ -1235,6 +1266,7 @@ async function writeDataNow(data) {
       reason: meta.reason || 'platform state mutation',
       actor: meta.actor || '',
       fastMessagingWrite: meta.fastMessagingWrite === true,
+      projectionScope: meta.projectionScope || null,
       transactionEffects: meta.transactionEffects || {},
       mergeState: latest => mergeConcurrentState(data, repairDataIds(latest || emptyPlatformState()), options)
     });
@@ -1302,7 +1334,7 @@ async function mutateLatestData(reason, mutator, options = {}) {
     const latest = await readData();
     await mutator(latest);
     const currentMeta = latest && latest[STATE_WRITE_META] || {};
-    Object.defineProperty(latest, STATE_WRITE_META, { value: { ...currentMeta, fastMessagingWrite: options.fastMessagingWrite === true || currentMeta.fastMessagingWrite === true, reason: reason || currentMeta.reason || 'serialized state mutation', organizationId: options.organizationId || currentMeta.organizationId || MAIN_ORG_ID }, configurable: true });
+    Object.defineProperty(latest, STATE_WRITE_META, { value: { ...currentMeta, fastMessagingWrite: options.fastMessagingWrite === true || currentMeta.fastMessagingWrite === true, projectionScope: options.projectionScope || currentMeta.projectionScope || STATE_PROJECTION_SCOPES_BY_REASON[reason] || null, reason: reason || currentMeta.reason || 'serialized state mutation', organizationId: options.organizationId || currentMeta.organizationId || MAIN_ORG_ID }, configurable: true });
     return writeDataNow(latest);
   });
   writeDataQueue = job.catch(() => {});
@@ -18131,7 +18163,24 @@ function cleanTaskPayload(payload, existing = null, user = {}) {
   };
 }
 function isMonthlyMaintenanceJob(row = {}) {
-  return /monthly|oil/.test(String([row.type, row.issue].filter(Boolean).join(' ')).toLowerCase());
+  return /monthly|inspection|oil/.test(String([row.type, row.issue].filter(Boolean).join(' ')).toLowerCase());
+}
+function isClosedMaintenanceJob(row = {}) {
+  return /complete|fixed|closed|superseded|cancelled|canceled|duplicate/i.test(String(row.status || ''));
+}
+function maintenanceInspectionRecurrence(row = {}) {
+  return String(row.inspectionRecurrence || '').toLowerCase() === 'one_time' ? 'one_time' : 'recurring';
+}
+function maintenanceInspectionInterval(row = {}) {
+  const value = Math.min(60, Math.max(1, Math.round(Number(row.inspectionIntervalValue || 1) || 1)));
+  const requestedUnit = String(row.inspectionIntervalUnit || 'months').toLowerCase();
+  const unit = ['days', 'weeks', 'months'].includes(requestedUnit) ? requestedUnit : 'months';
+  return { value, unit };
+}
+function nextInspectionDue(dateText, row = {}) {
+  const interval = maintenanceInspectionInterval(row);
+  if (interval.unit === 'months') return addMonths(dateText, interval.value);
+  return addDaysToDateKey(dateText, interval.value * (interval.unit === 'weeks' ? 7 : 1));
 }
 function cleanMaintenanceChecklist(value) {
   const values = Array.isArray(value) ? value : [];
@@ -18179,7 +18228,7 @@ function maintenanceCustomerForVehicle(data, vehicle, existing = null) {
 }
 function cleanMaintenancePayload(payload, existing, vehicle, user, customerName = '') {
   const source = payload && typeof payload === 'object' ? payload : {};
-  const now = new Date().toISOString();
+  const now = nextResourceUpdatedAt(existing);
   const id = cleanResourceText(source.id || existing && existing.id || ('mnt-' + Date.now()), 160);
   if (!id) {
     const error = new Error('Maintenance job ID is required.');
@@ -18198,6 +18247,10 @@ function cleanMaintenancePayload(payload, existing, vehicle, user, customerName 
     throw error;
   }
   const tag = cleanResourceText(vehicle.plate || vehicle.stock || '', 80);
+  const interval = maintenanceInspectionInterval({
+    inspectionIntervalValue: source.inspectionIntervalValue === undefined ? existing && existing.inspectionIntervalValue : source.inspectionIntervalValue,
+    inspectionIntervalUnit: source.inspectionIntervalUnit === undefined ? existing && existing.inspectionIntervalUnit : source.inspectionIntervalUnit
+  });
   return {
     id,
     organizationId: rowOrganizationId(existing || vehicle || { organizationId: userOrganizationId(user) }),
@@ -18215,6 +18268,9 @@ function cleanMaintenancePayload(payload, existing, vehicle, user, customerName 
     due,
     nextDue: due,
     reminder: cleanResourceText(source.reminder || existing && existing.reminder || 'Remind customer when due', 120),
+    inspectionRecurrence: maintenanceInspectionRecurrence({ inspectionRecurrence: source.inspectionRecurrence === undefined ? existing && existing.inspectionRecurrence : source.inspectionRecurrence }),
+    inspectionIntervalValue: interval.value,
+    inspectionIntervalUnit: interval.unit,
     notes: cleanResourceText(source.notes === undefined ? existing && existing.notes : source.notes, 20000),
     status: cleanResourceText(source.status || existing && existing.status || 'Scheduled', 80),
     source: cleanResourceText(existing && existing.source || source.source || 'Staff maintenance', 120),
@@ -31627,7 +31683,7 @@ const server = http.createServer(async (req, res) => {
         persistence = await mutateLatestData('Save exact maintenance job', async data => {
           data.maintenance = Array.isArray(data.maintenance) ? data.maintenance : [];
           const requestedId = cleanResourceText(payload.id || '', 160);
-          const existing = requestedId ? data.maintenance.find(item => String(item.id || '') === requestedId) : null;
+          let existing = requestedId ? data.maintenance.find(item => String(item.id || '') === requestedId) : null;
           if (existing && !rowVisibleToUserOrganization(existing, user)) {
             const error = new Error('Maintenance job was not found.');
             error.statusCode = 404;
@@ -31641,9 +31697,22 @@ const server = http.createServer(async (req, res) => {
             error.statusCode = 404;
             throw error;
           }
-          job = cleanMaintenancePayload(payload, existing, vehicle, user, maintenanceCustomerForVehicle(data, vehicle, existing));
+          if (!existing && isMonthlyMaintenanceJob(payload)) {
+            existing = data.maintenance.find(item => String(item.vehicleId || '') === vehicleId && isMonthlyMaintenanceJob(item) && !isClosedMaintenanceJob(item)) || null;
+          }
+          const maintenancePayload = existing && requestedId && String(existing.id || '') !== requestedId ? { ...payload, id: existing.id } : payload;
+          job = cleanMaintenancePayload(maintenancePayload, existing, vehicle, user, maintenanceCustomerForVehicle(data, vehicle, existing));
           if (existing) Object.assign(existing, job);
           else data.maintenance.unshift(job);
+          if (isMonthlyMaintenanceJob(job)) {
+            Object.assign(vehicle, {
+              inspectionRecurrence: job.inspectionRecurrence,
+              inspectionIntervalValue: job.inspectionIntervalValue,
+              inspectionIntervalUnit: job.inspectionIntervalUnit,
+              updatedAt: job.updatedAt,
+              updatedBy: job.updatedBy
+            });
+          }
           appendAuditLog(data, user, existing ? 'Maintenance job updated' : 'Maintenance job created', [job.vehicle, job.customer || 'In lot', job.type, job.status, job.due ? 'Due ' + job.due : 'No due date']);
         });
       } catch (error) {
@@ -31694,7 +31763,7 @@ const server = http.createServer(async (req, res) => {
             error.statusCode = 400;
             throw error;
           }
-          const now = new Date().toISOString();
+          const now = nextResourceUpdatedAt(job);
           const monthly = isMonthlyMaintenanceJob(job);
           Object.assign(job, {
             status: 'Completed',
@@ -31721,13 +31790,26 @@ const server = http.createServer(async (req, res) => {
             vehicle.lastInspectionCondition = job.inspectionCondition;
             vehicle.lastInspectionChecklist = job.inspectionChecklist.join(', ');
             vehicle.lastInspectionSignoff = mechanicSignoff;
+            vehicle.inspectionRecurrence = maintenanceInspectionRecurrence(job);
+            vehicle.inspectionIntervalValue = maintenanceInspectionInterval(job).value;
+            vehicle.inspectionIntervalUnit = maintenanceInspectionInterval(job).unit;
           }
           vehicle.manuallyEditedAt = now;
           vehicle.updatedAt = now;
           vehicle.updatedBy = cleanResourceText(user.name || user.username || user.role || 'Staff', 160);
           if (monthly) {
-            const nextDue = addMonths(completedAt, 1);
-            nextReminder = data.maintenance.find(item => item.id !== job.id && String(item.vehicleId || '') === String(job.vehicleId || '') && isMonthlyMaintenanceJob(item) && !/complete|fixed|closed/i.test(String(item.status || '')) && String(item.due || item.nextDue || '') === nextDue) || null;
+            data.maintenance.filter(item => item.id !== job.id && String(item.vehicleId || '') === String(job.vehicleId || '') && isMonthlyMaintenanceJob(item) && !isClosedMaintenanceJob(item)).forEach(item => Object.assign(item, {
+              status: 'Superseded',
+              completedAt,
+              fixedAt: now,
+              updatedAt: now,
+              updatedBy: cleanResourceText(user.name || user.username || user.role || 'Staff', 160),
+              notes: cleanResourceText([item.notes, 'Replaced when the current inspection was completed.'].filter(Boolean).join(' '), 20000)
+            }));
+          }
+          if (monthly && maintenanceInspectionRecurrence(job) === 'recurring') {
+            const nextDue = nextInspectionDue(completedAt, job);
+            nextReminder = data.maintenance.find(item => item.id !== job.id && String(item.vehicleId || '') === String(job.vehicleId || '') && isMonthlyMaintenanceJob(item) && !isClosedMaintenanceJob(item) && String(item.due || item.nextDue || '') === nextDue) || null;
             if (!nextReminder) {
               nextReminder = {
                 id: 'mnt-next-' + job.id + '-' + nextDue,
@@ -31746,6 +31828,9 @@ const server = http.createServer(async (req, res) => {
                 due: nextDue,
                 nextDue,
                 reminder: job.reminder || 'Remind customer when due',
+                inspectionRecurrence: 'recurring',
+                inspectionIntervalValue: maintenanceInspectionInterval(job).value,
+                inspectionIntervalUnit: maintenanceInspectionInterval(job).unit,
                 notes: 'Automatically reset after ' + (job.vehicle || 'vehicle') + ' was marked done on ' + completedAt + '.',
                 status: 'Scheduled',
                 source: 'Automatic monthly reset',

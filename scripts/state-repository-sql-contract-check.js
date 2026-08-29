@@ -48,7 +48,17 @@ async function main() {
   assert.deepStrictEqual(JSON.parse(calls[0].values[12]), { reason: 'Verify SQL parameter alignment.' }, 'Details must occupy the final JSON parameter.');
   assert.strictEqual(saved.id, 41, 'The repository must return the stored recovery-history id.');
 
-  console.log('State repository SQL contract check passed: recovery-history placeholders and values remain aligned.');
+  calls.length = 0;
+  await repository.refreshIdentityIndex(client, {
+    vehicles: [{ id: 'vehicle-scope', vin: 'SCOPEVIN1', plate: 'SCOPE-1' }],
+    customerAccounts: [{ id: 'account-outside-scope', username: 'outside-scope' }]
+  }, ['vehicle']);
+  assert.match(calls[0].sql, /resource_type = ANY/i, 'Scoped operational writes must replace only the selected identity projection.');
+  assert.deepStrictEqual(calls[0].values[1], ['vehicle'], 'The fleet projection must be constrained to vehicle identities.');
+  assert.strictEqual(calls.filter(call => /INSERT INTO woa_identity_index/i.test(call.sql)).length, 2, 'Only the vehicle VIN and plate identities should be rewritten.');
+  assert(calls.slice(1).every(call => call.values[3] === 'vehicle'), 'A scoped fleet write must not rebuild unrelated portal or payment identities.');
+
+  console.log('State repository SQL contract check passed: recovery history and scoped identity projections remain aligned.');
 }
 
 main().catch(error => {

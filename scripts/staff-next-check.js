@@ -20,6 +20,7 @@ const managerDashboard = read('staff-ui/dashboard/ManagerDashboardPage.tsx');
 const serviceDashboard = read('staff-ui/dashboard/ServiceDashboardPage.tsx');
 const managerReports = read('staff-ui/reports/ManagerReportsPage.tsx');
 const fleet = read('staff-ui/fleet/FleetPage.tsx');
+const fleetService = read('staff-ui/fleet/FleetServicePanel.tsx');
 const customers = read('staff-ui/customers/CustomersPage.tsx');
 const customerTransactions = read('staff-ui/customers/CustomerTransactionsPanel.tsx');
 const customerProfile = read('staff-ui/customers/CustomerProfilePanel.tsx');
@@ -61,7 +62,7 @@ assert(more.includes("!['payments', 'accounting', 'systems', 'applications'].inc
 assert(!shell.includes("{ id: 'more', label: 'Owner admin'"), 'The retired Owner admin label must not remain in navigation.');
 assert(shell.includes("const profileWorkspace: Workspace = role === 'owner' ? 'more' : 'settings'") && shell.includes('open(profileWorkspace)'), 'The existing lower profile entry must open Admin for owners and Settings for other staff.');
 assert(more.includes("onNavigate('more', item.id)") && more.includes("item.id === 'dispatch'") && more.includes("item.id === 'systems'") && more.includes("item.id === 'settings'") && more.includes('owner-admin-back') && more.includes('Admin'), 'Dispatch, Systems, and Settings must remain nested in the single Admin workspace with one back pattern.');
-assert(fleet.includes("const canManage = role !== 'mechanic'") && fleet.includes('Open service') && fleet.includes('Service history') && fleet.includes('markDone(job)'), 'Mechanic vehicle files must keep identity protected while exposing organized service work and completion.');
+assert(fleet.includes("const canManage = role !== 'mechanic'") && fleetService.includes('Open service') && fleetService.includes('Service history') && fleetService.includes('complete(job)'), 'Mechanic vehicle files must keep identity protected while exposing organized service work and completion.');
 assert(settings.includes('Live protected workspace') && !settings.includes('No production cutover yet'), 'Role settings must describe the current protected platform instead of a retired preview.');
 assert(shell.includes("wheelsonauto-staff-theme") && shell.includes('theme-${theme}') && shell.includes('onThemeChange={setTheme}') && settings.includes('Light appearance') && settings.includes('Use light appearance'), 'Persistent staff light/dark appearance controls are incomplete.');
 assert(api.includes("'/api/app-notifications/read'") && api.includes('markNotificationsRead') && shell.includes('notification-panel') && shell.includes('openNotification') && shell.includes('Mark all read'), 'The staff notification command must open, route, and mark real notifications instead of redirecting to Dashboard.');
@@ -82,7 +83,7 @@ assert(api.includes('resourceCache') && api.includes('RESOURCE_CACHE_MS') && api
 assert(shell.includes("route.workspace === 'maintenance'") && shell.includes("workspace: 'fleet' as Workspace") && !shell.includes("label: 'Maintenance', icon"), 'Standalone Maintenance must redirect into Fleet service due without remaining as a duplicate navigation item.');
 assert(fleet.includes("fleet: 'Fleet', lot: 'In lot', service: 'Service due', history: 'History'") && fleet.includes('Add car') && fleet.includes('Upload') && fleet.includes('Archive vehicle') && fleet.includes('Done'), 'Fleet must expose the consolidated inventory, lot, service, photo, archive, and inspection controls.');
 assert(fleet.includes("type VehicleDetailTab = 'edit' | 'photos' | 'service' | 'renter' | 'history'") && fleet.includes('vehicle-detail-tabs'), 'Each vehicle file must separate identity, photos, service, renter, and history into focused tabs.');
-assert(fleet.includes('pendingPhotos') && fleet.includes('multiple') && fleet.includes('Inspection done') && fleet.includes("expectedUpdatedAt: job.updatedAt || ''"), 'Fleet creation photos and simplified maintenance completion are incomplete.');
+assert(fleet.includes('pendingPhotos') && fleet.includes('multiple') && fleet.includes("lazy(() => import('./FleetServicePanel'))") && fleetService.includes('Complete inspection') && fleetService.includes('Repeat forever') && fleetService.includes("expectedUpdatedAt: job.updatedAt || ''"), 'Fleet creation photos, lazy service loading, inspection recurrence, and explicit maintenance completion are incomplete.');
 assert(!fleet.includes('.slice(0, 12)') && fleet.includes('Add as many JPG or PNG photos as needed') && fleet.includes('<input hidden multiple type="file" accept="image/jpeg,image/png" onChange={uploadPhoto}'), 'Fleet photo uploads must allow any count while retaining per-file validation.');
 assert(customers.includes("dues: 'Tolls / violations & dues'") && customers.includes('canonicalCustomerRecords') && customers.includes('hasAssignedVehicle') && customers.includes('openClaimsFor'), 'Customers must be deduplicated and grouped by real vehicle assignment, open dues, and history.');
 assert(customers.includes("transactions: 'Transactions'") && customers.includes('CustomerTransactionsPanel') && customerTransactions.includes('fromDate') && customerTransactions.includes('toDate') && customerTransactions.includes('Search name, date, vehicle, reference'), 'The combined Customers and payments workspace must expose a searchable, date-filtered transaction ledger.');
@@ -136,7 +137,7 @@ const totalJs = jsFiles.reduce((sum, file) => sum + fs.statSync(path.join(dist, 
 assert(chunkFiles.length >= 9, 'Expected lazy workspace chunks were not generated.');
 assert(fs.statSync(entryPath).size < 230 * 1024, 'React staff entry exceeds the 230 KB uncompressed shell budget.');
 assert(chunkFiles.every(file => fs.statSync(path.join(dist, file)).size < 30 * 1024), 'A lazy workspace exceeds the 30 KB uncompressed module budget.');
-assert(totalJs < 428 * 1024, 'Total React staff JavaScript exceeds the 428 KB uncompressed account, lifecycle, collection-policy, and scheduled-payments product budget.');
+assert(totalJs < 435 * 1024, 'Total React staff JavaScript exceeds the 435 KB uncompressed account, lifecycle, collection-policy, scheduled-payments, and scoped fleet-service product budget.');
 assert(css.includes('.staff-app-shell.theme-light') && css.includes('.theme-toggle-row'), 'The staff light appearance is missing complete shell and toggle styling.');
 assert(css.includes('.theme-light .resource-workspace:not(.has-detail) .operations-index{background:#f8f9fa}'), 'The wide resource list must not retain its dark background in light appearance.');
 assert(fs.statSync(cssPath).size < 72 * 1024, 'React staff CSS exceeds the 72 KB uncompressed daily-operations, fleet, messaging, notification, and dual-theme budget.');

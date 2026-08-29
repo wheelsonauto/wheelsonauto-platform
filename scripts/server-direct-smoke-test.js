@@ -1092,30 +1092,43 @@ async function main() {
     assert(persistedCommandTask && persistedCommandTask.status === 'Done' && (taskCommandState.json.auditLogs || []).some(row => /Dispatch task updated/.test(row.action || '') && /Direct command task/.test(row.details || '')), 'Task command changes and their audit evidence must persist together.');
     const createdMaintenance = await request(server, 'POST', '/api/maintenance', {
       cookie: ownerCookie,
-      json: { id: 'mnt-direct-command', vehicleId: 'veh-direct-dispute-car', type: 'Monthly inspection / oil change', issue: 'Direct monthly inspection', cost: 88.5, due: '2026-07-27', reminder: 'Remind customer when due', notes: 'Created through the exact maintenance command.', status: 'Scheduled' }
+      json: { id: 'mnt-direct-command', vehicleId: 'veh-direct-dispute-car', type: 'Monthly inspection / oil change', issue: 'Direct monthly inspection', cost: 88.5, due: '2026-07-27', reminder: 'Remind customer when due', notes: 'Created through the exact maintenance command.', status: 'Scheduled', inspectionRecurrence: 'recurring', inspectionIntervalValue: 2, inspectionIntervalUnit: 'weeks' }
     });
     assert(createdMaintenance.status === 200 && createdMaintenance.json.ok && createdMaintenance.json.job && createdMaintenance.json.job.vehicleId === 'veh-direct-dispute-car' && createdMaintenance.json.job.customer === 'Direct Dispute Customer' && createdMaintenance.json.job.vin === 'DIRECTDISPUTEVIN' && createdMaintenance.json.job.updatedAt, 'Exact maintenance command should bind the job to server-owned vehicle/customer identity. Received: ' + JSON.stringify(createdMaintenance.json));
+    const maintenanceCommandId = createdMaintenance.json.job.id;
     const originalMaintenanceRevision = createdMaintenance.json.job.updatedAt;
     const updatedMaintenance = await request(server, 'POST', '/api/maintenance', {
       cookie: ownerCookie,
       json: { ...createdMaintenance.json.job, issue: 'Direct monthly inspection updated', cost: 99.25, status: 'In progress', expectedUpdatedAt: originalMaintenanceRevision }
     });
     assert(updatedMaintenance.status === 200 && updatedMaintenance.json.job.status === 'In progress' && updatedMaintenance.json.job.cost === 99.25 && updatedMaintenance.json.job.updatedAt !== originalMaintenanceRevision, 'Exact maintenance command should update one revision-matched job.');
-    const staleMaintenanceCompletion = await request(server, 'POST', '/api/maintenance/mnt-direct-command/complete', {
+    const staleMaintenanceCompletion = await request(server, 'POST', '/api/maintenance/' + encodeURIComponent(maintenanceCommandId) + '/complete', {
       cookie: ownerCookie,
       json: { expectedUpdatedAt: originalMaintenanceRevision, completedAt: '2026-07-27', odometer: 44500, mechanicSignoff: 'Direct Mechanic' }
     });
-    assert(staleMaintenanceCompletion.status === 409 && /changed after it was opened/i.test(staleMaintenanceCompletion.json.error || ''), 'Stale maintenance completion must fail without touching vehicle history or reminders.');
-    const completedMaintenance = await request(server, 'POST', '/api/maintenance/mnt-direct-command/complete', {
+    assert(staleMaintenanceCompletion.status === 409 && /changed after it was opened/i.test(staleMaintenanceCompletion.json.error || ''), 'Stale maintenance completion must fail without touching vehicle history or reminders. Received: ' + JSON.stringify(staleMaintenanceCompletion.json));
+    const completedMaintenance = await request(server, 'POST', '/api/maintenance/' + encodeURIComponent(maintenanceCommandId) + '/complete', {
       cookie: ownerCookie,
       json: { expectedUpdatedAt: updatedMaintenance.json.job.updatedAt, cost: 101.75, completedAt: '2026-07-27', odometer: 44500, inspectionCondition: 'Good', inspectionChecklist: ['oil', 'tires', 'brakes', 'lights'], damageNotes: 'No new damage.', mechanicSignoff: 'Direct Mechanic', notes: 'Monthly inspection completed through the exact command.' }
     });
-    assert(completedMaintenance.status === 200 && completedMaintenance.json.job.status === 'Completed' && completedMaintenance.json.job.cost === 101.75 && completedMaintenance.json.vehicle.mileage === 44500 && completedMaintenance.json.vehicle.lastMaintenanceAt === '2026-07-27' && completedMaintenance.json.nextReminder && completedMaintenance.json.nextReminder.due === '2026-08-27', 'Maintenance completion should atomically save service proof, vehicle mileage/history, and the next monthly reminder.');
+    assert(completedMaintenance.status === 200 && completedMaintenance.json.job.status === 'Completed' && completedMaintenance.json.job.cost === 101.75 && completedMaintenance.json.vehicle.mileage === 44500 && completedMaintenance.json.vehicle.lastMaintenanceAt === '2026-07-27' && completedMaintenance.json.nextReminder && completedMaintenance.json.nextReminder.due === '2026-08-10', 'Maintenance completion should atomically save service proof, vehicle mileage/history, and its configured repeating reminder.');
     const maintenanceCommandState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
-    const persistedMaintenance = (maintenanceCommandState.json.maintenance || []).find(job => job.id === 'mnt-direct-command');
-    const nextMaintenanceRows = (maintenanceCommandState.json.maintenance || []).filter(job => job.previousMaintenanceId === 'mnt-direct-command' && job.due === '2026-08-27');
+    const persistedMaintenance = (maintenanceCommandState.json.maintenance || []).find(job => job.id === maintenanceCommandId);
+    const nextMaintenanceRows = (maintenanceCommandState.json.maintenance || []).filter(job => job.previousMaintenanceId === maintenanceCommandId && job.due === '2026-08-10');
     const maintainedVehicle = (maintenanceCommandState.json.vehicles || []).find(vehicle => vehicle.id === 'veh-direct-dispute-car');
     assert(persistedMaintenance && persistedMaintenance.status === 'Completed' && persistedMaintenance.mechanicSignoff === 'Direct Mechanic' && nextMaintenanceRows.length === 1 && maintainedVehicle && maintainedVehicle.mileage === 44500 && (maintenanceCommandState.json.auditLogs || []).some(row => /Maintenance job completed/.test(row.action || '') && /Direct Dispute Car/.test(row.details || '')), 'Maintenance job, vehicle history, one reminder, and audit proof must persist in the same state version.');
+    const oneTimeInspection = await request(server, 'POST', '/api/maintenance', {
+      cookie: ownerCookie,
+      json: { id: 'mnt-direct-command-duplicate', vehicleId: 'veh-direct-dispute-car', type: 'Monthly inspection / oil change', issue: 'One-time inspection override', due: '2026-08-11', status: 'Scheduled', inspectionRecurrence: 'one_time', inspectionIntervalValue: 1, inspectionIntervalUnit: 'days' }
+    });
+    assert(oneTimeInspection.status === 200 && oneTimeInspection.json.job.id === completedMaintenance.json.nextReminder.id && oneTimeInspection.json.job.due === '2026-08-11' && oneTimeInspection.json.job.inspectionRecurrence === 'one_time', 'Saving a new inspection schedule must update the one open reminder instead of creating a duplicate.');
+    const completedOneTimeInspection = await request(server, 'POST', '/api/maintenance/' + encodeURIComponent(oneTimeInspection.json.job.id) + '/complete', {
+      cookie: ownerCookie,
+      json: { expectedUpdatedAt: oneTimeInspection.json.job.updatedAt, completedAt: '2026-08-11', odometer: 44600, inspectionCondition: 'Good', inspectionChecklist: ['oil', 'tires'], mechanicSignoff: 'Direct Mechanic', notes: 'One-time inspection complete.' }
+    });
+    assert(completedOneTimeInspection.status === 200 && !completedOneTimeInspection.json.nextReminder, 'Completing a one-time inspection must not create another reminder.');
+    const oneTimeInspectionState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    assert((oneTimeInspectionState.json.maintenance || []).filter(row => row.vehicleId === 'veh-direct-dispute-car' && /monthly|inspection|oil/i.test([row.type, row.issue].join(' ')) && !/complete|fixed|closed|superseded|cancel|duplicate/i.test(row.status || '')).length === 0, 'A completed one-time inspection must leave no duplicate open inspection rows.');
     assert(savedStateVersion.json.version !== initialStateVersion.json.version, 'State version should change immediately after a real save.');
     const duplicateRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     const createdFleetVehicle = await request(server, 'POST', '/api/vehicles', {
@@ -1267,7 +1280,7 @@ async function main() {
     assert(new Set(duplicateRows.map(vehicle => vehicle.id)).size === 2, 'Duplicate ID repair should make unique vehicle IDs.');
     const duplicateMaintenance = (duplicateRead.json.maintenance || []).filter(row => String(row.id || '').startsWith('mnt-direct-exact-copy-'));
     assert(duplicateMaintenance.length === 2, 'Exact duplicate service repair should preserve both history rows.');
-    assert(duplicateMaintenance.filter(row => row.status === 'Scheduled').length === 1, 'Exactly one duplicate service row should remain active.');
+    assert(duplicateMaintenance.filter(row => !/complete|fixed|closed|superseded|cancel/i.test(row.status || '')).length <= 1, 'At most one duplicate inspection row may remain active after service completion.');
     const archivedMaintenance = duplicateMaintenance.find(row => row.status === 'Duplicate');
     assert(archivedMaintenance && archivedMaintenance.duplicateOf, 'The copied service row should be archived and linked to the active record.');
     const repairedDispute = (duplicateRead.json.claims || []).find(claim => claim.id === 'claim-direct-dispute');

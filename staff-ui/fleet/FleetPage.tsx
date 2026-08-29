@@ -1,21 +1,20 @@
-import { ChangeEvent, useEffect, useMemo, useState } from 'react';
-import { Camera, CarFront, Globe2, Plus, RotateCcw, Trash2, UserRoundPlus, Wrench } from 'lucide-react';
+import { ChangeEvent, FormEvent, lazy, Suspense, useEffect, useMemo, useState } from 'react';
+import { Camera, CarFront, Globe2, Plus, RotateCcw, Trash2, UserRoundPlus } from 'lucide-react';
 import {
   archiveVehicle,
   assignCustomerVehicle,
-  completeMaintenance,
+  completeRentalReturn,
   createVehicle,
   loadCustomers,
   loadMaintenance,
   loadVehicles,
   removeVehiclePhoto,
-  saveMaintenance,
   updateVehicle,
   updateVehicleState,
   uploadVehiclePhoto
 } from '../api';
 import type { CustomerRecord, MaintenanceRecord, VehicleRecord } from '../types';
-import { dateTime, shortDate, statusTone, wordsMatch } from '../ui';
+import { dateTime, statusTone, wordsMatch } from '../ui';
 import { useSwipeTabs } from '../useSwipeTabs';
 import { useViewedRecords } from '../useViewedRecords';
 
@@ -28,14 +27,8 @@ function todayKey() {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
-function nextMonthKey() {
-  const date = new Date();
-  date.setMonth(date.getMonth() + 1);
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-}
-
 function isClosed(job: MaintenanceRecord) {
-  return /complete|fixed|closed/i.test(job.status || '');
+  return /complete|fixed|closed|superseded|cancelled|canceled|duplicate/i.test(job.status || '');
 }
 
 function isArchived(vehicle: VehicleRecord) {
@@ -64,10 +57,6 @@ function emptyVehicle(): VehicleRecord {
   return { id: '', year: '', make: '', model: '', vin: '', plate: '', stock: '', tracker: '', color: '', mileage: '', location: 'WheelsonAuto lot', notes: '', status: 'Ready' };
 }
 
-function emptyService(vehicle: VehicleRecord): MaintenanceRecord {
-  return { id: `mnt-${Date.now()}`, vehicleId: vehicle.id, vehicle: title(vehicle), type: 'Repair job', issue: '', due: todayKey(), reminder: 'Remind customer when due', notes: '', status: 'Scheduled' };
-}
-
 async function photoPayload(file: File) {
   const dataUrl = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result || '')); reader.onerror = () => reject(new Error('The photo could not be read.')); reader.readAsDataURL(file); });
   return { name: file.name, type: file.type, size: file.size, dataUrl };
@@ -81,6 +70,7 @@ const filterLabels: Record<Filter, string> = { fleet: 'Fleet', lot: 'In lot', se
 const vehicleDetailTabs: Array<{ id: VehicleDetailTab; label: string }> = [
   { id: 'edit', label: 'Vehicle' }, { id: 'photos', label: 'Photos' }, { id: 'service', label: 'Service' }, { id: 'renter', label: 'Renter' }, { id: 'history', label: 'History' }
 ];
+const FleetServicePanel = lazy(() => import('./FleetServicePanel'));
 
 export function FleetPage({ role, initialSection = '', onNavigate, onOpenRental }: { role: 'owner' | 'manager' | 'mechanic'; initialSection?: string; onNavigate: (workspace: string) => void; onOpenRental: (rentalId: string) => void }) {
   const [vehicles, setVehicles] = useState<VehicleRecord[]>([]);
@@ -97,14 +87,15 @@ export function FleetPage({ role, initialSection = '', onNavigate, onOpenRental 
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [fleetState, setFleetState] = useState<FleetState>('ready');
-  const [stateConfirmed, setStateConfirmed] = useState(false);
   const [archiveConfirmed, setArchiveConfirmed] = useState(false);
   const [assignmentCustomerId, setAssignmentCustomerId] = useState('');
   const [assignmentConfirmed, setAssignmentConfirmed] = useState(false);
   const [assignmentReason, setAssignmentReason] = useState('Vehicle assigned from Fleet by staff.');
-  const [serviceDraft, setServiceDraft] = useState<MaintenanceRecord | null>(null);
   const [pendingPhotos, setPendingPhotos] = useState<File[]>([]);
   const [detailTab, setDetailTab] = useState<VehicleDetailTab>('edit');
+  const [returnOpen, setReturnOpen] = useState(false);
+  const [returnConfirmed, setReturnConfirmed] = useState(false);
+  const [returnDraft, setReturnDraft] = useState({ endDate: todayKey(), endingMileage: '', vehicleStatus: 'Ready' as 'Ready' | 'Prep' | 'Service', reason: '' });
 
   useEffect(() => {
     if (initialSection === 'service' || initialSection === 'history') setFilter(initialSection);
@@ -171,17 +162,17 @@ export function FleetPage({ role, initialSection = '', onNavigate, onOpenRental 
   const filterSwipe = useSwipeTabs(filters, filter, setFilter);
 
   const closeDetail = () => {
-    setDraft(null); setSelectedId(''); setCreating(false); setDetailTab('edit'); setServiceDraft(null); setPendingPhotos([]); setError(''); setNotice(''); setArchiveConfirmed(false);
+    setDraft(null); setSelectedId(''); setCreating(false); setDetailTab('edit'); setPendingPhotos([]); setError(''); setNotice(''); setArchiveConfirmed(false); setReturnOpen(false); setReturnConfirmed(false);
   };
 
   const openVehicle = (vehicle: VehicleRecord) => {
     viewed.markViewed(vehicle.id);
-    setSelectedId(vehicle.id); setDraft({ ...vehicle }); setCreating(false); setDetailTab('edit'); setStateConfirmed(false); setArchiveConfirmed(false);
-    setAssignmentConfirmed(false); setAssignmentCustomerId(''); setServiceDraft(null); setError(''); setNotice('');
+    setSelectedId(vehicle.id); setDraft({ ...vehicle }); setCreating(false); setDetailTab('edit'); setArchiveConfirmed(false);
+    setAssignmentConfirmed(false); setAssignmentCustomerId(''); setReturnOpen(false); setReturnConfirmed(false); setReturnDraft({ endDate: todayKey(), endingMileage: String(vehicle.mileage || ''), vehicleStatus: 'Ready', reason: '' }); setError(''); setNotice('');
   };
 
   const openNew = () => {
-    setSelectedId(''); setDraft(emptyVehicle()); setCreating(true); setDetailTab('edit'); setPricing({ weeklyPayment: '', downPayment: '' }); setServiceDraft(null); setPendingPhotos([]); setError(''); setNotice('');
+    setSelectedId(''); setDraft(emptyVehicle()); setCreating(true); setDetailTab('edit'); setPricing({ weeklyPayment: '', downPayment: '' }); setPendingPhotos([]); setError(''); setNotice('');
   };
 
   const saveVehicle = async () => {
@@ -215,11 +206,11 @@ export function FleetPage({ role, initialSection = '', onNavigate, onOpenRental 
   };
 
   const saveFleetState = async () => {
-    if (!draft || !stateConfirmed || saving) { setError('Confirm the exact vehicle and fleet state first.'); return; }
+    if (!draft || saving) return;
     setSaving(true); setError(''); setNotice('');
     try {
       const result = await updateVehicleState(draft.id, { status: fleetState, expectedUpdatedAt: draft.updatedAt });
-      await refresh(undefined, true); setDraft(result.record); setStateConfirmed(false); setNotice(fleetState === 'online' ? 'Vehicle published online and marked available.' : `Vehicle moved to ${result.record.status || fleetState}.`);
+      await refresh(undefined, true); setDraft(result.record); setNotice(fleetState === 'online' ? 'Vehicle published online and marked available.' : `Vehicle moved to ${result.record.status || fleetState}.`);
     } catch (requestError) { setError((requestError as Error).message); await refresh(undefined, true); }
     finally { setSaving(false); }
   };
@@ -230,7 +221,7 @@ export function FleetPage({ role, initialSection = '', onNavigate, onOpenRental 
     if (!customer) { setError('The selected customer was not found.'); return; }
     setSaving(true); setError(''); setNotice('');
     try {
-      const result = await assignCustomerVehicle(customer.id, { vehicleId: draft.id, expectedUpdatedAt: customer.updatedAt, reason: assignmentReason });
+      const result = await assignCustomerVehicle(customer.id, { vehicleId: draft.id, expectedUpdatedAt: customer.updatedAt, reason: assignmentReason, replaceExistingCustomer: !!draft.currentCustomer });
       await refresh(undefined, true); setDraft(result.vehicle); setAssignmentConfirmed(false); setNotice(result.unchanged ? 'That exact assignment was already saved.' : `Assigned to ${result.customer.name || 'customer'} across ${result.propagated.length} linked records.`);
     } catch (requestError) { setError((requestError as Error).message); await refresh(undefined, true); }
     finally { setSaving(false); }
@@ -273,39 +264,15 @@ export function FleetPage({ role, initialSection = '', onNavigate, onOpenRental 
     finally { setSaving(false); }
   };
 
-  const scheduleService = async () => {
-    if (!draft || !serviceDraft || saving) return;
+  const submitReturn = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!draft?.activeRentalFileId || !returnConfirmed || saving) return;
     setSaving(true); setError(''); setNotice('');
     try {
-      await saveMaintenance({ ...serviceDraft, vehicleId: draft.id, vehicle: title(draft), expectedUpdatedAt: serviceDraft.updatedAt });
-      await refresh(undefined, true); setServiceDraft(null); setNotice('Service saved to this vehicle file.');
-    } catch (requestError) { setError((requestError as Error).message); await refresh(undefined, true); }
-    finally { setSaving(false); }
-  };
-
-  const markDone = async (job: MaintenanceRecord) => {
-    if (!draft || saving) return;
-    setSaving(true); setError(''); setNotice('');
-    try {
-      const result = await completeMaintenance(job.id, {
-        expectedUpdatedAt: job.updatedAt || '', cost: job.cost, completedAt: todayKey(), odometer: draft.mileage || job.odometer || job.mileageAtService || '',
-        inspectionCondition: job.inspectionCondition || 'Good', inspectionChecklist: job.inspectionChecklist || [], damageNotes: job.damageNotes || '',
-        mechanicSignoff: window.__WOA_STAFF_USER__?.name || window.__WOA_STAFF_USER__?.username || 'WheelsonAuto staff', notes: job.notes || ''
-      });
-      await refresh(undefined, true); setNotice(result.nextReminder ? `Done. The next monthly inspection is ${shortDate(result.nextReminder.due)}.` : 'Service marked done and saved in maintenance history.');
-    } catch (requestError) { setError((requestError as Error).message); await refresh(undefined, true); }
-    finally { setSaving(false); }
-  };
-
-  const completeMonthlyInspection = async () => {
-    if (!draft || saving) return;
-    const openMonthly = selectedJobs.find(job => !isClosed(job) && /monthly|inspection|oil change/i.test([job.type, job.issue].join(' ')));
-    if (openMonthly) { await markDone(openMonthly); return; }
-    setSaving(true); setError(''); setNotice('');
-    try {
-      const created = await saveMaintenance({ ...emptyService(draft), id: `mnt-inspection-${Date.now()}`, type: 'Monthly inspection / oil change', issue: 'Monthly inspection / oil change', due: todayKey(), vehicleId: draft.id });
-      const result = await completeMaintenance(created.job.id, { expectedUpdatedAt: created.job.updatedAt || '', completedAt: todayKey(), odometer: draft.mileage || '', inspectionCondition: 'Good', inspectionChecklist: [], damageNotes: '', mechanicSignoff: window.__WOA_STAFF_USER__?.name || window.__WOA_STAFF_USER__?.username || 'WheelsonAuto staff', notes: 'Monthly inspection completed from Fleet.' });
-      await refresh(undefined, true); setNotice(`Inspection saved. The next monthly inspection is ${shortDate(result.nextReminder?.due || nextMonthKey())}.`);
+      const result = await completeRentalReturn(draft.activeRentalFileId, { endDate: returnDraft.endDate, endingMileage: Number(returnDraft.endingMileage), vehicleStatus: returnDraft.vehicleStatus, reason: returnDraft.reason });
+      await refresh(undefined, true);
+      if (result.vehicle) setDraft(current => current ? { ...current, ...result.vehicle, currentCustomer: '', activeRentalFileId: '' } : current);
+      setReturnOpen(false); setReturnConfirmed(false); setNotice(`Return completed. The customer moved to History and this vehicle moved to ${result.vehicle?.status || returnDraft.vehicleStatus}.`);
     } catch (requestError) { setError((requestError as Error).message); await refresh(undefined, true); }
     finally { setSaving(false); }
   };
@@ -352,15 +319,15 @@ export function FleetPage({ role, initialSection = '', onNavigate, onOpenRental 
 
         {!creating && detailTab === 'photos' ? <section className="transaction-history vehicle-photo-workspace"><header><div><span>Photos</span><strong>Website and staff gallery</strong></div>{canManage && !isArchived(draft) ? <label className="secondary-command compact"><Camera size={14} /> Upload photos<input hidden multiple type="file" accept="image/jpeg,image/png" onChange={uploadPhoto} /></label> : null}</header>{activePhotos.length ? <div className="vehicle-photo-grid">{activePhotos.map(photo => <figure key={photo.url}><img src={photo.url} alt={`${title(draft)} vehicle`} />{canManage && !isArchived(draft) ? <button type="button" className="danger-text-command" onClick={() => deletePhoto(photo.artifact?.id || '', photo.url)}><Trash2 size={13} /> Remove</button> : null}</figure>)}</div> : <div className="empty-state compact">No vehicle photos saved yet.</div>}</section> : null}
 
-        {!creating && detailTab === 'service' ? <section className="vehicle-service-workspace"><header className="service-workspace-header"><div><span>Service</span><strong>Open work and monthly inspection</strong></div>{!isArchived(draft) ? <div className="maintenance-quick-actions"><button type="button" className="text-command" disabled={saving} onClick={completeMonthlyInspection}>Inspection done</button><button type="button" className="secondary-command compact" onClick={() => setServiceDraft(current => current ? null : emptyService(draft))}><Wrench size={14} /> Add service</button></div> : null}</header>
-          {serviceDraft ? <section className="payment-action-sheet"><div className="form-grid compact-action-form"><label>Service type<select value={serviceDraft.type || 'Repair job'} onChange={event => setServiceDraft({ ...serviceDraft, type: event.target.value })}><option>Repair job</option><option>Monthly inspection / oil change</option><option>Tires / brakes</option><option>Warning light</option><option>Body / damage</option><option>Other service</option></select></label><label>Due date<input type="date" value={serviceDraft.due || ''} onChange={event => setServiceDraft({ ...serviceDraft, due: event.target.value })} /></label><label className="span-2">Needed service<input value={serviceDraft.issue || ''} onChange={event => setServiceDraft({ ...serviceDraft, issue: event.target.value })} /></label><label className="span-2">Mechanic / staff notes<textarea rows={3} value={serviceDraft.notes || ''} onChange={event => setServiceDraft({ ...serviceDraft, notes: event.target.value })} /></label></div><button type="button" className="primary-command full-command" disabled={saving || !serviceDraft.issue?.trim()} onClick={scheduleService}>{saving ? 'Saving...' : 'Save service'}</button></section> : null}
-          <section className="service-job-section"><header><strong>Open service</strong><span>{openJobs.length}</span></header>{openJobs.length ? <div className="service-job-list">{openJobs.map(job => <article key={job.id}><span className={`status-line ${(job.due || job.nextDue || '') <= todayKey() ? 'warn' : 'neutral'}`} /><div><strong>{job.issue || job.type || 'Service'}</strong><small>{`Due ${shortDate(job.due || job.nextDue)} · ${job.status || 'Scheduled'}`}{job.notes ? ` · ${job.notes}` : ''}</small></div><button type="button" className="text-command" disabled={saving} onClick={() => markDone(job)}>Done</button></article>)}</div> : <div className="empty-state compact">No open service is waiting.</div>}</section>
-          <section className="service-job-section completed"><header><strong>Service history</strong><span>{completedJobs.length}</span></header>{completedJobs.length ? <div className="service-job-list">{completedJobs.map(job => <article key={job.id}><span className="status-line good" /><div><strong>{job.issue || job.type || 'Service'}</strong><small>{`Done ${dateTime(job.fixedAt || job.completedAt)}${job.mechanicSignoff ? ` · ${job.mechanicSignoff}` : ''}`}{job.notes ? ` · ${job.notes}` : ''}</small></div></article>)}</div> : <div className="empty-state compact">Completed service will appear here.</div>}</section>
+        {!creating && detailTab === 'service' ? <Suspense fallback={<div className="workspace-loading"><span /><strong>Opening service...</strong></div>}><FleetServicePanel vehicle={draft} jobs={selectedJobs} archived={isArchived(draft)} onRefresh={() => refresh(undefined, true)} onNotice={setNotice} onError={setError} /></Suspense> : null}
+
+        {!creating && detailTab === 'edit' && canManage && !isArchived(draft) ? <section className="fleet-state-editor"><header><div><span>Fleet availability</span><strong>Online, in lot, prep, or service</strong></div><Globe2 size={19} /></header>{draft.currentCustomer || draft.activeRentalFileId ? <div className="inline-alert"><strong>{draft.currentCustomer || 'Active renter'} is assigned.</strong> Use the Renter tab to return or reassign it without losing customer history.</div> : <><label>Status<select value={fleetState} onChange={event => setFleetState(event.target.value as FleetState)}><option value="online">Online and available</option><option value="offline">Offline / in lot</option><option value="ready">Ready / in lot</option><option value="prep">Prep</option><option value="service">Service</option><option value="returned">Returned</option></select></label><small className="fleet-state-effect">Online publishes this car. Every other state immediately removes it from the public website.</small><button type="button" className="secondary-command" disabled={saving || String(draft.status || '').toLowerCase() === fleetState} onClick={saveFleetState}>{saving ? 'Updating...' : 'Update fleet state'}</button></>}</section> : null}
+
+        {!creating && detailTab === 'renter' ? <section className="assignment-editor"><header><div><span>Current renter</span><strong>{draft.currentCustomer || 'No customer assigned'}</strong></div><UserRoundPlus size={19} /></header>
+          {draft.currentCustomer ? <><div className="assignment-current"><CarFront size={18} /><span><strong>{draft.currentCustomer}</strong><small>{draft.activeRentalFileId ? 'Return it to the lot or reassign it here.' : 'Open the customer file to resolve this legacy assignment.'}</small></span></div><div className="context-actions">{draft.activeRentalFileId ? <button type="button" className="primary-command compact" onClick={() => setReturnOpen(value => !value)}><RotateCcw size={15} /> Return to lot</button> : null}<button type="button" className="text-command" onClick={() => onNavigate('customers')}>Open customer file</button>{draft.activeRentalFileId ? <button type="button" className="text-command" onClick={() => onOpenRental(draft.activeRentalFileId || '')}>Open Rental File</button> : null}</div></> : null}
+          {returnOpen && draft.activeRentalFileId ? <form className="fleet-return-form" onSubmit={submitReturn}><div className="form-grid"><label>Return date<input type="date" value={returnDraft.endDate} onChange={event => setReturnDraft({ ...returnDraft, endDate: event.target.value })} required /></label><label>Ending mileage<input type="number" min="0" step="1" value={returnDraft.endingMileage} onChange={event => setReturnDraft({ ...returnDraft, endingMileage: event.target.value })} required /></label><label>Vehicle goes to<select value={returnDraft.vehicleStatus} onChange={event => setReturnDraft({ ...returnDraft, vehicleStatus: event.target.value as 'Ready' | 'Prep' | 'Service' })}><option>Ready</option><option>Prep</option><option>Service</option></select></label><label className="span-2">Return reason and condition<textarea rows={3} value={returnDraft.reason} onChange={event => setReturnDraft({ ...returnDraft, reason: event.target.value })} required /></label></div><label className="sensitive-confirmation"><input type="checkbox" checked={returnConfirmed} onChange={event => setReturnConfirmed(event.target.checked)} /><span><strong>I confirm the vehicle is physically back.</strong><small>This ends the rental, stops its active schedule, moves the customer to History, and returns the car to Fleet.</small></span></label><button className="danger-command" disabled={saving || !returnConfirmed}>{saving ? 'Completing return...' : 'Complete return'}</button></form> : null}
+          {canManage && !isArchived(draft) ? <div className={draft.currentCustomer ? 'reassignment-controls' : ''}><div className="form-grid"><label>Exact customer<select value={assignmentCustomerId} onChange={event => { setAssignmentCustomerId(event.target.value); setAssignmentConfirmed(false); }}><option value="">Choose customer</option>{customers.filter(customer => !isHistoryCustomer(customer)).map(customer => <option key={customer.id} value={customer.id}>{[customer.name, customer.vehicle ? `Current: ${customer.vehicle}` : 'No vehicle', customer.phone || customer.email].filter(Boolean).join(' | ')}</option>)}</select></label><label>Reason<input value={assignmentReason} onChange={event => setAssignmentReason(event.target.value)} /></label></div><label className="sensitive-confirmation"><input type="checkbox" checked={assignmentConfirmed} onChange={event => setAssignmentConfirmed(event.target.checked)} /><span><strong>I confirmed the customer and exact vehicle.</strong><small>{draft.currentCustomer ? `Reassignment ends ${draft.currentCustomer}'s current vehicle contract and preserves it in History.` : 'A swap updates the connected Rental File, payments, and history.'}</small></span></label><button type="button" className="secondary-command" disabled={saving || !assignmentConfirmed || !assignmentCustomerId} onClick={assignVehicle}>{saving ? 'Saving assignment...' : draft.currentCustomer ? 'Reassign vehicle' : 'Assign vehicle'}</button></div> : !draft.currentCustomer ? <div className="empty-state compact">No renter is assigned.</div> : null}
         </section> : null}
-
-        {!creating && detailTab === 'edit' && canManage && !isArchived(draft) ? <section className="fleet-state-editor"><header><div><span>Fleet availability</span><strong>Online, in lot, prep, or service</strong></div><Globe2 size={19} /></header>{draft.currentCustomer || draft.activeRentalFileId ? <div className="inline-alert"><strong>{draft.currentCustomer || 'Active renter'} is assigned.</strong> Complete the Rental File return before changing availability.</div> : <><label>Status<select value={fleetState} onChange={event => { setFleetState(event.target.value as FleetState); setStateConfirmed(false); }}><option value="online">Online and available</option><option value="offline">Offline / in lot</option><option value="ready">Ready / in lot</option><option value="prep">Prep</option><option value="service">Service</option><option value="returned">Returned</option></select></label><label className="sensitive-confirmation"><input type="checkbox" checked={stateConfirmed} onChange={event => setStateConfirmed(event.target.checked)} /><span><strong>I confirmed this exact vehicle and state.</strong><small>Online publishes its linked listing. Every other state removes it from public inventory.</small></span></label><button type="button" className="secondary-command" disabled={saving || !stateConfirmed} onClick={saveFleetState}>{saving ? 'Updating...' : 'Update fleet state'}</button></>}</section> : null}
-
-        {!creating && detailTab === 'renter' ? <section className="assignment-editor"><header><div><span>Current renter</span><strong>{draft.currentCustomer || 'No customer assigned'}</strong></div><UserRoundPlus size={19} /></header>{draft.currentCustomer ? <><div className="assignment-current"><CarFront size={18} /><span><strong>{draft.currentCustomer}</strong><small>Use the Rental File to complete a return before reassignment.</small></span></div><div className="context-actions">{draft.activeRentalFileId ? <button type="button" className="primary-command compact" onClick={() => onOpenRental(draft.activeRentalFileId || '')}><RotateCcw size={15} /> Complete return</button> : null}<button type="button" className="text-command" onClick={() => onNavigate('customers')}>Open customer file</button></div></> : canManage && !isArchived(draft) ? <><label>Exact customer<select value={assignmentCustomerId} onChange={event => { setAssignmentCustomerId(event.target.value); setAssignmentConfirmed(false); }}><option value="">Choose customer</option>{customers.filter(customer => !isHistoryCustomer(customer)).map(customer => <option key={customer.id} value={customer.id}>{[customer.name, customer.vehicle ? `Current: ${customer.vehicle}` : 'No vehicle', customer.phone || customer.email].filter(Boolean).join(' | ')}</option>)}</select></label><label>Reason<input value={assignmentReason} onChange={event => setAssignmentReason(event.target.value)} /></label><label className="sensitive-confirmation"><input type="checkbox" checked={assignmentConfirmed} onChange={event => setAssignmentConfirmed(event.target.checked)} /><span><strong>I confirmed the customer and exact vehicle.</strong><small>A swap updates the connected Rental File, payments, and history.</small></span></label><button type="button" className="secondary-command" disabled={saving || !assignmentConfirmed || !assignmentCustomerId} onClick={assignVehicle}>{saving ? 'Assigning...' : 'Assign vehicle'}</button></> : <div className="empty-state compact">No renter is assigned.</div>}</section> : null}
 
         {!creating && detailTab === 'history' ? <><section className="service-job-section"><header><strong>Maintenance history</strong><span>{completedJobs.length}</span></header>{completedJobs.length ? <div className="service-job-list">{completedJobs.map(job => <article key={job.id}><span className="status-line good" /><div><strong>{job.issue || job.type || 'Service'}</strong><small>{`Done ${dateTime(job.fixedAt || job.completedAt)}${job.mechanicSignoff ? ` · ${job.mechanicSignoff}` : ''}`}</small></div></article>)}</div> : <div className="empty-state compact">No completed maintenance is saved yet.</div>}</section>{canManage && !isArchived(draft) ? <section className="assignment-editor"><header><div><span>Vehicle history</span><strong>Archive, never erase</strong></div><Trash2 size={19} /></header><label className="sensitive-confirmation"><input type="checkbox" checked={archiveConfirmed} onChange={event => setArchiveConfirmed(event.target.checked)} /><span><strong>Move this vehicle to History.</strong><small>The car must be unassigned. Its maintenance, assignment, and audit records remain saved.</small></span></label><button type="button" className="danger-command" disabled={saving || !archiveConfirmed} onClick={archive}>Archive vehicle</button></section> : null}</> : null}
       </div>

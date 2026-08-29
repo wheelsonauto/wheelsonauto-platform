@@ -121,6 +121,9 @@ export type VehicleRecord = {
   onlineListingId?: string;
   publishedOnline?: boolean;
   onlineAvailability?: string;
+  inspectionRecurrence?: 'one_time' | 'recurring';
+  inspectionIntervalValue?: number;
+  inspectionIntervalUnit?: 'days' | 'weeks' | 'months';
   imageUrls?: string[];
   photoArtifacts?: Array<{
     id: string;
@@ -564,6 +567,9 @@ export type MaintenanceRecord = {
   due?: string;
   nextDue?: string;
   reminder?: string;
+  inspectionRecurrence?: 'one_time' | 'recurring';
+  inspectionIntervalValue?: number;
+  inspectionIntervalUnit?: 'days' | 'weeks' | 'months';
   notes?: string;
   status?: string;
   completedAt?: string;

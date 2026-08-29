@@ -2598,7 +2598,7 @@ class PostgresStateRepository {
     return 'pg-' + Number(row.version || 0) + '-' + String(row.checksum || '').slice(0, 12);
   }
 
-  async refreshIdentityIndex(client, state) {
+  async refreshIdentityIndex(client, state, resourceTypes = []) {
     const conflicts = identityConflicts(state);
     if (conflicts.length) {
       const error = new Error('Database migration blocked by ' + conflicts.length + ' duplicate immutable identity value(s). Resolve the conflicting VIN, plate, portal username, provider subscription ID, verification case ID, or payment ID before enabling PostgreSQL.');
@@ -2606,8 +2606,13 @@ class PostgresStateRepository {
       error.conflicts = conflicts.slice(0, 20);
       throw error;
     }
-    await client.query('DELETE FROM woa_identity_index WHERE organization_id = $1', [this.organizationId]);
-    const entries = identityEntries(state);
+    const selectedTypes = [...new Set((Array.isArray(resourceTypes) ? resourceTypes : []).map(value => String(value || '').trim()).filter(Boolean))];
+    if (selectedTypes.length) {
+      await client.query('DELETE FROM woa_identity_index WHERE organization_id = $1 AND resource_type = ANY($2::text[])', [this.organizationId, selectedTypes]);
+    } else {
+      await client.query('DELETE FROM woa_identity_index WHERE organization_id = $1', [this.organizationId]);
+    }
+    const entries = identityEntries(state).filter(entry => !selectedTypes.length || selectedTypes.includes(entry.resourceType));
     for (const entry of entries) {
       await client.query(`INSERT INTO woa_identity_index (organization_id, kind, normalized_value, resource_type, resource_id)
         VALUES ($1, $2, $3, $4, $5)`, [this.organizationId, entry.kind, entry.normalizedValue, entry.resourceType, entry.resourceId]);
@@ -2882,6 +2887,7 @@ class PostgresStateRepository {
       const merged = options.mergeState ? await options.mergeState(clone(previous)) : incomingState;
       let next = this.repair(clone(merged));
       const fastMessagingWrite = options.fastMessagingWrite === true;
+      const projectionScope = options.projectionScope && typeof options.projectionScope === 'object' ? options.projectionScope : null;
       if (fastMessagingWrite) {
         const scopedNext = clone(previous);
         FAST_MESSAGING_STATE_KEYS.forEach(key => {
@@ -2901,6 +2907,17 @@ class PostgresStateRepository {
       if (fastMessagingWrite) {
         await this.syncCriticalResourceIndex(client, next, ['message']);
         await this.syncNormalizedResources(client, next, nextVersion, ['message']);
+      } else if (projectionScope) {
+        const resourceTypes = [...new Set((Array.isArray(projectionScope.resourceTypes) ? projectionScope.resourceTypes : []).map(value => String(value || '').trim()).filter(Boolean))];
+        const identityResourceTypes = [...new Set((Array.isArray(projectionScope.identityResourceTypes) ? projectionScope.identityResourceTypes : []).map(value => String(value || '').trim()).filter(Boolean))];
+        if (identityResourceTypes.length) await this.refreshIdentityIndex(client, next, identityResourceTypes);
+        if (projectionScope.syncDocuments === true) await this.syncDocumentMetadata(client, next);
+        if (resourceTypes.length) {
+          await this.syncCriticalResourceIndex(client, next, resourceTypes);
+          await this.syncNormalizedResources(client, next, nextVersion, resourceTypes);
+        }
+        if (projectionScope.syncRentalRelations === true) await this.syncRentalRelations(client, next, nextVersion);
+        if (projectionScope.syncActiveAssignments === true) await this.syncActiveAssignmentIndex(client, next);
       } else {
         await this.refreshIdentityIndex(client, next);
         await this.syncDocumentMetadata(client, next);
