@@ -431,7 +431,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260829-care-closeout-394';
+const ASSET_VERSION = 'platform-20260829-schedule-integrity-395';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -5124,7 +5124,9 @@ function dashboardPriorityFeed(data = {}, dateKeyValue = localDateKey()) {
   const maintenanceAppointments = (data.maintenance || []).filter(row => {
     if (!dashboardMaintenanceVisible(data, row)) return false;
     if (/complete|closed|fixed|done|cancel/i.test(String(row.status || ''))) return false;
-    return dashboardRecordDate(row, ['appointmentDate', 'scheduledDate', 'due', 'nextDue', 'date']) === dateKeyValue;
+    const date = dashboardRecordDate(row, ['appointmentDate', 'scheduledDate', 'due', 'nextDue', 'date']);
+    const distance = dashboardDayDistance(dateKeyValue, date);
+    return !!date && distance >= 0 && distance <= 7;
   }).map(row => ({
     id: row.id || '', customer: row.customer || 'Customer', vehicle: row.vehicle || 'Vehicle service', vehicleId: row.vehicleId || '',
     date: dashboardRecordDate(row, ['appointmentDate', 'scheduledDate', 'due', 'nextDue', 'date']),
@@ -6855,7 +6857,18 @@ function prepareStarServiceAppointment(data, plan, context, payload = {}) {
   if (!plan || plan.actionType !== 'maintenance_schedule') return plan;
   const body = String(payload.body || payload.message || payload.text || '');
   const assessment = mechanicalMessageAssessment(body);
-  if (!assessment.mechanical || !assessment.scheduleRequested && !assessment.urgent) return plan;
+  const timingConfirmed = /\btoday\b|\btomorrow\b|\bmonday\b|\btuesday\b|\bwednesday\b|\bthursday\b|\bfriday\b|\bsaturday\b|\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b|\b\d{1,2}\/\d{1,2}\b|\b\d{4}-\d{2}-\d{2}\b/i.test(body);
+  const priorMechanical = (context.latestMessages || []).find(row => String(row.id || '') !== String(payload.messageId || '') && mechanicalMessageAssessment(row.body || '').mechanical);
+  const schedulingContinuation = timingConfirmed && !!priorMechanical && !customerVisitAssessment(body).customerService;
+  if ((!assessment.mechanical && !schedulingContinuation) || (!assessment.scheduleRequested && !assessment.urgent && !schedulingContinuation)) {
+    plan.actionType = 'reply';
+    plan.canAutoSend = true;
+    plan.approvalRequired = false;
+    plan.needsHuman = false;
+    plan.reply = 'Hi ' + aiCustomerFirstName(plan.customer || context.customerName) + ', tell me the day and time you prefer for service. WheelsonAuto is open Monday through Saturday from 11:00 AM to 5:00 PM, and I will confirm it after the appointment is saved.';
+    plan.summary = 'Service appointment details needed for ' + (plan.customer || context.customerName || 'customer');
+    return plan;
+  }
   data.maintenance = Array.isArray(data.maintenance) ? data.maintenance : [];
   const sourceMessageId = String(payload.messageId || payload.externalId || '').trim();
   let service = sourceMessageId && data.maintenance.find(row => String(row.sourceMessageId || '') === sourceMessageId);
@@ -6876,7 +6889,7 @@ function prepareStarServiceAppointment(data, plan, context, payload = {}) {
       plate: fields.plate || '',
       tracker: fields.tracker || '',
       type: assessment.urgent ? 'Urgent mechanical concern' : 'Customer-requested service',
-      issue: body.slice(0, 600),
+      issue: (assessment.mechanical ? body : String(priorMechanical && priorMechanical.body || body)).slice(0, 600),
       due: date,
       nextDue: date,
       appointmentTime: time,
@@ -18382,6 +18395,12 @@ function cleanMaintenancePayload(payload, existing, vehicle, user, customerName 
     error.statusCode = 400;
     throw error;
   }
+  const appointmentTime = cleanResourceText(source.appointmentTime === undefined ? existing && existing.appointmentTime : source.appointmentTime, 40);
+  if (appointmentTime && !/^(?:[01]?\d|2[0-3]):[0-5]\d(?:\s*(?:AM|PM))?$/i.test(appointmentTime)) {
+    const error = new Error('Appointment time must use a valid hour and minute.');
+    error.statusCode = 400;
+    throw error;
+  }
   const tag = cleanResourceText(vehicle.plate || vehicle.stock || '', 80);
   const interval = maintenanceInspectionInterval({
     inspectionIntervalValue: source.inspectionIntervalValue === undefined ? existing && existing.inspectionIntervalValue : source.inspectionIntervalValue,
@@ -18403,6 +18422,7 @@ function cleanMaintenancePayload(payload, existing, vehicle, user, customerName 
     cost: cleanMaintenanceCost(source.cost, existing, user),
     due,
     nextDue: due,
+    appointmentTime,
     reminder: cleanResourceText(source.reminder || existing && existing.reminder || 'Remind customer when due', 120),
     inspectionRecurrence: maintenanceInspectionRecurrence({ inspectionRecurrence: source.inspectionRecurrence === undefined ? existing && existing.inspectionRecurrence : source.inspectionRecurrence }),
     inspectionIntervalValue: interval.value,

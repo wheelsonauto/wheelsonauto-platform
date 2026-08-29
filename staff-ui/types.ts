@@ -570,6 +570,7 @@ export type MaintenanceRecord = {
   cost?: number;
   due?: string;
   nextDue?: string;
+  appointmentTime?: string;
   reminder?: string;
   inspectionRecurrence?: 'one_time' | 'recurring';
   inspectionIntervalValue?: number;

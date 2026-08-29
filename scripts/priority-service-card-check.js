@@ -30,6 +30,7 @@ const dashboardData = {
   ],
   maintenance: [
     { id: 'scheduled', customer: 'Scheduled Customer', status: 'Appointment scheduled', due: today },
+    { id: 'scheduled-upcoming', customer: 'Upcoming Customer', status: 'Appointment scheduled', due: shiftDay(2), appointmentTime: '10:00' },
     { id: 'complete', customer: 'Complete Customer', status: 'Completed', due: today },
     { id: 'needed', customer: 'Service Customer', status: 'Service needed', due: today },
     { id: 'urgent', customer: 'Urgent Customer', status: 'Urgent - staff contact now', due: today },
@@ -71,6 +72,7 @@ assert(feed.transactions.some(row => row.id === 'old-payment'), 'Historical tran
 assert.strictEqual(feed.transactions.find(row => row.id === 'legacy-incomplete').vehicle, '', 'Historical evidence must never borrow a customer’s current vehicle.');
 assert.strictEqual(feed.transactions.find(row => row.id === 'legacy-incomplete').cardLast4, '', 'Historical evidence must never borrow a customer’s current card.');
 assert(feed.maintenanceAppointments.some(row => row.id === 'scheduled'), 'Today’s scheduled service must appear in appointments.');
+assert(feed.maintenanceAppointments.some(row => row.id === 'scheduled-upcoming' && row.time === '10:00'), 'Upcoming service and its saved time must appear in the seven-day schedule.');
 assert(feed.overdueService.some(row => row.id === 'overdue-service') && feed.overdueService.some(row => row.id === 'late-inspection'), 'Prior-day incomplete service and inspections must appear as overdue.');
 assert(!feed.overdueService.some(row => row.id === 'ancient-bad-date' || row.id === 'completed-service'), 'Completed or implausibly stale service rows must not pollute the dashboard.');
 assert.strictEqual(feed.overdueBalances[0].id, 'late-toll', 'The dues panel must contain tolls, violations, tickets, fees, and other non-recurring balances only.');
@@ -95,6 +97,23 @@ assert.strictEqual(serviceData.maintenance.length, 1);
 assert.notStrictEqual(serviceData.maintenance[0].due, today, 'Nonurgent service must not book same-day.');
 assert.strictEqual(serviceData.maintenance[0].status, 'Appointment scheduled');
 assert.strictEqual(servicePlan.related.maintenanceId, serviceData.maintenance[0].id);
+
+const continuationData = { maintenance: [] };
+const continuationPlan = server.prepareStarServiceAppointment(continuationData, {
+  actionType: 'maintenance_schedule', customer: 'Follow-up Customer', related: {}, reply: 'Monday works.'
+}, {
+  customerName: 'Follow-up Customer', organizationId: 'org-wheelsonauto', vehicleName: '2019 Test Car',
+  latestMessages: [{ id: 'prior-mechanical', body: 'The right side is making a knocking noise. Can I bring the car in?' }]
+}, { messageId: 'follow-up-time', body: 'Monday 10:00 AM works.' });
+assert.strictEqual(continuationData.maintenance.length, 1, 'A dated follow-up to a mechanical thread must create the appointment before Star confirms it.');
+assert.strictEqual(continuationData.maintenance[0].appointmentTime, '11:30 AM', 'Appointments outside business hours must use the safe default time.');
+assert.strictEqual(continuationPlan.related.maintenanceId, continuationData.maintenance[0].id);
+
+const unpersistedPlan = server.prepareStarServiceAppointment({ maintenance: [] }, {
+  actionType: 'maintenance_schedule', customer: 'Unclear Customer', related: {}, reply: 'You are scheduled.'
+}, { customerName: 'Unclear Customer', latestMessages: [] }, { messageId: 'unclear', body: 'That works.' });
+assert.strictEqual(unpersistedPlan.actionType, 'reply');
+assert(!/I scheduled you/i.test(unpersistedPlan.reply), 'Star must not promise an appointment without a persisted service record.');
 
 const customerCareData = { tasks: [], maintenance: [] };
 const customerCarePlan = server.prepareStarCustomerCare(customerCareData, {
