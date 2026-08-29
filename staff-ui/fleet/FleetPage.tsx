@@ -55,7 +55,7 @@ function belongsToVehicle(job: MaintenanceRecord, vehicle: VehicleRecord) {
 function serviceDue(vehicle: VehicleRecord, jobs: MaintenanceRecord[]) {
   if (/service|repair/i.test(vehicle.status || '')) return true;
   return jobs.some(job => belongsToVehicle(job, vehicle) && !isClosed(job) && (
-    !!(job.due || job.nextDue) && String(job.due || job.nextDue) <= todayKey()
+    (!!vehicle.currentCustomer || !!vehicle.activeRentalFileId || !/inspection|monthly|oil change|scheduled maintenance|routine maintenance/i.test([job.type, job.issue].join(' '))) && !!(job.due || job.nextDue) && String(job.due || job.nextDue) <= todayKey()
     || /customer requested|in progress|waiting for part|unsafe|needs attention/i.test([job.status, job.inspectionCondition].join(' '))
   ));
 }

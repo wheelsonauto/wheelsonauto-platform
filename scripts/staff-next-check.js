@@ -43,7 +43,7 @@ assert(api.includes("loadCachedJson<DashboardPriorityFeed>('/api/dashboard/prior
 assert(dashboard.includes('Today’s customers') && dashboard.includes('priority.todayCustomers') && dashboard.includes("todayStatusCounts['Failed twice']"), 'Dashboard must show every customer due today with live payment status.');
 assert(dashboard.includes('Transactions') && dashboard.includes('priority.transactions') && dashboard.includes('Search name, vehicle, card, amount') && dashboard.includes('card ending'), 'Dashboard must provide searchable current and historical transactions with card evidence.');
 assert(dashboard.includes('Today’s appointments') && dashboard.includes('priority.maintenanceAppointments') && dashboard.includes('priority.pickups') && dashboard.includes('priority.returns'), 'Dashboard must consolidate today’s pickups, returns, inspections, and services.');
-assert(dashboard.includes('Overdue maintenance &amp; service') && dashboard.includes('priority.overdueService') && dashboard.includes('Past-due customer balances') && dashboard.includes('priority.overdueBalances'), 'Dashboard must separate overdue fleet work from ordered customer balances.');
+assert(dashboard.includes('Overdue maintenance &amp; service') && dashboard.includes('priority.overdueService') && dashboard.includes('Tolls, violations &amp; dues') && dashboard.includes('priority.overdueBalances'), 'Dashboard must separate overdue fleet work from tolls, violations, and other customer dues.');
 assert(dashboard.includes('dashboard-panel-switch') && dashboard.includes('panelSwipe') && css.includes('.dashboard-focus-panel.mobile-hidden'), 'The dashboard must remain compact by using tappable and swipeable focused panels on phones.');
 assert(server.includes('function dashboardPriorityFeed(data = {}, dateKeyValue = localDateKey())') && server.includes('/complete|closed|fixed|done|cancel/') && server.includes('/scheduled|appointment|confirmed/'), 'Backend dashboard feed must exclude scheduled or completed service work.');
 
@@ -136,7 +136,7 @@ const totalJs = jsFiles.reduce((sum, file) => sum + fs.statSync(path.join(dist, 
 assert(chunkFiles.length >= 9, 'Expected lazy workspace chunks were not generated.');
 assert(fs.statSync(entryPath).size < 230 * 1024, 'React staff entry exceeds the 230 KB uncompressed shell budget.');
 assert(chunkFiles.every(file => fs.statSync(path.join(dist, file)).size < 30 * 1024), 'A lazy workspace exceeds the 30 KB uncompressed module budget.');
-assert(totalJs < 425 * 1024, 'Total React staff JavaScript exceeds the 425 KB uncompressed account, lifecycle, and scheduled-payments product budget.');
+assert(totalJs < 428 * 1024, 'Total React staff JavaScript exceeds the 428 KB uncompressed account, lifecycle, collection-policy, and scheduled-payments product budget.');
 assert(css.includes('.staff-app-shell.theme-light') && css.includes('.theme-toggle-row'), 'The staff light appearance is missing complete shell and toggle styling.');
 assert(css.includes('.theme-light .resource-workspace:not(.has-detail) .operations-index{background:#f8f9fa}'), 'The wide resource list must not retain its dark background in light appearance.');
 assert(fs.statSync(cssPath).size < 72 * 1024, 'React staff CSS exceeds the 72 KB uncompressed daily-operations, fleet, messaging, notification, and dual-theme budget.');

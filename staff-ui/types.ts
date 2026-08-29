@@ -291,6 +291,14 @@ export type RecurringPaymentRecord = {
   autopayComplete?: boolean;
   autopayBlockedReason?: string;
   autopayNextAttemptAt?: string;
+  collectionOverrideUntil?: string;
+  collectionOverrideReason?: string;
+  collectionSuppressLateFee?: boolean;
+  collectionSuppressTow?: boolean;
+  collectionStatus?: string;
+  collectionRemainingAmount?: number;
+  collectionPaidPercent?: number;
+  collectionDeadlineAt?: string;
   cardSetupUrl?: string;
   notes?: string;
   createdAt?: string;
@@ -328,24 +336,28 @@ export type DashboardServiceItem = {
 
 export type DashboardBalanceItem = {
   id: string;
+  customerId?: string;
   customer: string;
   vehicle?: string;
   vehicleId?: string;
   amount: number;
   due: string;
   daysLate: number;
+  daysUntilDue?: number;
   status: string;
   reason: string;
 };
 
 export type DashboardDueItem = {
   id: string;
+  customerId?: string;
   customer: string;
   vehicle?: string;
   vehicleId?: string;
   amount: number;
   due: string;
   daysLate: number;
+  daysUntilDue?: number;
   status: string;
   kind: string;
 };

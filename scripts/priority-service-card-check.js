@@ -68,7 +68,8 @@ assert.strictEqual(feed.transactions.find(row => row.id === 'legacy-incomplete')
 assert(feed.maintenanceAppointments.some(row => row.id === 'scheduled'), 'Today’s scheduled service must appear in appointments.');
 assert(feed.overdueService.some(row => row.id === 'overdue-service') && feed.overdueService.some(row => row.id === 'late-inspection'), 'Prior-day incomplete service and inspections must appear as overdue.');
 assert(!feed.overdueService.some(row => row.id === 'ancient-bad-date' || row.id === 'completed-service'), 'Completed or implausibly stale service rows must not pollute the dashboard.');
-assert.strictEqual(feed.overdueBalances[0].id, 'past-due');
+assert.strictEqual(feed.overdueBalances[0].id, 'late-toll', 'The dues panel must contain tolls, violations, tickets, fees, and other non-recurring balances only.');
+assert(!feed.overdueBalances.some(row => row.id === 'past-due'), 'Recurring weekly balances belong in Today billing, not the tolls and dues panel.');
 assert(feed.overdueBalances.some(row => row.id === 'late-toll' && /toll/i.test(row.reason)), 'Tolls and violations must appear in customer past-due balances.');
 
 const serviceData = { maintenance: [] };

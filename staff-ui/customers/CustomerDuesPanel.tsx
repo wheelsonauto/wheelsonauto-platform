@@ -5,7 +5,8 @@ import type { ClaimRecord, CustomerRecord, PaymentRecord } from '../types';
 import { dateTime, money, shortDate } from '../ui';
 
 type DueDraft = { type: string; amount: string; due: string; incidentDate: string; reference: string; notes: string; proof: File | null; confirmed: boolean };
-const newDueDraft = (): DueDraft => ({ type: 'Toll', amount: '', due: '', incidentDate: '', reference: '', notes: '', proof: null, confirmed: false });
+const defaultDueDate = () => { const date = new Date(); date.setDate(date.getDate() + 14); return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 10); };
+const newDueDraft = (): DueDraft => ({ type: 'Toll', amount: '', due: defaultDueDate(), incidentDate: '', reference: '', notes: '', proof: null, confirmed: false });
 
 async function dueProof(file: File) {
   const dataUrl = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result || '')); reader.onerror = () => reject(new Error('The proof file could not be read.')); reader.readAsDataURL(file); });

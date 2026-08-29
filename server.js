@@ -424,7 +424,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260828-cadence-one-time-payments-382';
+const ASSET_VERSION = 'platform-20260828-dashboard-billing-policy-384';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -4658,17 +4658,25 @@ function recordDateKey(value) {
   const raw = String(value || '').trim();
   if (!raw) return '';
   if (/today/i.test(raw)) return localDateKey();
-  const iso = raw.match(/\d{4}-\d{2}-\d{2}/);
-  if (iso) return iso[0];
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return validCalendarDateKey(raw);
+  const explicitBusinessDate = raw.match(/^(\d{4}-\d{2}-\d{2})(?:\s|,)/);
+  if (explicitBusinessDate) return explicitBusinessDate[1];
   const parsed = new Date(raw);
-  return Number.isNaN(parsed.getTime()) ? '' : dateKey(parsed);
+  return Number.isNaN(parsed.getTime()) ? '' : localDateKey(parsed);
+}
+function paymentEventTimestamp(payment = {}) {
+  return payment.paidAt || payment.succeededAt || payment.completedAt || payment.failedAt || payment.createdAt || payment.updatedAt || payment.date || '';
+}
+function paymentEventTime(payment = {}) {
+  const parsed = Date.parse(paymentEventTimestamp(payment));
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 function closeoutPaymentPaid(payment = {}) {
   const status = String(payment.status || '').toLowerCase();
   const meta = String([payment.method, payment.type, payment.source, payment.notes, payment.message, payment.error].filter(Boolean).join(' ')).toLowerCase();
   const awaitingVerification = payment.requiresVerification === true || /needs? (admin )?verification|pending (admin )?verification|awaiting (admin )?verification|under review/.test(status);
   const paidOutside = status.includes('paid outside app') && !status.includes('rejected');
-  const paid = status === 'paid' || paidOutside;
+  const paid = /^paid\b/.test(status) || /succeed|success|captur|^complete(?:d)?\b/.test(status) || paidOutside;
   return !awaitingVerification && paid && !/(refund|void|chargeback|dispute|failed|not found|rejected)/.test(meta + ' ' + status) && Number(payment.amount || 0) > 0;
 }
 function closeoutPaymentOutsideApp(payment = {}) {
@@ -4826,7 +4834,7 @@ function uniqueCloseoutRecurringMoneyRows(rows = []) {
   });
 }
 function dailyCloseoutMoneyTruth(data = {}, dateKeyValue = localDateKey(), recurringRows = allRecurringRows(data)) {
-  const payments = uniqueCloseoutPayments((data.payments || []).filter(payment => payment.controlledStripePilotTest !== true && recordDateKey(payment.date || payment.createdAt) === dateKeyValue));
+  const payments = uniqueCloseoutPayments((data.payments || []).filter(payment => payment.controlledStripePilotTest !== true && recordDateKey(paymentEventTimestamp(payment)) === dateKeyValue));
   const collectedPayments = payments.filter(closeoutPaymentPaid);
   const expectedRows = uniqueCloseoutRecurringMoneyRows(recurringRows.filter(row => {
     if (!recurringEligibleForToday(row)) return false;
@@ -4938,7 +4946,7 @@ function dashboardTransactionItem(data = {}, payment = {}, recurringRows = allRe
     amount: Number(payment.amount || 0),
     status: payment.status || 'Recorded',
     method: payment.method || payment.paymentProvider || payment.provider || '',
-    date: payment.createdAt || payment.date || '',
+    date: paymentEventTimestamp(payment),
     reason: payment.reason || payment.paymentType || payment.source || '',
     cardLast4: dashboardPaymentCardLast4(payment)
   };
@@ -4957,6 +4965,33 @@ function dashboardTodayPaymentStatus(data = {}, recurring = {}, dateKeyValue = l
 function dashboardOperationalDueIsReasonable(dueKey = '', dateKeyValue = localDateKey()) {
   const daysLate = dashboardDayDistance(dueKey, dateKeyValue);
   return !!dueKey && daysLate >= 0 && daysLate <= 730;
+}
+function dashboardMaintenanceVehicle(data = {}, row = {}) {
+  const vehicleId = String(row.vehicleId || '').trim();
+  const vin = normKey(row.vin);
+  const name = normKey(row.vehicle || row.vehicleName);
+  return (data.vehicles || []).find(vehicle => vehicleId && String(vehicle.id || '') === vehicleId)
+    || (data.vehicles || []).find(vehicle => vin && normKey(vehicle.vin) === vin)
+    || (data.vehicles || []).find(vehicle => name && normKey(vehicleNameFromParts(vehicle)) === name)
+    || null;
+}
+function dashboardMaintenanceVehicleIsRented(data = {}, row = {}) {
+  const vehicle = dashboardMaintenanceVehicle(data, row);
+  if (!vehicle) return true;
+  if (String(vehicle.currentCustomer || '').trim() || String(vehicle.activeRentalFileId || '').trim()) return true;
+  return (data.rentalFiles || []).some(file => rentalFiles.isActiveRentalFile(file) && String(file.vehicleId || '') === String(vehicle.id || ''));
+}
+function dashboardRoutineMaintenance(row = {}) {
+  return /inspection|monthly|oil change|scheduled maintenance|routine maintenance/i.test(String([row.type, row.issue, row.title].filter(Boolean).join(' ')));
+}
+function dashboardMaintenanceVisible(data = {}, row = {}) {
+  return !dashboardRoutineMaintenance(row) || dashboardMaintenanceVehicleIsRented(data, row);
+}
+function customerDueDateKey(row = {}) {
+  const explicit = dashboardRecordDate(row, ['due', 'deadline']);
+  if (explicit) return explicit;
+  const created = dashboardRecordDate(row, ['createdAt', 'date']) || localDateKey();
+  return addDaysToDateKey(created, 14);
 }
 function dashboardPriorityFeed(data = {}, dateKeyValue = localDateKey()) {
   const recurringRows = uniqueOperationalRecurringRows(allRecurringRows(data)).filter(recurringEligibleForToday);
@@ -4993,11 +5028,13 @@ function dashboardPriorityFeed(data = {}, dateKeyValue = localDateKey()) {
     .filter(row => !dashboardPaidForRecurringDue(data, row, recurringDateKey(row)))
     .map(recurringItem)
     .sort((left, right) => right.daysLate - left.daysLate || right.retryCount - left.retryCount);
-  const towCandidates = priorDue
-    .filter(row => row.retryCount >= 2 || row.status === 'Failed twice')
-    .map(row => ({ ...row, status: 'Tow review' }));
+  const towCandidates = recurringRows
+    .map(row => ({ row, state: recurringCollectionState(data, row) }))
+    .filter(item => item.state.towReviewDue)
+    .map(item => ({ ...recurringItem(item.row), amount: item.state.remaining, due: item.state.due, daysLate: Math.max(0, dashboardDayDistance(item.state.due, dateKeyValue)), status: 'Tow review' }));
   const serviceNeeded = (data.maintenance || [])
     .filter(row => {
+      if (!dashboardMaintenanceVisible(data, row)) return false;
       const status = String(row && row.status || '').toLowerCase();
       if (/inspection|monthly/i.test(String([row && row.type, row && row.issue, row && row.title].filter(Boolean).join(' ')))) return false;
       if (/complete|closed|fixed|done|cancel/.test(status)) return false;
@@ -5016,6 +5053,7 @@ function dashboardPriorityFeed(data = {}, dateKeyValue = localDateKey()) {
     }))
     .sort((left, right) => Number(/urgent|unsafe|do not drive/i.test(right.status)) - Number(/urgent|unsafe|do not drive/i.test(left.status)) || String(left.due || '').localeCompare(String(right.due || '')));
   const inspections = (data.maintenance || []).filter(row => {
+    if (!dashboardMaintenanceVisible(data, row)) return false;
     if (!/inspection|monthly/i.test(String([row.type, row.issue, row.title].filter(Boolean).join(' ')))) return false;
     if (/complete|closed|fixed|done|cancel/i.test(String(row.status || ''))) return false;
     const due = dashboardRecordDate(row, ['due', 'nextDue']);
@@ -5032,18 +5070,20 @@ function dashboardPriorityFeed(data = {}, dateKeyValue = localDateKey()) {
   const overdueDues = (data.claims || []).filter(row => {
     if (/paid|closed|resolved|cancel|removed/i.test(String(row.status || ''))) return false;
     const amount = Number(row.remainingAmount != null ? row.remainingAmount : row.amount || 0);
-    const due = dashboardRecordDate(row, ['due', 'deadline', 'createdAt', 'date']);
-    return amount > 0 && !!due && due < dateKeyValue;
+    return amount > 0;
   }).map(row => {
-    const due = dashboardRecordDate(row, ['due', 'deadline', 'createdAt', 'date']);
+    const due = customerDueDateKey(row);
+    const distance = dashboardDayDistance(dateKeyValue, due);
+    const contact = billingCustomerContact(data, row);
     return {
-      id: row.id || '', customer: row.customer || 'Customer', vehicle: row.vehicle || '', vehicleId: row.vehicleId || '',
+      id: row.id || '', customerId: contact.customerId || '', customer: row.customer || 'Customer', vehicle: row.vehicle || '', vehicleId: row.vehicleId || '',
       amount: Number(row.remainingAmount != null ? row.remainingAmount : row.amount || 0), due,
-      daysLate: Math.max(0, dashboardDayDistance(due, dateKeyValue)),
-      status: row.status || 'Past due', kind: row.type || row.issue || 'Toll, violation, or fee'
+      daysLate: Math.max(0, -distance), daysUntilDue: Math.max(0, distance),
+      status: distance < 0 ? 'Past due' : distance === 0 ? 'Due today' : 'Upcoming', kind: row.type || row.issue || 'Toll, violation, or fee'
     };
-  }).sort((left, right) => right.daysLate - left.daysLate);
+  }).sort((left, right) => Number(right.daysLate || 0) - Number(left.daysLate || 0) || String(left.due || '').localeCompare(String(right.due || '')));
   const maintenanceAppointments = (data.maintenance || []).filter(row => {
+    if (!dashboardMaintenanceVisible(data, row)) return false;
     if (/complete|closed|fixed|done|cancel/i.test(String(row.status || ''))) return false;
     return dashboardRecordDate(row, ['appointmentDate', 'scheduledDate', 'due', 'nextDue', 'date']) === dateKeyValue;
   }).map(row => ({
@@ -5053,6 +5093,7 @@ function dashboardPriorityFeed(data = {}, dateKeyValue = localDateKey()) {
     address: row.address || '5150 NJ-42, Blackwood, NJ 08012', method: /inspection|monthly/i.test(String([row.type, row.issue, row.title].filter(Boolean).join(' '))) ? 'Inspection' : 'Service'
   })).sort((left, right) => String(left.time || '').localeCompare(String(right.time || '')));
   const overdueService = (data.maintenance || []).filter(row => {
+    if (!dashboardMaintenanceVisible(data, row)) return false;
     if (/complete|closed|fixed|done|cancel/i.test(String(row.status || ''))) return false;
     const due = dashboardRecordDate(row, ['appointmentDate', 'scheduledDate', 'due', 'nextDue', 'date']);
     return !!due && due < dateKeyValue && dashboardOperationalDueIsReasonable(due, dateKeyValue);
@@ -5088,7 +5129,7 @@ function dashboardPriorityFeed(data = {}, dateKeyValue = localDateKey()) {
     .sort((left, right) => String(left.date + left.time).localeCompare(String(right.date + right.time)));
   const paymentRows = uniqueCloseoutPayments((data.payments || []).filter(payment => payment.controlledStripePilotTest !== true));
   const transactions = paymentRows.map(payment => dashboardTransactionItem(data, payment, recurringRows))
-    .sort((left, right) => Date.parse(right.date || 0) - Date.parse(left.date || 0))
+    .sort((left, right) => paymentEventTime(right) - paymentEventTime(left) || String(right.id || '').localeCompare(String(left.id || '')))
     .slice(0, 2000);
   const transactionsToday = transactions.filter(payment => dashboardRecordDate(payment, ['date']) === dateKeyValue);
   const dailyMoney = dailyCloseoutMoneyTruth(data, dateKeyValue, recurringRows);
@@ -5098,10 +5139,9 @@ function dashboardPriorityFeed(data = {}, dateKeyValue = localDateKey()) {
     due: dateKeyValue,
     status: dashboardTodayPaymentStatus(data, row, dateKeyValue, paymentRows)
   })).sort((left, right) => (todayStatusRank[left.status] ?? 9) - (todayStatusRank[right.status] ?? 9) || String(left.customer).localeCompare(String(right.customer)));
-  const overdueBalances = [
-    ...priorDue.map(row => ({ ...row, due: row.nextRun || '', reason: 'Recurring payment' })),
-    ...overdueDues.map(row => ({ ...row, reason: row.kind || 'Toll, violation, ticket, or fee' }))
-  ].sort((left, right) => Number(right.daysLate || 0) - Number(left.daysLate || 0) || Number(right.amount || 0) - Number(left.amount || 0));
+  const overdueBalances = overdueDues
+    .map(row => ({ ...row, reason: row.kind || 'Toll, violation, ticket, or fee' }))
+    .sort((left, right) => Number(right.daysLate || 0) - Number(left.daysLate || 0) || String(left.due || '').localeCompare(String(right.due || '')));
   const paidToday = transactionsToday.filter(payment => closeoutPaymentPaid(payment));
   const completedToday = [
     ...transactionsToday.filter(closeoutPaymentPaid).map(row => ({ ...row, title: 'Payment completed', detail: [row.customer, moneyText(row.amount), row.reason].filter(Boolean).join(' - '), status: 'Done' })),
@@ -6236,34 +6276,201 @@ async function queueStateChangeNotifications(previous = {}, data = {}, user = {}
   await Promise.all(promises);
   return promises.length;
 }
-function queueCustomerMessage(data, row = {}, template, status, body, tone = 'warn') {
+function queueCustomerMessage(data, row = {}, template, status, body, tone = 'warn', automationKey = '') {
   data.messages = Array.isArray(data.messages) ? data.messages : [];
   const customer = row.customer || row.name || 'Customer';
-  const today = new Date().toLocaleDateString('en-US');
-  const duplicate = data.messages.some(item =>
-    item.customer === customer &&
-    item.template === template &&
-    String(item.date || '').startsWith(today)
-  );
+  const today = localDateKey();
+  const exactKey = String(automationKey || '').trim();
+  const duplicate = data.messages.some(item => exactKey
+    ? String(item.automationKey || '') === exactKey
+    : item.customer === customer && item.template === template && dashboardRecordDate(item, ['createdAt', 'date']) === today);
   if (duplicate) return false;
   data.messages.unshift({
     id: 'msg-auto-' + Date.now() + '-' + Math.random().toString(16).slice(2, 7),
-    date: new Date().toLocaleString('en-US'),
+    date: businessLocaleString(),
     createdAt: new Date().toISOString(),
+    organizationId: row.organizationId || MAIN_ORG_ID,
+    customerAccountId: row.customerAccountId || '',
+    customerId: row.customerId || '',
     customer,
     phone: row.phone || '',
     email: row.email || '',
-    direction: 'Outbound task',
-    channel: 'SMS',
+    direction: 'Outbound',
+    channel: 'Customer portal',
     template,
     subject: template,
-    status,
+    status: 'Delivered in app',
+    deliveryDetail: status || 'Delivered in app',
     tone,
     body,
     recurringPaymentId: row.id || '',
+    automationKey: exactKey,
     source: 'WheelsonAuto automation'
   });
   return true;
+}
+function billingCustomerContact(data = {}, row = {}) {
+  const customerId = String(row.customerId || '').trim();
+  const accountId = String(row.customerAccountId || '').trim();
+  const name = normKey(row.customer || row.name);
+  const customer = (data.customers || []).find(item => customerId && String(item.id || '') === customerId)
+    || (data.customers || []).find(item => accountId && String(item.customerAccountId || '') === accountId)
+    || (data.customers || []).find(item => name && normKey(item.name || item.customer) === name)
+    || {};
+  const account = (data.customerAccounts || []).find(item => accountId && String(item.id || '') === accountId)
+    || (data.customerAccounts || []).find(item => name && normKey(item.name || item.customer) === name)
+    || {};
+  return {
+    ...row,
+    customerId: row.customerId || customer.id || '',
+    customerAccountId: row.customerAccountId || customer.customerAccountId || account.id || '',
+    customer: row.customer || row.name || customer.name || customer.customer || account.name || account.customer || 'Customer',
+    phone: row.phone || customer.phone || account.phone || '',
+    email: row.email || customer.email || account.email || '',
+    organizationId: row.organizationId || customer.organizationId || account.organizationId || MAIN_ORG_ID
+  };
+}
+function queueCustomerBillingNotice(data, row = {}, template, body, tone, occurrenceKey) {
+  const contact = billingCustomerContact(data, row);
+  const automationKey = ['billing', String(row.id || row.customerId || normKey(contact.customer) || 'customer'), String(occurrenceKey || localDateKey()), normKey(template)].join(':');
+  const queued = queueCustomerMessage(data, contact, template, 'Delivered in app', body, tone, automationKey);
+  if (queued && contact.email) {
+    setImmediate(() => {
+      void sendProviderEmail(contact.email, 'WheelsonAuto - ' + template, body, {
+        organizationId: contact.organizationId || MAIN_ORG_ID,
+        deliveryId: automationKey,
+        ownerCopy: false
+      }).catch(error => reportBackgroundTaskFailure('customer-billing-email', error, { route: 'WheelsonAuto billing notices', recurringPaymentId: row.id || '' }, 'Customer billing email'));
+    });
+  }
+  return queued;
+}
+function queueRecurringBillingReminders(data = {}, now = new Date()) {
+  const today = localDateKey(now);
+  let queued = 0;
+  uniqueOperationalRecurringRows(allRecurringRows(data)).filter(recurringEligibleForToday).forEach(row => {
+    if (rapidAutopayIntervalMs(row)) return;
+    const due = recurringDateKey(row);
+    const distance = dashboardDayDistance(today, due);
+    if (distance !== 0 && distance !== 1) return;
+    const amount = moneyText(row.amount || row.weeklyAmount || 0);
+    const time = row.chargeTime || row.paymentTime || '18:00';
+    const firstName = String(row.customer || 'there').trim().split(/\s+/)[0] || 'there';
+    const template = distance === 1 ? 'Payment due tomorrow' : 'Payment due today';
+    const body = distance === 1
+      ? `Hi ${firstName}, your WheelsonAuto payment of ${amount} is due tomorrow. Your saved card is scheduled for ${time}. You can update your card or make a payment from the Payments tab in your app.`
+      : `Hi ${firstName}, your WheelsonAuto payment of ${amount} is due today. Your saved card is scheduled for ${time}. You can manage payment from the Payments tab in your app.`;
+    if (queueCustomerBillingNotice(data, row, template, body, distance === 1 ? 'blue' : 'warn', `${due}:${distance === 1 ? 'tomorrow' : 'today'}`)) queued += 1;
+  });
+  return queued;
+}
+function queueCustomerDueReminders(data = {}, now = new Date()) {
+  const today = localDateKey(now);
+  let queued = 0;
+  (data.claims || []).forEach(claim => {
+    if (/paid|closed|resolved|cancel|removed/i.test(String(claim.status || ''))) return;
+    const amount = Number(claim.remainingAmount != null ? claim.remainingAmount : claim.amount || 0);
+    if (amount <= 0) return;
+    const due = customerDueDateKey(claim);
+    if (!claim.due) claim.due = due;
+    const distance = dashboardDayDistance(today, due);
+    if (distance > 1) return;
+    const phase = distance === 1 ? 'tomorrow' : distance === 0 ? 'today' : `overdue-${today}`;
+    const template = distance === 1 ? 'Customer balance due tomorrow' : distance === 0 ? 'Customer balance due today' : 'Customer balance overdue';
+    const firstName = String(claim.customer || 'there').trim().split(/\s+/)[0] || 'there';
+    const body = `Hi ${firstName}, your WheelsonAuto ${String(claim.type || 'balance').toLowerCase()} of ${moneyText(amount)} is ${distance === 1 ? 'due tomorrow' : distance === 0 ? 'due today' : `${Math.abs(distance)} day${Math.abs(distance) === 1 ? '' : 's'} past due`}. Open Payments in your app to review the amount and proof or contact us if you need help.`;
+    if (queueCustomerBillingNotice(data, claim, template, body, distance < 0 ? 'bad' : 'warn', `${due}:${phase}`)) queued += 1;
+  });
+  return queued;
+}
+function recurringPaidAmountForDue(data = {}, recurring = {}, due = '') {
+  const periodKey = recurringBillingPeriodKey(recurring, due);
+  const paid = (data.payments || []).filter(payment => {
+    if (!closeoutPaymentPaid(payment) || !closeoutPaymentStronglyMatchesRecurring(data, payment, recurring)) return false;
+    const paymentDue = validCalendarDateKey(payment.scheduledDueDate || payment.dueDate || '');
+    return paymentDue ? paymentDue === due : String(payment.billingPeriodKey || '') === periodKey;
+  }).reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
+  return Number((paid + Math.max(0, Number(recurring.customerPortalCreditBalance || 0))).toFixed(2));
+}
+function recurringCollectionState(data = {}, recurring = {}, now = new Date()) {
+  const due = recurringDateKey(recurring);
+  const amount = Math.max(0, Number(recurring.amount || recurring.weeklyAmount || 0));
+  const paid = due ? Math.min(amount, recurringPaidAmountForDue(data, recurring, due)) : 0;
+  const remaining = Math.max(0, Number((amount - paid).toFixed(2)));
+  const paidRatio = amount > 0 ? paid / amount : 0;
+  const baseDeadline = due ? businessDateTimeInstant(addDaysToDateKey(due, 1), '12:00') : null;
+  const partialDeadline = baseDeadline && paidRatio >= 0.35 ? new Date(baseDeadline.getTime() + 24 * 60 * 60 * 1000) : baseDeadline;
+  const finalDeadline = partialDeadline && paidRatio >= 0.35 ? new Date(partialDeadline.getTime() + 12 * 60 * 60 * 1000) : partialDeadline;
+  const towAt = due ? businessDateTimeInstant(addDaysToDateKey(due, 3), '12:00') : null;
+  const overrideUntil = recurring.collectionOverrideUntil ? new Date(recurring.collectionOverrideUntil) : null;
+  const overrideActive = !!(overrideUntil && Number.isFinite(overrideUntil.getTime()) && overrideUntil.getTime() > now.getTime());
+  const lateFeeHeld = overrideActive && recurring.collectionSuppressLateFee === true;
+  const towHeld = overrideActive && recurring.collectionSuppressTow === true;
+  return {
+    due, amount, paid, remaining, paidRatio,
+    baseDeadline: baseDeadline && baseDeadline.toISOString() || '',
+    finalDeadline: finalDeadline && finalDeadline.toISOString() || '',
+    lateFeeDue: !!(remaining > 0 && finalDeadline && now.getTime() >= finalDeadline.getTime() && !lateFeeHeld),
+    towReviewDue: !!(remaining > 0 && towAt && now.getTime() >= towAt.getTime() && !towHeld),
+    overrideActive: overrideActive && (lateFeeHeld || towHeld)
+  };
+}
+async function applyRecurringCollectionPolicy(data = {}, now = new Date()) {
+  data.claims = Array.isArray(data.claims) ? data.claims : [];
+  data.tasks = Array.isArray(data.tasks) ? data.tasks : [];
+  let lateFeesAdded = 0;
+  let towReviewsAdded = 0;
+  for (const recurring of uniqueOperationalRecurringRows(allRecurringRows(data)).filter(recurringEligibleForToday)) {
+    if (rapidAutopayIntervalMs(recurring) || !recurringDateKey(recurring)) continue;
+    const state = recurringCollectionState(data, recurring, now);
+    const collectionPatch = {
+      collectionDueDate: state.due,
+      collectionPaidAmount: state.paid,
+      collectionRemainingAmount: state.remaining,
+      collectionPaidPercent: Math.round(state.paidRatio * 100),
+      collectionDeadlineAt: state.finalDeadline,
+      collectionStatus: state.remaining <= 0 ? 'Current' : state.towReviewDue ? 'Tow review' : state.lateFeeDue ? 'Late fee due' : state.overrideActive ? 'Staff override active' : 'Open'
+    };
+    Object.assign(recurring, collectionPatch);
+    updateRecurringChargeState(data, recurring.id || recurring.cloverSubscriptionId, collectionPatch);
+    if (state.lateFeeDue) {
+      const reference = `auto-late-fee:${recurring.id || recurring.cloverSubscriptionId}:${state.due}`;
+      if (!data.claims.some(claim => String(claim.reference || '') === reference && !/removed|cancel/i.test(String(claim.status || '')))) {
+        const stamp = now.toISOString();
+        const claim = {
+          id: 'claim-late-fee-' + crypto.randomBytes(8).toString('hex'),
+          organizationId: recurring.organizationId || MAIN_ORG_ID,
+          customerId: recurring.customerId || '', customerAccountId: recurring.customerAccountId || '', customer: recurring.customer || 'Customer',
+          vehicleId: recurring.vehicleId || '', vehicle: recurring.vehicle || '', vin: recurring.vin || '', plate: recurring.plate || recurring.licensePlate || '',
+          type: 'Late fee', amount: 50, remainingAmount: 50, status: 'Open', provider: 'WheelsonAuto billing policy',
+          due: localDateKey(now), incidentDate: state.due, reference, notes: `Automatic $50 late fee for the unpaid ${state.due} recurring payment.`,
+          systemGenerated: true, createdAt: stamp, updatedAt: stamp, updatedBy: 'WheelsonAuto billing automation'
+        };
+        data.claims.unshift(claim);
+        queueCustomerBillingNotice(data, claim, 'Late fee added', `Hi ${String(claim.customer || 'there').split(/\s+/)[0]}, a $50 late fee was added because the ${state.due} WheelsonAuto payment remains unpaid. Open Payments in your app to review and pay the balance or contact us today.`, 'bad', `${state.due}:late-fee`);
+        lateFeesAdded += 1;
+      }
+    }
+    if (state.towReviewDue) {
+      const taskKey = `tow-review:${recurring.id || recurring.cloverSubscriptionId}:${state.due}`;
+      if (!data.tasks.some(task => String(task.automationKey || '') === taskKey && !/complete|done|closed|cancel/i.test(String(task.status || '')))) {
+        const stamp = now.toISOString();
+        data.tasks.unshift({
+          id: 'task-tow-' + crypto.randomBytes(8).toString('hex'), automationKey: taskKey, organizationId: recurring.organizationId || MAIN_ORG_ID,
+          type: 'Vehicle recovery review', title: 'Urgent payment recovery review', customer: recurring.customer || 'Customer', customerId: recurring.customerId || '',
+          vehicle: recurring.vehicle || '', vehicleId: recurring.vehicleId || '', amount: state.remaining, due: localDateKey(now), status: 'Urgent', tone: 'bad',
+          notes: `${moneyText(state.remaining)} remains unpaid from ${state.due}. Contact the customer and decide whether vehicle recovery is required.`, createdAt: stamp, updatedAt: stamp
+        });
+        await queueOwnerEmailNotification(data, 'payment_recovery_review', {
+          customer: recurring.customer || 'Unknown customer',
+          subject: 'Urgent payment recovery review - ' + (recurring.customer || 'Unknown customer'),
+          body: [`A recurring balance has reached the vehicle-recovery review point.`, `Customer: ${recurring.customer || 'Unknown customer'}`, `Vehicle: ${recurring.vehicle || recurring.vin || 'Not linked'}`, `Due date: ${state.due}`, `Remaining: ${moneyText(state.remaining)}`, `Open the Dashboard and contact the customer now.`].join('\n')
+        });
+        towReviewsAdded += 1;
+      }
+    }
+  }
+  return { lateFeesAdded, towReviewsAdded };
 }
 function aiMoney(value) {
   const amount = Number(value || 0);
@@ -11411,6 +11618,9 @@ function staffAppNotifications(data, user) {
     (scoped.payments || []).filter(row => recentAppNotification(row, 21) && /paid|fail|declin|not found|pending/i.test(String(row.status || ''))).forEach(row => {
       const paid = /paid|succeeded|complete/i.test(String(row.status || ''));
       notices.push(appNotificationItem('payment', row, paid ? 'Payment received' : 'Payment needs attention', [row.customer || row.customerName || 'Customer', moneyText(row.amount || 0), row.status || 'Payment update'].join(' - '), { tone: paid ? 'good' : 'bad', view: 'Payments', tab: paid ? 'Transactions' : 'Today' }));
+    });
+    (scoped.tasks || []).filter(row => recentAppNotification(row, 45) && /vehicle recovery|tow|payment recovery/i.test(String([row.type, row.title].filter(Boolean).join(' '))) && !/complete|done|closed|cancel/i.test(String(row.status || ''))).forEach(row => {
+      notices.push(appNotificationItem('recovery', row, 'Urgent payment recovery review', [row.customer || 'Customer', row.vehicle || 'Vehicle', row.notes || row.status || 'Review now'].filter(Boolean).join(' - '), { tone: 'bad', view: 'Dashboard', tab: 'Today' }));
     });
   }
   return appNotificationSortLimit(notices);
@@ -21460,7 +21670,7 @@ async function runWheelsonAutoAutopay(options = {}) {
   woaAutopayStatus.fatalError = '';
   const runAt = options.now instanceof Date ? options.now : new Date(options.now || Date.now());
   const dateKey = options.dateKey || localDateKey(runAt);
-  const result = { dateKey, charged: 0, creditCovered: 0, creditApplied: 0, scheduledOneTimeDue: 0, scheduledOneTimeCharged: 0, scheduledOneTimeFailed: 0, scheduledOneTimeBlocked: 0, pickupSchedulesRecovered: 0, rapidSchedulesRepaired: 0, completedSchedulesDisabled: 0, stripeOutcomesReconciled: 0, reconciled: 0, failed: 0, notFound: 0, authenticationRequired: 0, confirmationPending: 0, providerBlocked: 0, duplicateBlocked: 0, skipped: 0, errors: [] };
+  const result = { dateKey, charged: 0, creditCovered: 0, creditApplied: 0, scheduledOneTimeDue: 0, scheduledOneTimeCharged: 0, scheduledOneTimeFailed: 0, scheduledOneTimeBlocked: 0, pickupSchedulesRecovered: 0, rapidSchedulesRepaired: 0, completedSchedulesDisabled: 0, stripeOutcomesReconciled: 0, billingRemindersQueued: 0, dueRemindersQueued: 0, lateFeesAdded: 0, towReviewsAdded: 0, reconciled: 0, failed: 0, notFound: 0, authenticationRequired: 0, confirmationPending: 0, providerBlocked: 0, duplicateBlocked: 0, skipped: 0, errors: [] };
   let autopayLock = null;
   try {
     autopayLock = await STATE_REPOSITORY.acquireJobLock('wheelsonauto-autopay');
@@ -21478,6 +21688,8 @@ async function runWheelsonAutoAutopay(options = {}) {
     result.stripeOutcomesReconciled = reconcileStripePaymentOutcomeContradictions(data);
     result.pickupSchedulesRecovered = repairCompletedPickupAutopayStates(data);
     result.rapidSchedulesRepaired = repairInvalidRapidAutopaySchedules(data, runAt);
+    result.billingRemindersQueued = queueRecurringBillingReminders(data, runAt);
+    result.dueRemindersQueued = queueCustomerDueReminders(data, runAt);
     for (const row of data.recurringPayments) {
       if (!/^rapid test passed$/i.test(String(row.status || '')) || !row.autoChargeEnabled) continue;
       const completedPatch = {
@@ -21546,7 +21758,7 @@ async function runWheelsonAutoAutopay(options = {}) {
         // proves the real saved-card path and advances its exact timestamp.
         const availableCredit = rapidSchedule ? 0 : Math.max(0, Number(row.customerPortalCreditBalance || 0));
         if (weeklyAmount > 0 && availableCredit >= weeklyAmount) {
-          applyCustomerPortalCreditToBilling(data, row, weeklyAmount, scheduledDueDate, { fullCoverage: true });
+          const creditPayment = applyCustomerPortalCreditToBilling(data, row, weeklyAmount, scheduledDueDate, { fullCoverage: true });
           const creditSuccessPatch = {
             lastAutoChargeDate: dateKey,
             lastAutoChargeAt: runAt.toISOString(),
@@ -21563,6 +21775,10 @@ async function runWheelsonAutoAutopay(options = {}) {
           };
           Object.assign(row, creditSuccessPatch);
           updateRecurringChargeState(data, row.id || row.cloverSubscriptionId, creditSuccessPatch);
+          if (creditPayment) {
+            queueCustomerBillingNotice(data, row, 'Payment received', `Hi ${String(row.customer || 'there').split(/\s+/)[0]}, your WheelsonAuto payment of ${moneyText(creditPayment.amount)} was completed using your account credit. Your receipt is available in Payments.`, 'good', `${scheduledDueDate}:paid:${creditPayment.id}`);
+            schedulePaymentOutcomeEmail(row, creditPayment, '', 'WheelsonAuto autopay account credit');
+          }
           result.creditCovered += 1;
           continue;
         }
@@ -21597,6 +21813,8 @@ async function runWheelsonAutoAutopay(options = {}) {
         };
         Object.assign(row, providerSuccessPatch);
         updateRecurringChargeState(data, row.id || row.cloverSubscriptionId, providerSuccessPatch);
+        queueCustomerBillingNotice(data, row, 'Payment received', `Hi ${String(row.customer || 'there').split(/\s+/)[0]}, your WheelsonAuto payment of ${moneyText(charged.payment.amount)} was completed. Your receipt is available in Payments.`, 'good', `${scheduledDueDate}:paid:${charged.payment.id || charged.payment.providerPaymentId || ''}`);
+        schedulePaymentOutcomeEmail(row, charged.payment, '', 'WheelsonAuto autopay');
         if (creditToApply) {
           const creditPayment = applyCustomerPortalCreditToBilling(data, row, weeklyAmount, scheduledDueDate, { fullCoverage: false });
           if (creditPayment) {
@@ -21624,6 +21842,7 @@ async function runWheelsonAutoAutopay(options = {}) {
             source: 'WheelsonAuto autopay Stripe authentication required'
           });
           queueCustomerMessage(data, row, 'Stripe card update needed', 'Ready to send', 'Hi ' + (row.customer || 'there') + ', this is WheelsonAuto. Your saved card needs to be re-authenticated before we can process your payment of $' + Number(row.amount || 0).toLocaleString() + '. Please contact us so we can send a secure card-update link.', 'warn');
+          schedulePaymentOutcomeEmail(row, payment, String(err && err.message || err), 'WheelsonAuto autopay authentication');
           await queueOwnerEmailNotification(data, 'stripe_authentication_required', {
             customer: row.customer || 'Unknown customer',
             subject: 'Stripe card update needed - ' + (row.customer || 'Unknown customer'),
@@ -21705,6 +21924,7 @@ async function runWheelsonAutoAutopay(options = {}) {
           row.lastAutoChargeAttemptDate = dateKey;
           row.lastAutoChargeAttemptAt = new Date().toISOString();
           queueCustomerMessage(data, row, 'Payment not found', 'Ready to send', 'Hi ' + (row.customer || 'there') + ', this is WheelsonAuto. We could not confirm today\'s payment of $' + Number(row.amount || 0).toLocaleString() + '. Please contact us so we can verify your payment source.', 'warn');
+          schedulePaymentOutcomeEmail(row, payment, String(err && err.message || err), 'WheelsonAuto autopay payment not found');
           await queueOwnerEmailNotification(data, 'payment_not_found', {
             customer: row.customer || 'Unknown customer',
             subject: 'Payment not found - ' + (row.customer || 'Unknown customer'),
@@ -21731,7 +21951,7 @@ async function runWheelsonAutoAutopay(options = {}) {
         row.lastAutoChargeError = String(err && err.message || err);
         row.lastAutoChargeAttemptDate = dateKey;
         row.lastAutoChargeAttemptAt = new Date().toISOString();
-        saveFailedChargeResult(data, row, {
+        const failedPayment = saveFailedChargeResult(data, row, {
           amount: row.amount,
           scheduledDueDate,
           note: 'WheelsonAuto autopay failed for due date ' + scheduledDueDate
@@ -21743,6 +21963,7 @@ async function runWheelsonAutoAutopay(options = {}) {
           cloverIdempotencyKey: row.cloverChargeAttempt && row.cloverChargeAttempt.idempotencyKey || row.lastCloverChargeIdempotencyKey || ''
         });
         queueCustomerMessage(data, row, attempts >= 2 ? '2x failed payment' : '1x failed payment', 'Ready to send', 'Hi ' + (row.customer || 'there') + ', this is WheelsonAuto. Your payment of $' + Number(row.amount || 0).toLocaleString() + ' did not go through' + (attempts >= 2 ? ' after two attempts. Please contact us today.' : '. We will retry once, but please contact us if you need help.'), attempts >= 2 ? 'bad' : 'warn');
+        schedulePaymentOutcomeEmail(row, failedPayment, String(err && err.message || err), 'WheelsonAuto autopay failed charge');
         await queueOwnerEmailNotification(data, 'payment_failed', {
           customer: row.customer || 'Unknown customer',
           subject: (attempts >= 2 ? '2x failed autopay - ' : '1x failed autopay - ') + (row.customer || 'Unknown customer'),
@@ -21761,6 +21982,9 @@ async function runWheelsonAutoAutopay(options = {}) {
         result.errors.push((row.customer || row.id) + ': ' + row.lastAutoChargeError);
       }
     }
+    const collectionResult = await applyRecurringCollectionPolicy(data, runAt);
+    result.lateFeesAdded = collectionResult.lateFeesAdded;
+    result.towReviewsAdded = collectionResult.towReviewsAdded;
     result.skipped = Math.max(0, data.recurringPayments.length - due.length - result.reconciled);
     data.integrations = data.integrations || {};
     data.integrations.wheelsonAutoAutopay = {
@@ -29267,7 +29491,7 @@ const server = http.createServer(async (req, res) => {
             amount: Math.round(amount * 100) / 100,
             status: 'Open',
             provider: 'WheelsonAuto staff',
-            due: cleanResourceText(payload.due, 40),
+            due: cleanResourceText(payload.due, 40) || addDaysToDateKey(localDateKey(new Date(now)), 14),
             incidentDate: cleanResourceText(payload.incidentDate, 40),
             reference: cleanResourceText(payload.reference, 240),
             notes: cleanResourceText(payload.notes, 4000),
@@ -31983,12 +32207,18 @@ const server = http.createServer(async (req, res) => {
         : Number(payload.monthlyDay);
       const retryRule = String(payload.retryRule || (recurring && recurring.retryRule) || 'Retry once then contact').trim();
       const managedBy = String(payload.autopayManagedBy || (recurring && recurring.autopayManagedBy) || '').trim();
+      const overrideProvided = Object.prototype.hasOwnProperty.call(payload, 'collectionOverrideUntil');
+      const collectionOverrideUntil = overrideProvided ? String(payload.collectionOverrideUntil || '').trim() : String(recurring.collectionOverrideUntil || '').trim();
+      const collectionOverrideReason = Object.prototype.hasOwnProperty.call(payload, 'collectionOverrideReason') ? cleanResourceText(payload.collectionOverrideReason, 500) : String(recurring.collectionOverrideReason || '');
+      const collectionSuppressLateFee = Object.prototype.hasOwnProperty.call(payload, 'collectionSuppressLateFee') ? payload.collectionSuppressLateFee === true : recurring.collectionSuppressLateFee === true;
+      const collectionSuppressTow = Object.prototype.hasOwnProperty.call(payload, 'collectionSuppressTow') ? payload.collectionSuppressTow === true : recurring.collectionSuppressTow === true;
       if (!id || !nextRun) return json(res, 400, { ok: false, error: 'Choose a recurring customer and a WheelsonAuto due date.' });
       if (rapidInterval ? !validRecurringInstant(nextRun) : !validCalendarDateKey(nextRun)) return json(res, 400, { ok: false, error: rapidInterval ? 'WheelsonAuto could not create the first rapid charge time.' : 'Choose a valid WheelsonAuto due date from the calendar.' });
       if (!rapidInterval && !/^([01]?\d|2[0-3]):[0-5]\d$/.test(chargeTime)) return json(res, 400, { ok: false, error: 'Choose a valid charge time.' });
       if (!frequency) return json(res, 400, { ok: false, error: 'Choose how often this customer should be charged.' });
       if (amount !== undefined && (!Number.isFinite(amount) || amount < 0)) return json(res, 400, { ok: false, error: 'Enter a valid autopay amount.' });
       if (monthlyDay !== undefined && (!Number.isFinite(monthlyDay) || monthlyDay < 1 || monthlyDay > 31)) return json(res, 400, { ok: false, error: 'Choose a valid monthly day.' });
+      if (collectionOverrideUntil && !Number.isFinite(Date.parse(collectionOverrideUntil))) return json(res, 400, { ok: false, error: 'Choose a valid collections override expiration.' });
       const amountChanged = amount !== undefined && Number(recurring.amount || 0) !== amount;
       const savedChargeTime = rapidInterval ? '' : String(recurring.chargeTime || recurring.paymentTime || '18:00');
       const scheduleChanged = String(recurring.nextRun || '') !== nextRun
@@ -32051,6 +32281,12 @@ const server = http.createServer(async (req, res) => {
         retryRule,
         autoChargeEnabled: enableWheelsonAutoCharge,
         autopayManagedBy: managedBy || (enableWheelsonAutoCharge ? 'WheelsonAuto' : (recurring && recurring.autopayManagedBy || '')),
+        collectionOverrideUntil,
+        collectionOverrideReason,
+        collectionSuppressLateFee,
+        collectionSuppressTow,
+        collectionOverrideUpdatedAt: new Date().toISOString(),
+        collectionOverrideUpdatedBy: user.name || user.username || 'Staff',
         notes: String(payload.note || recurring && recurring.notes || '').trim()
       };
       const updatedAt = new Date().toISOString();
@@ -32876,6 +33112,15 @@ module.exports = {
   nextFutureRecurringRun,
   recurringBillingPeriodKey,
   allRecurringRows,
+  recordDateKey,
+  paymentEventTimestamp,
+  closeoutPaymentPaid,
+  customerDueDateKey,
+  dashboardMaintenanceVisible,
+  queueRecurringBillingReminders,
+  queueCustomerDueReminders,
+  recurringCollectionState,
+  applyRecurringCollectionPolicy,
   dashboardPriorityFeed,
   mechanicalMessageAssessment,
   prepareStarServiceAppointment,

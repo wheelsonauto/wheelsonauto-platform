@@ -28,6 +28,7 @@
     "surface-check": "node scripts/view-surface-check.js",
     "navigation-check": "node scripts/navigation-state-check.js",
     "payment-workflow-check": "node scripts/payment-workflow-check.js",
+    "dashboard-billing-policy-check": "node scripts/dashboard-billing-policy-check.js",
     "priority-service-card-check": "node --check scripts/priority-service-card-check.js && node scripts/priority-service-card-check.js",
     "customer-portal-check": "node scripts/customer-portal-five-tab-check.js",
     "customer-fleet-workflow-check": "node scripts/customer-fleet-workflow-check.js",

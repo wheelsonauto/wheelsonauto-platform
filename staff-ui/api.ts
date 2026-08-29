@@ -359,6 +359,10 @@ export async function updateAutopay(input: {
   autopayManagedBy?: string;
   note?: string;
   autoChargeEnabled?: boolean;
+  collectionOverrideUntil?: string;
+  collectionOverrideReason?: string;
+  collectionSuppressLateFee?: boolean;
+  collectionSuppressTow?: boolean;
 }): Promise<{ ok: boolean; nextRun: string; frequency: string; amount: number; status: string; chargeTime: string; autoChargeEnabled: boolean }> {
   const response = await fetch('/api/recurring-payments/update', {
     method: 'POST',

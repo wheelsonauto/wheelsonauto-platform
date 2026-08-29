@@ -366,3 +366,4 @@ requireText('Fallback transaction report possible match note', app, "customer===
 
 console.log('Payment workflow check passed: statuses, closeout, card actions, transaction matching, reassignment, and backend charge tracking are wired.');
 require('./customer-payment-control-check.js');
+require('./dashboard-billing-policy-check.js');
