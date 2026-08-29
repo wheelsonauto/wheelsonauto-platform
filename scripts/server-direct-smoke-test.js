@@ -1283,8 +1283,7 @@ async function main() {
     const retiredVehicleState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     const retiredOnlineVehicle = retiredVehicleState.json.onlineVehicles.find(row => row.id === 'online-direct-resource-retire');
     assert(retiredOnlineVehicle && retiredOnlineVehicle.published === false && /unavailable|removed/i.test(retiredOnlineVehicle.availability || ''), 'Removing a vehicle must unpublish its exact online inventory row.');
-    const stalePlanVehicleDetail = await request(server, 'GET', '/api/vehicles/veh-direct-stale-plan-retire', { cookie: ownerCookie });
-    const stalePlanVehicleRetire = await request(server, 'POST', '/api/vehicles/veh-direct-stale-plan-retire/retire', { cookie: ownerCookie, json: { expectedUpdatedAt: stalePlanVehicleDetail.json.record.updatedAt || '', confirmation: 'REMOVE_VEHICLE' } });
+    const stalePlanVehicleRetire = await request(server, 'POST', '/api/vehicles/veh-direct-stale-plan-retire/retire', { cookie: ownerCookie, json: { confirmation: 'REMOVE_VEHICLE' } });
     assert(stalePlanVehicleRetire.status === 200 && stalePlanVehicleRetire.json.record.status === 'Removed', 'A confirmed unassigned sold vehicle should archive even when a stale recurring schedule remains linked. Received: ' + JSON.stringify(stalePlanVehicleRetire.json));
     const stalePlanRetireState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     const stoppedStalePlan = stalePlanRetireState.json.recurringPayments.find(row => row.id === 'rec-direct-stale-plan-retire');
