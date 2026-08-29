@@ -18,7 +18,8 @@ function closed(job: MaintenanceRecord) {
 }
 
 function inspection(job: MaintenanceRecord) {
-  return /monthly|inspection|oil change/i.test([job.type, job.issue].join(' '));
+  const label = [job.type, job.issue].filter(Boolean).join(' ').toLowerCase();
+  return /monthly inspection|monthly oil|oil change/.test(label) || /^inspection$/.test(String(job.type || '').trim().toLowerCase());
 }
 
 function emptyService(vehicle: VehicleRecord): MaintenanceRecord {

@@ -1129,6 +1129,13 @@ async function main() {
     assert(completedOneTimeInspection.status === 200 && !completedOneTimeInspection.json.nextReminder, 'Completing a one-time inspection must not create another reminder.');
     const oneTimeInspectionState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     assert((oneTimeInspectionState.json.maintenance || []).filter(row => row.vehicleId === 'veh-direct-dispute-car' && /monthly|inspection|oil/i.test([row.type, row.issue].join(' ')) && !/complete|fixed|closed|superseded|cancel|duplicate/i.test(row.status || '')).length === 0, 'A completed one-time inspection must leave no duplicate open inspection rows.');
+    const brakeInspection = await request(server, 'POST', '/api/maintenance', {
+      cookie: ownerCookie,
+      json: { id: 'mnt-direct-brake-inspection', vehicleId: 'veh-direct-dispute-car', type: 'Repair job', issue: 'Brake inspection', due: '2026-08-12', status: 'Scheduled', notes: 'This is regular service, not the monthly inspection schedule.' }
+    });
+    assert(brakeInspection.status === 200 && brakeInspection.json.job.id === 'mnt-direct-brake-inspection' && brakeInspection.json.job.type === 'Repair job', 'A brake inspection must stay a normal service job instead of replacing the monthly inspection schedule.');
+    const brakeInspectionState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    assert((brakeInspectionState.json.maintenance || []).some(row => row.id === 'mnt-direct-brake-inspection' && row.issue === 'Brake inspection'), 'The regular brake inspection should persist as its own open service row.');
     assert(savedStateVersion.json.version !== initialStateVersion.json.version, 'State version should change immediately after a real save.');
     const duplicateRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     const createdFleetVehicle = await request(server, 'POST', '/api/vehicles', {
