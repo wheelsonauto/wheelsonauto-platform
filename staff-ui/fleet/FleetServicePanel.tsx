@@ -46,7 +46,7 @@ export default function FleetServicePanel({ vehicle, jobs, archived, onRefresh, 
     try {
       await saveMaintenance({ ...draft, vehicleId: vehicle.id, vehicle: vehicleTitle(vehicle), expectedUpdatedAt: draft.updatedAt });
       await onRefresh(); setDraft(null); onNotice(inspection(draft) ? 'Inspection schedule saved. Only one open inspection reminder remains.' : 'Service saved to this vehicle file.');
-    } catch (error) { onError((error as Error).message); await onRefresh(); }
+    } catch (error) { const message = (error as Error).message; await onRefresh(); onError(message); }
     finally { setSaving(false); }
   };
 
@@ -61,7 +61,7 @@ export default function FleetServicePanel({ vehicle, jobs, archived, onRefresh, 
       });
       await onRefresh();
       onNotice(result.nextReminder ? `Completed. The next inspection is ${shortDate(result.nextReminder.due)}.` : inspection(job) ? 'Inspection completed. This was a one-time schedule, so no new reminder was created.' : 'Service completed and saved in maintenance history.');
-    } catch (error) { onError((error as Error).message); await onRefresh(); }
+    } catch (error) { const message = (error as Error).message; await onRefresh(); onError(message); }
     finally { setSaving(false); }
   };
 
@@ -77,7 +77,7 @@ export default function FleetServicePanel({ vehicle, jobs, archived, onRefresh, 
       const created = await saveMaintenance({ ...emptyService(vehicle), id: `mnt-inspection-${Date.now()}`, type: 'Monthly inspection / oil change', issue: 'Monthly inspection / oil change', vehicleId: vehicle.id, inspectionRecurrence: vehicle.inspectionRecurrence || 'recurring', inspectionIntervalValue: vehicle.inspectionIntervalValue || 1, inspectionIntervalUnit: vehicle.inspectionIntervalUnit || 'months' });
       const result = await completeMaintenance(created.job.id, { expectedUpdatedAt: created.job.updatedAt || '', completedAt: todayKey(), odometer: vehicle.mileage || '', inspectionCondition: 'Good', inspectionChecklist: [], damageNotes: '', mechanicSignoff: window.__WOA_STAFF_USER__?.name || window.__WOA_STAFF_USER__?.username || 'WheelsonAuto staff', notes: 'Inspection completed from Fleet.' });
       await onRefresh(); onNotice(result.nextReminder ? `Inspection completed. The next inspection is ${shortDate(result.nextReminder.due)}.` : 'Inspection completed. No repeating reminder was requested.');
-    } catch (error) { onError((error as Error).message); await onRefresh(); }
+    } catch (error) { const message = (error as Error).message; await onRefresh(); onError(message); }
     finally { setSaving(false); }
   };
 

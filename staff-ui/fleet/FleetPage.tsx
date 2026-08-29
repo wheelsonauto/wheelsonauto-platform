@@ -201,7 +201,7 @@ export function FleetPage({ role, initialSection = '', onNavigate, onOpenRental 
         });
         await refresh(undefined, true); setDraft(result.record); setNotice('Vehicle file saved everywhere it is linked.');
       }
-    } catch (requestError) { setError((requestError as Error).message); await refresh(undefined, true); }
+    } catch (requestError) { const message = (requestError as Error).message; await refresh(undefined, true); setError(message); }
     finally { setSaving(false); }
   };
 
@@ -211,7 +211,7 @@ export function FleetPage({ role, initialSection = '', onNavigate, onOpenRental 
     try {
       const result = await updateVehicleState(draft.id, { status: fleetState, expectedUpdatedAt: draft.updatedAt });
       await refresh(undefined, true); setDraft(result.record); setNotice(fleetState === 'online' ? 'Vehicle published online and marked available.' : `Vehicle moved to ${result.record.status || fleetState}.`);
-    } catch (requestError) { setError((requestError as Error).message); await refresh(undefined, true); }
+    } catch (requestError) { const message = (requestError as Error).message; await refresh(undefined, true); setError(message); }
     finally { setSaving(false); }
   };
 
@@ -223,7 +223,7 @@ export function FleetPage({ role, initialSection = '', onNavigate, onOpenRental 
     try {
       const result = await assignCustomerVehicle(customer.id, { vehicleId: draft.id, expectedUpdatedAt: customer.updatedAt, reason: assignmentReason, replaceExistingCustomer: !!draft.currentCustomer });
       await refresh(undefined, true); setDraft(result.vehicle); setAssignmentConfirmed(false); setNotice(result.unchanged ? 'That exact assignment was already saved.' : `Assigned to ${result.customer.name || 'customer'} across ${result.propagated.length} linked records.`);
-    } catch (requestError) { setError((requestError as Error).message); await refresh(undefined, true); }
+    } catch (requestError) { const message = (requestError as Error).message; await refresh(undefined, true); setError(message); }
     finally { setSaving(false); }
   };
 
@@ -250,7 +250,7 @@ export function FleetPage({ role, initialSection = '', onNavigate, onOpenRental 
         savedRecord = result.record;
       }
       await refresh(undefined, true); setDraft(savedRecord); setNotice(`${files.length} photo${files.length === 1 ? '' : 's'} uploaded to this vehicle and its website gallery.`);
-    } catch (requestError) { setError((requestError as Error).message); await refresh(undefined, true); }
+    } catch (requestError) { const message = (requestError as Error).message; await refresh(undefined, true); setError(message); }
     finally { setSaving(false); }
   };
 
@@ -260,7 +260,7 @@ export function FleetPage({ role, initialSection = '', onNavigate, onOpenRental 
     try {
       const result = await removeVehiclePhoto(draft.id, photoId, photoUrl, draft.updatedAt);
       await refresh(undefined, true); setDraft(result.record); setNotice('Photo removed from the vehicle and website gallery.');
-    } catch (requestError) { setError((requestError as Error).message); await refresh(undefined, true); }
+    } catch (requestError) { const message = (requestError as Error).message; await refresh(undefined, true); setError(message); }
     finally { setSaving(false); }
   };
 
@@ -273,7 +273,7 @@ export function FleetPage({ role, initialSection = '', onNavigate, onOpenRental 
       await refresh(undefined, true);
       if (result.vehicle) setDraft(current => current ? { ...current, ...result.vehicle, currentCustomer: '', activeRentalFileId: '' } : current);
       setReturnOpen(false); setReturnConfirmed(false); setNotice(`Return completed. The customer moved to History and this vehicle moved to ${result.vehicle?.status || returnDraft.vehicleStatus}.`);
-    } catch (requestError) { setError((requestError as Error).message); await refresh(undefined, true); }
+    } catch (requestError) { const message = (requestError as Error).message; await refresh(undefined, true); setError(message); }
     finally { setSaving(false); }
   };
 
@@ -282,7 +282,7 @@ export function FleetPage({ role, initialSection = '', onNavigate, onOpenRental 
     setSaving(true); setError(''); setNotice('');
     try {
       await archiveVehicle(draft.id, draft.updatedAt); await refresh(undefined, true); closeDetail(); setFilter('history'); setNotice('Vehicle archived in History. Its records were preserved and its website listing was removed.');
-    } catch (requestError) { setError((requestError as Error).message); await refresh(undefined, true); }
+    } catch (requestError) { const message = (requestError as Error).message; await refresh(undefined, true); setError(message); }
     finally { setSaving(false); }
   };
 
