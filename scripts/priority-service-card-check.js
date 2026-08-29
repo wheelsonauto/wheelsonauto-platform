@@ -44,7 +44,9 @@ const dashboardData = {
   pickupAppointments: [{ id: 'pickup-today', customer: 'Pickup Customer', vehicle: '2020 Test Car', requestedPickupDate: today, requestedPickupTime: '1:00 PM', status: 'Confirmed' }],
   tasks: [
     { id: 'return-today', customer: 'Return Customer', vehicle: '2021 Test Car', type: 'Vehicle return', due: today, returnMethod: 'Customer drop-off', status: 'Scheduled' },
+    { id: 'removed-return', customer: 'Removed Return', vehicle: '2022 Removed Car', type: 'Vehicle recovery review', due: today, status: 'Removed' },
     { id: 'customer-visit-today', customer: 'Office Visit Customer', type: 'Customer service appointment', visitType: 'Customer service', due: today, time: '10:00 AM', status: 'Appointment scheduled' },
+    { id: 'removed-customer-visit', customer: 'Removed Office Visit', type: 'Customer service appointment', due: today, status: 'Removed' },
     { id: 'customer-complaint', customer: 'Complaint Customer', type: 'Customer care', title: 'Customer needs staff attention', due: today, status: 'Needs staff attention', notes: 'Customer says the account should already be closed.' },
     { id: 'done-task', title: 'Called customer', status: 'Done', doneAt: today }
   ],
@@ -61,6 +63,7 @@ assert.deepStrictEqual(feed.inspections.map(row => row.id), ['late-inspection'])
 assert.deepStrictEqual(feed.pickups.map(row => row.id), ['pickup-today']);
 assert.deepStrictEqual(feed.returns.map(row => row.id), ['return-today']);
 assert.deepStrictEqual(feed.customerAppointments.map(row => row.id), ['customer-visit-today']);
+assert(!feed.customerCare.some(row => row.id === 'removed-customer-visit'), 'Removed Dispatch work must not reappear in Dashboard customer care.');
 assert(feed.customerCare.some(row => row.id === 'customer-complaint') && feed.customerCare.some(row => row.id === 'customer-visit-today'));
 assert.strictEqual(feed.customerAppointments[0].vehicle, '', 'A customer-service visit must not require an assigned vehicle.');
 assert(feed.completedToday.some(row => row.id === 'done-task') && feed.completedToday.some(row => row.id === 'completed-service'));

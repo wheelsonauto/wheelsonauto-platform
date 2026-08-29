@@ -431,7 +431,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260829-terminal-service-397';
+const ASSET_VERSION = 'platform-20260829-mobile-dispatch-filter-398';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -5032,6 +5032,9 @@ function customerDueDateKey(row = {}) {
   const created = dashboardRecordDate(row, ['createdAt', 'date']) || localDateKey();
   return addDaysToDateKey(created, 14);
 }
+function dashboardTerminalTask(row = {}) {
+  return /complete|done|closed|cancel|removed|archived|deleted|superseded|duplicate/i.test(String(row.status || ''));
+}
 function dashboardPriorityFeed(data = {}, dateKeyValue = localDateKey()) {
   const recurringRows = uniqueOperationalRecurringRows(allRecurringRows(data)).filter(recurringEligibleForToday);
   const recurringItem = row => ({
@@ -5158,13 +5161,13 @@ function dashboardPriorityFeed(data = {}, dateKeyValue = localDateKey()) {
     };
   };
   const pickups = (data.pickupAppointments || [])
-    .filter(row => !/cancel|picked up|complete|closed/i.test(String(row.status || '')))
+    .filter(row => !dashboardTerminalTask(row) && !/picked up/i.test(String(row.status || '')))
     .map(appointmentItem)
     .filter(row => row.date && dashboardDayDistance(dateKeyValue, row.date) >= 0 && dashboardDayDistance(dateKeyValue, row.date) <= 7)
     .sort((left, right) => String(left.date + left.time).localeCompare(String(right.date + right.time)));
   const returns = (data.tasks || [])
     .filter(row => /vehicle return|return vehicle|drop.?off|vehicle recovery/i.test(String([row.type, row.title].filter(Boolean).join(' '))))
-    .filter(row => !/complete|done|closed|cancel/i.test(String(row.status || '')))
+    .filter(row => !dashboardTerminalTask(row))
     .map(appointmentItem)
     .filter(row => row.date && dashboardDayDistance(dateKeyValue, row.date) >= 0 && dashboardDayDistance(dateKeyValue, row.date) <= 7)
     .sort((left, right) => String(left.date + left.time).localeCompare(String(right.date + right.time)));
@@ -5178,12 +5181,12 @@ function dashboardPriorityFeed(data = {}, dateKeyValue = localDateKey()) {
   });
   const customerAppointments = (data.tasks || [])
     .filter(row => customerCareTask(row) && /appointment|scheduled/i.test(String([row.type, row.title, row.status].filter(Boolean).join(' '))))
-    .filter(row => !/complete|done|closed|cancel/i.test(String(row.status || '')))
+    .filter(row => !dashboardTerminalTask(row))
     .map(customerAppointmentItem)
     .filter(row => row.date && dashboardDayDistance(dateKeyValue, row.date) >= 0 && dashboardDayDistance(dateKeyValue, row.date) <= 7)
     .sort((left, right) => String(left.date + left.time).localeCompare(String(right.date + right.time)));
   const customerCare = (data.tasks || [])
-    .filter(row => customerCareTask(row) && !/complete|done|closed|cancel/i.test(String(row.status || '')))
+    .filter(row => customerCareTask(row) && !dashboardTerminalTask(row))
     .map(customerAppointmentItem)
     .sort((left, right) => Number(/needs staff|urgent|attention/i.test(String(right.status || ''))) - Number(/needs staff|urgent|attention/i.test(String(left.status || ''))) || String(left.date + left.time).localeCompare(String(right.date + right.time)))
     .slice(0, 100);

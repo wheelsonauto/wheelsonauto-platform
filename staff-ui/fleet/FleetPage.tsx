@@ -1,5 +1,5 @@
 import { ChangeEvent, FormEvent, lazy, Suspense, useEffect, useMemo, useState } from 'react';
-import { Camera, CarFront, Globe2, Plus, RotateCcw, Trash2, UserRoundPlus } from 'lucide-react';
+import { Camera, CarFront, Globe2, ListFilter, Plus, RotateCcw, Trash2, UserRoundPlus } from 'lucide-react';
 import {
   archiveVehicle,
   assignCustomerVehicle,
@@ -62,11 +62,12 @@ async function photoPayload(file: File) {
   return { name: file.name, type: file.type, size: file.size, dataUrl };
 }
 
-type Filter = 'fleet' | 'lot' | 'service' | 'history';
+type Filter = 'fleet' | 'lot' | 'online' | 'service' | 'history';
 type FleetState = 'online' | 'offline' | 'ready' | 'prep' | 'service' | 'returned';
 type VehicleDetailTab = 'edit' | 'photos' | 'service' | 'renter' | 'history';
-const filters: readonly Filter[] = ['fleet', 'lot', 'service', 'history'];
-const filterLabels: Record<Filter, string> = { fleet: 'Fleet', lot: 'In lot', service: 'Service due', history: 'History' };
+const filters: readonly Filter[] = ['fleet', 'lot', 'online', 'service', 'history'];
+const summaryFilters: readonly Filter[] = ['fleet', 'lot', 'service', 'history'];
+const filterLabels: Record<Filter, string> = { fleet: 'Fleet', lot: 'In lot', online: 'Online', service: 'Service due', history: 'History' };
 const vehicleDetailTabs: Array<{ id: VehicleDetailTab; label: string }> = [
   { id: 'edit', label: 'Vehicle' }, { id: 'photos', label: 'Photos' }, { id: 'service', label: 'Service' }, { id: 'renter', label: 'Renter' }, { id: 'history', label: 'History' }
 ];
@@ -144,6 +145,7 @@ export function FleetPage({ role, initialSection = '', onNavigate, onOpenRental 
     if (filter === 'history' && !archived) return false;
     if (filter !== 'history' && archived) return false;
     if (filter === 'lot' && (vehicle.currentCustomer || serviceDue(vehicle, jobs))) return false;
+    if (filter === 'online' && !(vehicle.publishedOnline || /^online$/i.test(String(vehicle.status || '')))) return false;
     if (filter === 'service' && !serviceDue(vehicle, jobs)) return false;
     return wordsMatch(query, [title(vehicle), vehicle.vin, vehicle.plate, vehicle.stock, vehicle.tracker, vehicle.currentCustomer, vehicle.status]);
   }), [vehicles, jobs, query, filter]);
@@ -151,6 +153,7 @@ export function FleetPage({ role, initialSection = '', onNavigate, onOpenRental 
   const counts = useMemo(() => ({
     fleet: vehicles.filter(vehicle => !isArchived(vehicle)).length,
     lot: vehicles.filter(vehicle => !isArchived(vehicle) && !vehicle.currentCustomer && !serviceDue(vehicle, jobs)).length,
+    online: vehicles.filter(vehicle => !isArchived(vehicle) && (vehicle.publishedOnline || /^online$/i.test(String(vehicle.status || '')))).length,
     service: vehicles.filter(vehicle => !isArchived(vehicle) && serviceDue(vehicle, jobs)).length,
     history: vehicles.filter(isArchived).length
   }), [vehicles, jobs]);
@@ -307,8 +310,8 @@ export function FleetPage({ role, initialSection = '', onNavigate, onOpenRental 
   return <main className={`operations-workspace resource-workspace ${draft ? 'has-detail' : ''}`}>
     <section className="operations-index swipe-zone" {...filterSwipe}>
       <header className="workspace-title"><div><span>Inventory, service, and history</span><h1>Fleet</h1></div><div className="workspace-head-actions">{viewed.unreadCount ? <button type="button" className="unread-summary" onClick={viewed.markAllViewed}>{viewed.unreadCount} new</button> : null}{canManage ? <button type="button" className="primary-command" onClick={openNew}><Plus size={15} /> Add car</button> : null}</div></header>
-      <div className="compact-metrics four swipe-tabs" role="tablist" aria-label="Fleet status">{filters.map(key => <button type="button" role="tab" aria-selected={filter === key} key={key} className={filter === key ? 'active' : ''} onClick={() => setFilter(key)}><span>{filterLabels[key]}</span><strong>{counts[key]}</strong></button>)}</div>
-      <label className="workspace-search"><span aria-hidden="true">/</span><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search vehicle, VIN, tag, tracker, customer" /></label>
+      <div className="compact-metrics four swipe-tabs" role="tablist" aria-label="Fleet status">{summaryFilters.map(key => <button type="button" role="tab" aria-selected={filter === key} key={key} className={filter === key ? 'active' : ''} onClick={() => setFilter(key)}><span>{filterLabels[key]}</span><strong>{counts[key]}</strong></button>)}</div>
+      <div className="workspace-search-controls"><label className="workspace-search"><span aria-hidden="true">/</span><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search vehicle, VIN, tag, tracker, customer" /></label><label className="workspace-filter"><ListFilter size={15} aria-hidden="true" /><select aria-label="Filter Fleet" value={filter} onChange={event => setFilter(event.target.value as Filter)}>{filters.map(key => <option key={key} value={key}>{filterLabels[key]} ({counts[key]})</option>)}</select></label></div>
       {error && !draft ? <div className="inline-alert error">{error}</div> : null}
       {!loading && visible.length ? <div className="record-table-head vehicle-table-head"><span /><span>Vehicle</span><span>Assignment</span><span>Status / mileage</span></div> : null}
       <div className="record-list vehicle-records">{loading ? <div className="empty-state">Loading fleet...</div> : null}{!loading && !visible.length ? <div className="empty-state">No vehicles match this view.</div> : null}{visible.map(vehicle => <button type="button" key={vehicle.id} className={`${vehicle.id === selectedId ? 'record-row active' : 'record-row'}${viewed.unreadIds.has(vehicle.id) ? ' unread-record' : ''}`} onClick={() => openVehicle(vehicle)} aria-label={`Open ${title(vehicle)} vehicle file`}>

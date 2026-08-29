@@ -17,7 +17,7 @@ function emptyTask(): TaskRecord {
 }
 
 function isClosed(task: TaskRecord) {
-  return /done|closed|complete/i.test(task.status || '');
+  return /done|closed|complete|cancel|removed|archived|deleted|superseded|duplicate/i.test(task.status || '');
 }
 
 function taskTone(task: TaskRecord) {
@@ -124,6 +124,23 @@ export function DispatchPage() {
     }
   };
 
+  const remove = async () => {
+    if (!draft || saving) return;
+    setSaving(true); setError(''); setNotice('');
+    try {
+      const result = await saveTask({ ...draft, status: 'Removed', doneAt: new Date().toISOString(), expectedUpdatedAt: draft.updatedAt });
+      await refresh(undefined, true);
+      setSelectedId(result.task.id);
+      setDraft(result.task);
+      setNotice('Task removed from active Dispatch and Dashboard schedules');
+    } catch (requestError) {
+      setError((requestError as Error).message);
+      await refresh(undefined, true);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const openNew = () => {
     setSelectedId('');
     setDraft(emptyTask());
@@ -162,7 +179,7 @@ export function DispatchPage() {
           <div className="form-grid">
             <label className="span-2">Task title<input required value={draft.title} onChange={event => setDraft({ ...draft, title: event.target.value })} /></label>
             <label>Type<input value={draft.type || ''} onChange={event => setDraft({ ...draft, type: event.target.value })} /></label>
-            <label>Status<select value={draft.status || 'Open'} onChange={event => setDraft({ ...draft, status: event.target.value })}><option>Open</option><option>In progress</option><option>Waiting</option><option>Done</option></select></label>
+            <label>Status<select value={draft.status || 'Open'} onChange={event => setDraft({ ...draft, status: event.target.value })}><option>Open</option><option>In progress</option><option>Waiting</option><option>Done</option><option>Removed</option></select></label>
             <label>Customer<input value={draft.customer || ''} onChange={event => setDraft({ ...draft, customer: event.target.value })} /></label>
             <label>Vehicle<input value={draft.vehicle || ''} onChange={event => setDraft({ ...draft, vehicle: event.target.value })} /></label>
             <label>Due date<input type="date" value={draft.due || ''} onChange={event => setDraft({ ...draft, due: event.target.value })} /></label>
@@ -170,7 +187,7 @@ export function DispatchPage() {
             <label className="span-2">Notes<textarea rows={7} value={draft.notes || ''} onChange={event => setDraft({ ...draft, notes: event.target.value })} /></label>
           </div>
         </div>
-        <footer className="detail-actions"><button className="primary-command" disabled={saving || !draft.title.trim()}>{saving ? 'Saving...' : 'Save task'}</button>{draft.updatedAt && !isClosed(draft) ? <button type="button" className="secondary-command" onClick={complete} disabled={saving}>Mark done</button> : null}</footer>
+        <footer className="detail-actions"><button className="primary-command" disabled={saving || !draft.title.trim()}>{saving ? 'Saving...' : 'Save task'}</button>{draft.updatedAt && !isClosed(draft) ? <><button type="button" className="secondary-command" onClick={complete} disabled={saving}>Mark done</button><button type="button" className="danger-command" onClick={remove} disabled={saving}>Remove</button></> : null}</footer>
       </form>}
     </section>
   </main>;
