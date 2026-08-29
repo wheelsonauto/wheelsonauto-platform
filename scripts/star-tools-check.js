@@ -20,6 +20,8 @@ assert.strictEqual(unknown.canAutoSend, false, 'An unknown model action must nev
 const catalog = starTools.promptCatalog();
 assert(catalog.reads.some(tool => tool.name === 'read_rental_file'), 'Star must have an explicit Rental File read capability.');
 assert(catalog.actions.some(tool => tool.name === 'send_payment_link' && tool.access === 'draft_link'), 'Star must expose payment links only as typed draft-link work.');
+assert(catalog.actions.some(tool => tool.name === 'customer_service_schedule' && tool.access === 'schedule'), 'Star must expose customer-service visits separately from mechanical maintenance.');
+assert(catalog.actions.some(tool => tool.name === 'customer_service_review' && tool.access === 'human'), 'Customer complaints and account mismatches must route to staff care.');
 assert(catalog.actions.every(tool => tool.access !== 'execute_money'), 'Star must not expose a direct money-execution tool.');
 
 console.log('Star tools check passed: reads and drafts are allowlisted, sensitive actions require owner approval, and unknown actions fail closed.');

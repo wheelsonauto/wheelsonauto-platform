@@ -11,6 +11,7 @@ const server = read('server.js');
 const stateRepository = read('state-repository.js');
 const viteConfig = read('vite.config.ts');
 const api = read('staff-ui/api.ts');
+const ui = read('staff-ui/ui.ts');
 const shell = read('staff-ui/StaffApp.tsx');
 const messages = read('staff-ui/messages/MessagesPage.tsx');
 const dispatch = read('staff-ui/dispatch/DispatchPage.tsx');
@@ -44,9 +45,11 @@ assert(api.includes("loadCachedJson<DashboardPriorityFeed>('/api/dashboard/prior
 assert(dashboard.includes('Today’s customers') && dashboard.includes('priority.todayCustomers') && dashboard.includes("todayStatusCounts['Failed twice']"), 'Dashboard must show every customer due today with live payment status.');
 assert(dashboard.includes('Transactions') && dashboard.includes('priority.transactions') && dashboard.includes('Search name, vehicle, card, amount') && dashboard.includes('card ending'), 'Dashboard must provide searchable current and historical transactions with card evidence.');
 assert(dashboard.includes('Today’s appointments') && dashboard.includes('priority.maintenanceAppointments') && dashboard.includes('priority.pickups') && dashboard.includes('priority.returns'), 'Dashboard must consolidate today’s pickups, returns, inspections, and services.');
+assert(dashboard.includes('Customer care') && dashboard.includes('priority.customerCare') && dashboard.includes('priority.customerAppointments'), 'Dashboard must separate customer complaints and office visits from Fleet maintenance.');
 assert(dashboard.includes('Overdue maintenance &amp; service') && dashboard.includes('priority.overdueService') && dashboard.includes('Tolls, violations &amp; dues') && dashboard.includes('priority.overdueBalances'), 'Dashboard must separate overdue fleet work from tolls, violations, and other customer dues.');
 assert(dashboard.includes('dashboard-panel-switch') && dashboard.includes('panelSwipe') && css.includes('.dashboard-focus-panel.mobile-hidden'), 'The dashboard must remain compact by using tappable and swipeable focused panels on phones.');
 assert(server.includes('function dashboardPriorityFeed(data = {}, dateKeyValue = localDateKey())') && server.includes('/complete|closed|fixed|done|cancel/') && server.includes('/scheduled|appointment|confirmed/'), 'Backend dashboard feed must exclude scheduled or completed service work.');
+assert(ui.includes('if (terminal) return 0') && ui.includes('assignmentScore(row, key, terminal)'), 'A History customer copy must never outrank the active assigned copy solely because a vehicle still carries the same customer name.');
 
 assert(fs.existsSync(entryPath) && fs.existsSync(cssPath), 'Build the React staff module before running this check.');
 assert(server.includes("(url.pathname === '/' || url.pathname === '/staff-next')") && server.includes('staffNextHtml(user)'), 'The authenticated staff root is not cut over to the new role workspace.');

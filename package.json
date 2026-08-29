@@ -2,7 +2,7 @@
   "scripts": {
     "start": "node server.js",
     "staff:build": "tsc -p tsconfig.staff.json && vite build",
-    "staff:check": "tsc -p tsconfig.staff.json && vite build && node scripts/staff-next-check.js",
+    "staff:check": "tsc -p tsconfig.staff.json && vite build && node scripts/staff-next-check.js && node scripts/customer-payment-control-check.js",
     "customer:build": "tsc -p tsconfig.customer.json && vite build --config vite.customer.config.ts",
     "customer:check": "tsc -p tsconfig.customer.json && vite build --config vite.customer.config.ts && node scripts/customer-next-check.js",
     "rental-file-check": "node --check rental-file.js && node --check scripts/rental-file-check.js && node scripts/rental-file-check.js",

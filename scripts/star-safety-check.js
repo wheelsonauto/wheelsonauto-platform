@@ -60,6 +60,8 @@ const starQaManager = (finalFunctionSlice(app, 'starQaManagerPanel') || '') + (f
 const starActions = finalFunctionSlice(app, 'starAiActions');
 const mechanicalAssessment = finalFunctionSlice(server, 'mechanicalMessageAssessment');
 const serviceAppointment = finalFunctionSlice(server, 'prepareStarServiceAppointment');
+const customerVisitAssessment = finalFunctionSlice(server, 'customerVisitAssessment');
+const customerCare = finalFunctionSlice(server, 'prepareStarCustomerCare');
 
 if (!aiRules || !sanitize || !openAiPlan || !safeLinks || !aiDraft || !aiFindContext || !aiContext || !aiHealth || !approve || !apiAllowed || !starPanel || !starReadiness || !starHealth || !starQaManager || !starActions) {
   fail('Missing Star AI frontend/backend safety functions.');
@@ -76,7 +78,10 @@ if (!aiRules || !sanitize || !openAiPlan || !safeLinks || !aiDraft || !aiFindCon
   'sourceMessageId'
 ].forEach(text => requireText('Star service scheduling', serviceAppointment, text));
 requireText('Star service persistence', server, 'latest.maintenance = serviceAdditions.concat');
-requireText('Star mechanical model override', aiDraft, "fallback.actionType === 'maintenance_schedule'");
+requireText('Star mechanical model override', aiDraft, "['maintenance_schedule', 'customer_service_schedule', 'customer_service_review'].includes(fallback.actionType)");
+requireText('Customer service must not match mechanical service', mechanicalAssessment, "replace(/customer service/g, '')");
+['customer service', 'not with', 'needsAttention'].forEach(text => requireText('Customer visit classification', customerVisitAssessment, text));
+['Customer service appointment', 'Needs staff attention', 'vehicle: fields.vehicle'].forEach(text => requireText('Customer care scheduling', customerCare, text));
 
 [
   'charge_saved_card',

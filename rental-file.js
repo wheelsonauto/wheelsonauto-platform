@@ -480,6 +480,8 @@ function archiveVehicleAssignment(state, vehicleId = '', payload = {}, actor = {
     ...linkedCustomers.map(customer => text(customer.contractId))
   ].filter(Boolean));
   linkedCustomers.forEach(customer => Object.assign(customer, {
+    previousVehicleId: customer.previousVehicleId || customer.vehicleId || exactVehicleId,
+    previousVehicle: customer.previousVehicle || customer.vehicle || rentalVehicleName(vehicle),
     activeRentalFileId: '',
     vehicleId: '',
     vehicle: '',
@@ -490,6 +492,8 @@ function archiveVehicleAssignment(state, vehicleId = '', payload = {}, actor = {
     endDate,
     contractEndedAt: now,
     contractEndReason: reason,
+    assignmentEndedAt: now,
+    manuallyEditedAt: now,
     archivedAt: now,
     archivedBy: text(actor.name || actor.username || actor.role || 'WheelsonAuto staff', 160),
     updatedAt: now
@@ -502,6 +506,8 @@ function archiveVehicleAssignment(state, vehicleId = '', payload = {}, actor = {
     || linkedRecurringIds.has(recordId(record))
   ) && !/ended|returned|closed|cancelled|canceled|history|inactive|removed|stopped|disabled/i.test(originalRecurringStatus.get(record) || ''));
   stoppedRecurring.forEach(record => Object.assign(record, {
+    previousVehicleId: record.previousVehicleId || record.vehicleId || exactVehicleId,
+    previousVehicle: record.previousVehicle || record.vehicle || rentalVehicleName(vehicle),
     status: 'Stopped - vehicle archived',
     tone: 'neutral',
     autoChargeEnabled: false,
@@ -510,6 +516,8 @@ function archiveVehicleAssignment(state, vehicleId = '', payload = {}, actor = {
     nextRun: 'Ended',
     endDate,
     endedAt: now,
+    assignmentEndedAt: now,
+    manuallyEditedAt: now,
     removedAt: now,
     updatedAt: now,
     updatedBy: text(actor.name || actor.username || actor.role || 'WheelsonAuto staff', 160)
@@ -520,15 +528,19 @@ function archiveVehicleAssignment(state, vehicleId = '', payload = {}, actor = {
     || linkedContractIds.has(recordId(record))
   ) && !INACTIVE_RENTAL_PATTERN.test(originalContractStatus.get(record) || ''));
   endedContracts.forEach(record => Object.assign(record, {
+    previousVehicleId: record.previousVehicleId || record.vehicleId || exactVehicleId,
+    previousVehicle: record.previousVehicle || record.vehicle || rentalVehicleName(vehicle),
     status: 'Ended',
     endStatus: 'Ended - vehicle archived',
     endDate,
     endedAt: now,
     endMileage: Number(vehicle.mileage || vehicle.odometer || 0) || '',
     endReason: reason,
+    assignmentEndedAt: now,
+    manuallyEditedAt: now,
     updatedAt: now
   }));
-  Object.assign(vehicle, { activeRentalFileId: '', currentCustomer: '', customerId: '', updatedAt: now });
+  Object.assign(vehicle, { activeRentalFileId: '', currentCustomer: '', customerId: '', assignmentEndedAt: now, manuallyEditedAt: now, updatedAt: now });
   return { vehicle, endedRentalFile, linkedCustomers, stoppedRecurring, endedContracts, endDate, endedAt: now, reason };
 }
 

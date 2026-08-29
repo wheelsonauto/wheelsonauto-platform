@@ -7,6 +7,8 @@ process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS = '3600000';
 process.env.WOA_EMAIL_ENABLED = '0';
 process.env.WOA_MESSAGING_ENABLED = '0';
 
+const fs = require('node:fs');
+const path = require('node:path');
 const {
   crossOriginSessionWrite,
   assertRecurringChargeAllowed,
@@ -14,9 +16,54 @@ const {
   applySuccessfulPaymentToCustomerDues
 } = require('../server.js');
 
+const root = path.resolve(__dirname, '..');
+const read = file => fs.readFileSync(path.join(root, file), 'utf8');
+const page = read('staff-ui/customers/CustomersPage.tsx');
+const profile = read('staff-ui/customers/CustomerProfilePanel.tsx');
+const dues = read('staff-ui/customers/CustomerDuesPanel.tsx');
+const actionPanel = read('staff-ui/customers/CustomerPaymentActionPanel.tsx');
+const api = read('staff-ui/api.ts');
+const server = read('server.js');
+const directSmoke = read('scripts/server-direct-smoke-test.js');
+
+function requireAll(label, source, values) {
+  values.forEach(value => {
+    if (!source.includes(value)) throw new Error(label + ' is missing: ' + value);
+  });
+}
+
 function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
+
+requireAll('Customer lifecycle controls', page + profile + api + server + directSmoke, [
+  'Add customer', 'Save customer details', 'Save vehicle assignment', 'End customer contract',
+  'createCustomer', 'updateCustomer', 'assignCustomerVehicle', 'archiveCustomer',
+  "'/api/customers'", '/vehicle-assignment', '/archive',
+  'Lifecycle customer end test.', 'Close the active duplicate selected through its History copy.'
+]);
+requireAll('Customer due controls', dues + api + server + directSmoke, [
+  'Add to amount due', 'Attach proof', 'Remove', 'createClaim', 'archiveClaim',
+  "'/api/claims'", "'/proof'", 'Removing a customer due must preserve an archived audit record.'
+]);
+requireAll('Payment commands', page + actionPanel + api + server, [
+  'Charge saved card now', 'Schedule one-time payment', 'Save payment result', 'Create and send link',
+  'Create card setup link', 'Save autopay', 'Remove autopay', 'Delete setup',
+  'chargeSavedCard', 'scheduleOneTimePayment', 'recordManualPaymentResult', 'createPaymentLink',
+  'createReplacementCardSetup', 'updateAutopay', 'removeAutopay', 'deleteCardSetup',
+  '/api/integrations/payments/manual-charge', '/api/scheduled-payments', '/api/payments/manual-result',
+  '/api/payment-links', '/api/card-setup-requests', '/api/recurring-payments/update',
+  '/api/recurring-payments/remove', '/api/card-setup-requests/delete'
+]);
+requireAll('Payment chain safeguards', page + actionPanel, [
+  "chargePurpose: 'one_time'", "paymentDraft.chargePurpose === 'dues'", 'selectedDueTotal',
+  'allowAdditionalManualCharge: true', 'cancelOneTimePayment', 'emailLink',
+  'await refresh(undefined, true)', 'operationId', 'expectedUpdatedAt'
+]);
+requireAll('Durable customer closeout', server, [
+  'candidateVehicleIds', 'matchingActiveRentals', 'assignmentEndedAt', 'manuallyEditedAt',
+  '!savedCustomer.manuallyEditedAt', '!savedContract.manuallyEditedAt'
+]);
 
 const recurring = {
   id: 'rec-manual-control',
@@ -99,4 +146,4 @@ const staleCookieRequest = {
 assert(crossOriginSessionWrite(staleCookieRequest, '/api/public/card-setup/setup-token/stripe-checkout') === false, 'A single-use public card setup route must not be blocked by an unrelated stale app cookie.');
 assert(crossOriginSessionWrite(staleCookieRequest, '/api/customers/customer-1') === true, 'Cookie-authenticated account writes must remain protected from cross-origin requests.');
 
-console.log('Customer payment control check passed: selected Stripe billing stays active, automatic Clover stays disabled, one-time charge failures create no dues, due payments allocate once, and public card setup remains session-independent.');
+console.log('Customers and Payments control matrix passed: lifecycle, assignment, dues, payment, card, autopay, chained follow-up controls, Stripe selection, dues allocation, and public card setup safeguards are verified.');

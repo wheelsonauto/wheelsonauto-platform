@@ -10,16 +10,16 @@ type DashboardState = { applications: ApplicationItem[]; priority: DashboardPrio
 const emptyPriority: DashboardPriorityFeed = {
   ok: true,
   today: '',
-  summary: { collectedAmount: 0, collectedCount: 0, dueCount: 0, priorDueCount: 0, failedOnceCount: 0, failedTwiceCount: 0, serviceNeededCount: 0, overdueDuesCount: 0, inspectionDueCount: 0, lateInspectionCount: 0, pickupsTodayCount: 0, returnsTodayCount: 0 },
-  todayDue: [], priorDue: [], failedOnce: [], failedTwice: [], towCandidates: [], overdueDues: [], serviceNeeded: [], inspections: [], pickups: [], returns: [], todayCustomers: [], transactions: [], transactionsToday: [], maintenanceAppointments: [], overdueService: [], overdueBalances: [], completedToday: []
+  summary: { collectedAmount: 0, collectedCount: 0, dueCount: 0, priorDueCount: 0, failedOnceCount: 0, failedTwiceCount: 0, serviceNeededCount: 0, overdueDuesCount: 0, inspectionDueCount: 0, lateInspectionCount: 0, pickupsTodayCount: 0, returnsTodayCount: 0, customerAppointmentsTodayCount: 0, customerCareCount: 0 },
+  todayDue: [], priorDue: [], failedOnce: [], failedTwice: [], towCandidates: [], overdueDues: [], serviceNeeded: [], inspections: [], pickups: [], returns: [], customerAppointments: [], customerCare: [], todayCustomers: [], transactions: [], transactionsToday: [], maintenanceAppointments: [], overdueService: [], overdueBalances: [], completedToday: []
 };
 const emptyState: DashboardState = { applications: [], priority: emptyPriority };
 
 type DashboardSection = 'overview' | 'applications';
-type DashboardPanel = 'customers' | 'transactions' | 'schedule' | 'service' | 'past-due';
+type DashboardPanel = 'customers' | 'transactions' | 'schedule' | 'care' | 'service' | 'past-due';
 const dashboardSections: readonly DashboardSection[] = ['overview', 'applications'];
-const dashboardPanels: readonly DashboardPanel[] = ['customers', 'transactions', 'schedule', 'service', 'past-due'];
-const dashboardPanelLabels: Record<DashboardPanel, string> = { customers: 'Today', transactions: 'Transactions', schedule: 'Schedule', service: 'Service', 'past-due': 'Dues' };
+const dashboardPanels: readonly DashboardPanel[] = ['customers', 'transactions', 'schedule', 'care', 'service', 'past-due'];
+const dashboardPanelLabels: Record<DashboardPanel, string> = { customers: 'Today', transactions: 'Transactions', schedule: 'Schedule', care: 'Customer care', service: 'Service', 'past-due': 'Dues' };
 
 function businessDateKey(value?: string) {
   const date = new Date(String(value || ''));
@@ -90,7 +90,8 @@ export function DashboardPage({ onNavigate, onOpenRental, section, onSectionChan
   const scheduleRows = [
     ...priority.pickups.filter(row => row.date === priority.today).map(row => ({ ...row, kind: 'Pickup', target: 'dispatch' })),
     ...priority.returns.filter(row => row.date === priority.today).map(row => ({ ...row, kind: 'Return', target: 'dispatch' })),
-    ...priority.maintenanceAppointments.map(row => ({ ...row, kind: row.method || 'Service', target: 'fleet' }))
+    ...priority.maintenanceAppointments.map(row => ({ ...row, kind: row.method || 'Service', target: 'fleet' })),
+    ...priority.customerAppointments.filter(row => row.date === priority.today).map(row => ({ ...row, kind: 'Customer service', target: 'messages' }))
   ].sort((left, right) => String(left.time || '').localeCompare(String(right.time || '')));
   const transactions = (() => {
     const query = transactionQuery.trim().toLowerCase();
@@ -123,7 +124,7 @@ export function DashboardPage({ onNavigate, onOpenRental, section, onSectionChan
       <section className="metric-strip dashboard-metrics" aria-label="Daily operations summary">
         <button onClick={() => setMobilePanel('transactions')}><span>Collected today</span><strong>{money(priority.summary.collectedAmount)}</strong><small>{priority.summary.collectedCount} successful transactions</small></button>
         <button onClick={() => setMobilePanel('customers')}><span>Today’s customers</span><strong>{priority.todayCustomers.length}</strong><small>{todayStatusCounts['Failed twice'] || 0} failed twice · {todayStatusCounts.Pending || 0} pending</small></button>
-        <button onClick={() => setMobilePanel('schedule')}><span>Scheduled today</span><strong>{scheduleRows.length}</strong><small>pickup, return, inspection, and service</small></button>
+        <button onClick={() => setMobilePanel('schedule')}><span>Scheduled today</span><strong>{scheduleRows.length}</strong><small>pickup, return, inspection, service, and office visits</small></button>
         <button onClick={() => setMobilePanel('past-due')}><span>Tolls, violations &amp; dues</span><strong>{money(pastDueTotal)}</strong><small>{priority.overdueBalances.length} open customer items</small></button>
       </section>
       <div className="dashboard-panel-switch swipe-tabs" role="tablist" aria-label="Dashboard panels" {...panelSwipe}>{dashboardPanels.map(panel => <button type="button" role="tab" key={panel} aria-selected={mobilePanel === panel} className={mobilePanel === panel ? 'active' : ''} onClick={() => setMobilePanel(panel)}>{dashboardPanelLabels[panel]}</button>)}</div>
@@ -133,7 +134,11 @@ export function DashboardPage({ onNavigate, onOpenRental, section, onSectionChan
         </section>
 
         <section className={panelClass('schedule')}><header><div><span>Schedule</span><h2>Today’s appointments</h2></div><button className="text-command" onClick={() => onNavigate('dispatch')}>Schedule</button></header>
-          <div className="simple-list dashboard-panel-list">{scheduleRows.length ? scheduleRows.map(row => <button key={`${row.kind}-${row.id}`} onClick={() => onNavigate(row.target, row.vehicleId || row.id)}><span><strong>{row.customer}</strong><small>{[row.kind, row.vehicle, row.status].filter(Boolean).join(' · ')}</small></span><b>{row.time || 'Time not set'}</b></button>) : <div className="empty-state compact">No pickups, returns, inspections, or services are scheduled today.</div>}</div>
+          <div className="simple-list dashboard-panel-list">{scheduleRows.length ? scheduleRows.map(row => <button key={`${row.kind}-${row.id}`} onClick={() => onNavigate(row.target, row.kind === 'Customer service' ? row.customerId || row.id : row.vehicleId || row.id)}><span><strong>{row.customer}</strong><small>{[row.kind, row.vehicle, row.status].filter(Boolean).join(' · ')}</small></span><b>{row.time || 'Time not set'}</b></button>) : <div className="empty-state compact">No pickups, returns, inspections, services, or office visits are scheduled today.</div>}</div>
+        </section>
+
+        <section className={panelClass('care')}><header><div><span>People</span><h2>Customer care</h2></div><button className="text-command" onClick={() => onNavigate('messages')}>Messages</button></header>
+          <div className="simple-list dashboard-panel-list">{priority.customerCare.length ? priority.customerCare.map(row => <button key={row.id} onClick={() => onNavigate('messages', row.customerId || row.id)}><span><strong>{row.customer}</strong><small>{[row.method || 'Customer service', row.detail, row.date && `scheduled ${shortDate(row.date)}`].filter(Boolean).join(' · ')}</small></span><em className={`status-chip ${statusTone(row.status)}`}>{row.status}</em></button>) : <div className="empty-state compact">No customer complaints or office visits need attention.</div>}</div>
         </section>
 
         <section className={panelClass('transactions', 'dashboard-wide-panel dashboard-transactions-panel')}><header><div><span>Money</span><h2>Transactions</h2></div><span className="completed-count">{transactions.length}</span></header>

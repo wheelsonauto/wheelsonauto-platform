@@ -431,7 +431,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260829-fleet-unassign-sync-392';
+const ASSET_VERSION = 'platform-20260829-care-closeout-394';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -779,7 +779,7 @@ function repairVehicleSheetLinkConflicts(data) {
       }
     }
     const exactContract = data.contracts.find(item => item.id === importRowId(row, 'WOA-SHEET-'));
-    if (exactContract && String(exactContract.source || '').includes('Vehicle sheet import') && activeSheetRecord(exactContract)) {
+    if (exactContract && String(exactContract.source || '').includes('Vehicle sheet import') && !exactContract.manuallyEditedAt && activeSheetRecord(exactContract)) {
       const wantsPatch = exactContract.vehicleId !== patch.vehicleId || normKey(exactContract.vin) !== normKey(patch.vin) || normKey(exactContract.customer) !== normKey(customerName);
       if (wantsPatch) {
         Object.assign(exactContract, {
@@ -1059,6 +1059,7 @@ function repairDataIds(data) {
   repairWeakCustomerVehicleLabels(data);
   ensureBaseOrganization(data);
   repairVehicleSheetLinkConflicts(data);
+  repairStarCustomerServiceMisroutes(data);
   repairRepeatedNoteLines(data);
   resolveClaimCustomerLinks(data);
   reconcilePaidPaymentRequests(data);
@@ -5165,6 +5166,25 @@ function dashboardPriorityFeed(data = {}, dateKeyValue = localDateKey()) {
     .map(appointmentItem)
     .filter(row => row.date && dashboardDayDistance(dateKeyValue, row.date) >= 0 && dashboardDayDistance(dateKeyValue, row.date) <= 7)
     .sort((left, right) => String(left.date + left.time).localeCompare(String(right.date + right.time)));
+  const customerCareTask = row => /customer service|customer care|office visit|customer complaint/i.test(String([row.type, row.title, row.visitType].filter(Boolean).join(' ')));
+  const customerAppointmentItem = row => ({
+    id: row.id || '', customer: row.customer || row.customerName || 'Customer', customerId: row.customerId || '',
+    vehicle: row.vehicle || '', vehicleId: row.vehicleId || '', date: dashboardRecordDate(row, ['date', 'due', 'scheduledDate']),
+    time: row.time || row.appointmentTime || row.scheduledTime || '', status: row.status || 'Scheduled',
+    address: row.address || '5150 NJ-42, Blackwood, NJ 08012', method: row.visitType || row.type || 'Customer service',
+    detail: row.notes || row.issue || ''
+  });
+  const customerAppointments = (data.tasks || [])
+    .filter(row => customerCareTask(row) && /appointment|scheduled/i.test(String([row.type, row.title, row.status].filter(Boolean).join(' '))))
+    .filter(row => !/complete|done|closed|cancel/i.test(String(row.status || '')))
+    .map(customerAppointmentItem)
+    .filter(row => row.date && dashboardDayDistance(dateKeyValue, row.date) >= 0 && dashboardDayDistance(dateKeyValue, row.date) <= 7)
+    .sort((left, right) => String(left.date + left.time).localeCompare(String(right.date + right.time)));
+  const customerCare = (data.tasks || [])
+    .filter(row => customerCareTask(row) && !/complete|done|closed|cancel/i.test(String(row.status || '')))
+    .map(customerAppointmentItem)
+    .sort((left, right) => Number(/needs staff|urgent|attention/i.test(String(right.status || ''))) - Number(/needs staff|urgent|attention/i.test(String(left.status || ''))) || String(left.date + left.time).localeCompare(String(right.date + right.time)))
+    .slice(0, 100);
   const paymentRows = uniqueCloseoutPayments((data.payments || []).filter(payment => payment.controlledStripePilotTest !== true));
   const transactions = paymentRows.map(payment => dashboardTransactionItem(data, payment, recurringRows))
     .sort((left, right) => paymentEventTime(right) - paymentEventTime(left) || String(right.id || '').localeCompare(String(left.id || '')))
@@ -5200,7 +5220,9 @@ function dashboardPriorityFeed(data = {}, dateKeyValue = localDateKey()) {
       inspectionDueCount: inspections.length,
       lateInspectionCount: inspections.filter(row => row.daysLate >= 14).length,
       pickupsTodayCount: pickups.filter(row => row.date === dateKeyValue).length,
-      returnsTodayCount: returns.filter(row => row.date === dateKeyValue).length
+      returnsTodayCount: returns.filter(row => row.date === dateKeyValue).length,
+      customerAppointmentsTodayCount: customerAppointments.filter(row => row.date === dateKeyValue).length,
+      customerCareCount: customerCare.length
     },
     todayDue,
     priorDue,
@@ -5212,6 +5234,8 @@ function dashboardPriorityFeed(data = {}, dateKeyValue = localDateKey()) {
     inspections,
     pickups,
     returns,
+    customerAppointments,
+    customerCare,
     todayCustomers,
     transactions,
     transactionsToday,
@@ -6768,10 +6792,20 @@ function messageContextFields(context = {}, payload = {}) {
 }
 function mechanicalMessageAssessment(body = '') {
   const text = String(body || '').toLowerCase();
-  const mechanical = /service|maintenance|mechanic|repair|oil|engine|brake|tire|wheel|steer|battery|start|stall|noise|sound|leak|smoke|overheat|temperature|warning light|check engine|transmission|tow|drive the car|drivable|driveable/.test(text);
+  const mechanicalText = text.replace(/customer service/g, '');
+  const mechanical = /maintenance|mechanic|repair|oil|engine|brake|tire|wheel|steer|battery|start|stall|noise|sound|leak|smoke|overheat|temperature|warning light|check engine|transmission|tow|drive the car|drivable|driveable|(?:need|schedule|book) (?:a )?service|service (?:the )?(?:car|vehicle)/.test(mechanicalText);
   const urgent = mechanical && /no brakes|brake(?:s)? (?:failed|not working)|cannot steer|can'?t steer|steering (?:locked|failed)|smoke|fire|strong (?:gas|fuel) smell|fuel leak|overheat|temperature (?:is )?(?:red|high)|oil pressure|flashing check engine|stalled? in traffic|cannot drive|can'?t drive|won'?t drive|not drivable|undriveable|unsafe to drive/.test(text);
   const scheduleRequested = mechanical && /schedule|appointment|book|bring (?:it|the car) in|come in|drop (?:it|the car) off|when can i|what time can i/.test(text);
   return { mechanical, urgent, scheduleRequested };
+}
+function customerVisitAssessment(body = '') {
+  const text = String(body || '').toLowerCase();
+  const explicitCustomerService = /customer service|office visit|come (?:in|by)|coming (?:in|by)|stop by|visit (?:the )?office|speak (?:to|with) (?:someone|the office|a manager)|not (?:a )?customer|no longer (?:a customer|with)|not with (?:you|wheelsonauto)|wrong account|account issue|billing issue|complaint/.test(text);
+  const unqualifiedArrival = /\b(?:i am|i'm|im|we are|we're)\s+(?:going to be )?coming\b/.test(text) && !mechanicalMessageAssessment(text).mechanical;
+  const customerService = explicitCustomerService || unqualifiedArrival;
+  const scheduleRequested = customerService && /schedule|appointment|book|come (?:in|by)|coming (?:in|by)|stop by|visit|\btoday\b|\btomorrow\b|\bmonday\b|\btuesday\b|\bwednesday\b|\bthursday\b|\bfriday\b|\bsaturday\b|\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b|\b\d{1,2}\/\d{1,2}\b|\b\d{4}-\d{2}-\d{2}\b/.test(text);
+  const needsAttention = customerService && /complaint|not (?:a )?customer|no longer (?:a customer|with)|not with (?:you|wheelsonauto)|wrong account|account issue|billing issue|speak (?:to|with) (?:someone|the office|a manager)/.test(text);
+  return { customerService, scheduleRequested, needsAttention };
 }
 function nextServiceBusinessDate(dateKeyValue, includeCurrent = false) {
   let candidate = validCalendarDateKey(dateKeyValue) || localDateKey();
@@ -6868,6 +6902,84 @@ function prepareStarServiceAppointment(data, plan, context, payload = {}) {
   }
   return plan;
 }
+function prepareStarCustomerCare(data, plan, context, payload = {}) {
+  if (!plan || !['customer_service_schedule', 'customer_service_review'].includes(plan.actionType)) return plan;
+  const body = String(payload.body || payload.message || payload.text || '');
+  const assessment = customerVisitAssessment(body);
+  if (!assessment.customerService) return plan;
+  data.tasks = Array.isArray(data.tasks) ? data.tasks : [];
+  const sourceMessageId = String(payload.messageId || payload.externalId || '').trim();
+  let task = sourceMessageId && data.tasks.find(row => String(row.sourceMessageId || '') === sourceMessageId && /customer (?:service|care)|office visit/i.test(String([row.type, row.title].join(' '))));
+  if (!task) {
+    const fields = messageContextFields(context, payload);
+    const scheduled = assessment.scheduleRequested && !assessment.needsAttention;
+    const date = scheduled ? serviceDateFromMessage(body, false) : localDateKey();
+    const time = scheduled ? serviceTimeFromMessage(body) : '';
+    task = {
+      id: 'task-star-customer-' + Date.now() + '-' + crypto.randomBytes(4).toString('hex'),
+      organizationId: fields.organizationId || MAIN_ORG_ID,
+      customer: fields.customer || context.customerName || 'Customer',
+      customerId: fields.customerId || '',
+      customerAccountId: fields.customerAccountId || '',
+      phone: fields.phone || '',
+      email: fields.email || '',
+      vehicle: fields.vehicle || context.vehicleName || '',
+      vehicleId: fields.vehicleId || '',
+      title: scheduled ? 'Customer service appointment' : 'Customer needs staff attention',
+      type: scheduled ? 'Customer service appointment' : 'Customer care',
+      visitType: 'Customer service',
+      due: date,
+      date,
+      time,
+      status: scheduled ? 'Appointment scheduled' : 'Needs staff attention',
+      tone: scheduled ? 'good' : 'warn',
+      notes: body.slice(0, 900),
+      source: 'Star customer message scheduling',
+      sourceMessageId,
+      createdAt: new Date().toISOString()
+    };
+    data.tasks.unshift(task);
+  }
+  plan.related = { ...(plan.related || {}), customerCareTaskId: task.id, appointmentDate: task.date || task.due, appointmentTime: task.time || '' };
+  if (/appointment scheduled/i.test(String(task.status || ''))) {
+    plan.reply = String(plan.reply || '').trim() + ' I scheduled your customer-service visit for ' + task.due + ' at ' + task.time + '. If that time does not work, reply here and we will move it.';
+    plan.summary = 'Customer-service appointment scheduled for ' + (plan.customer || context.customerName || 'customer');
+  } else {
+    plan.reply = 'Hi ' + aiCustomerFirstName(plan.customer || context.customerName) + ', thank you for telling us. I marked this for the WheelsonAuto team to review as a customer-service issue, not a vehicle repair. A staff member will follow up with you.';
+    plan.summary = 'Customer-care attention needed for ' + (plan.customer || context.customerName || 'customer');
+  }
+  return plan;
+}
+function repairStarCustomerServiceMisroutes(data = {}) {
+  data.maintenance = Array.isArray(data.maintenance) ? data.maintenance : [];
+  data.tasks = Array.isArray(data.tasks) ? data.tasks : [];
+  let moved = 0;
+  data.maintenance.forEach(row => {
+    if (!/star customer message scheduling/i.test(String(row.source || '')) || /complete|closed|fixed|done|cancel|moved/i.test(String(row.status || ''))) return;
+    const body = String(row.issue || row.notes || '');
+    const visit = customerVisitAssessment(body);
+    if (!visit.customerService || mechanicalMessageAssessment(body).mechanical) return;
+    const sourceMessageId = String(row.sourceMessageId || '').trim();
+    const taskId = 'task-star-care-repair-' + crypto.createHash('sha256').update(String(row.id || sourceMessageId || body)).digest('hex').slice(0, 20);
+    if (!data.tasks.some(task => String(task.id || '') === taskId || sourceMessageId && String(task.sourceMessageId || '') === sourceMessageId && /customer (?:service|care)|office visit/i.test(String([task.type, task.title].join(' '))))) {
+      data.tasks.unshift({
+        id: taskId,
+        organizationId: row.organizationId || MAIN_ORG_ID,
+        customer: row.customer || 'Customer', customerId: row.customerId || '', customerAccountId: row.customerAccountId || '',
+        phone: row.phone || '', email: row.email || '', vehicle: row.vehicle || '', vehicleId: row.vehicleId || '',
+        title: visit.needsAttention ? 'Customer needs staff attention' : 'Customer service appointment',
+        type: visit.needsAttention ? 'Customer care' : 'Customer service appointment', visitType: 'Customer service',
+        due: row.due || localDateKey(), date: row.due || localDateKey(), time: row.appointmentTime || '',
+        status: visit.needsAttention ? 'Needs staff attention' : 'Appointment scheduled', tone: visit.needsAttention ? 'warn' : 'good',
+        notes: body.slice(0, 900), source: 'Star customer message scheduling', sourceMessageId,
+        movedFromMaintenanceId: row.id || '', createdAt: row.createdAt || new Date().toISOString()
+      });
+    }
+    Object.assign(row, { status: 'Moved to customer care', completedAt: new Date().toISOString(), movedToCustomerCareTaskId: taskId, updatedAt: new Date().toISOString() });
+    moved += 1;
+  });
+  return moved;
+}
 function aiPlanRules(data, payload = {}, context = null) {
   const ctx = context || aiFindCustomerContext(data, payload);
   const body = String(payload.body || payload.message || payload.text || '').trim();
@@ -6890,12 +7002,23 @@ function aiPlanRules(data, payload = {}, context = null) {
   let reply = 'Hi ' + first + ', this is WheelsonAuto. I can help with that. Let me pull up your account and we will follow up shortly.';
   const reasons = [];
   const mechanical = mechanicalMessageAssessment(body);
+  const customerVisit = customerVisitAssessment(body);
   if (!body) {
     needsHuman = true;
     actionType = 'human_review';
     intent = 'empty_message';
     reply = 'Hi ' + first + ', this is WheelsonAuto. I got your message, but I need a little more detail so we can help you.';
     reasons.push('No customer message body was provided.');
+  } else if (customerVisit.customerService) {
+    actionType = customerVisit.scheduleRequested && !customerVisit.needsAttention ? 'customer_service_schedule' : 'customer_service_review';
+    intent = customerVisit.needsAttention ? 'customer_service_attention' : 'customer_service_appointment';
+    needsHuman = customerVisit.needsAttention;
+    tone = customerVisit.needsAttention ? 'warn' : 'good';
+    confidence = 0.94;
+    reply = customerVisit.needsAttention
+      ? 'Hi ' + first + ', thank you for telling us. I am marking this for the WheelsonAuto team as a customer-service issue so a staff member can review it.'
+      : 'Hi ' + first + ', I can schedule a customer-service visit with the WheelsonAuto office.';
+    reasons.push('This is an office/customer-service matter and must not create a mechanical maintenance job.');
   } else if (mechanical.mechanical) {
     actionType = 'maintenance_schedule';
     intent = mechanical.urgent ? 'urgent_mechanical_safety' : 'maintenance_or_schedule';
@@ -7004,7 +7127,7 @@ function aiPlanRules(data, payload = {}, context = null) {
     reply = 'Hi ' + first + ', this is WheelsonAuto. Thanks for reaching out.' + dueText + ' We will take care of this and follow up if we need anything else.';
     reasons.push('General customer message can receive a normal human-sounding reply.');
   }
-  const canAutoSend = !approvalRequired && !needsHuman && ['reply', 'payment_self_service', 'send_payment_link', 'send_card_setup', 'maintenance_schedule'].includes(actionType);
+  const canAutoSend = !approvalRequired && !needsHuman && ['reply', 'payment_self_service', 'send_payment_link', 'send_card_setup', 'maintenance_schedule', 'customer_service_schedule'].includes(actionType);
   return {
     ok: true,
     mode: 'rules',
@@ -7102,7 +7225,7 @@ async function openAiReplyPlan(data, payload, context, fallback) {
   const input = [
     {
       role: 'developer',
-      content: 'You are Star AI, the built-in WheelsonAuto AI manager. Write concise, calm, natural replies that sound like a helpful human office assistant. Follow the ownerReplyGuidance unless it conflicts with a safety or approval rule. Use the platform context only, including customer, vehicle, VIN/tag, tracker, payment state, portal, documents, applications, service, tolls/claims, tasks, recent messages, launch readiness gaps, and iFleet coverage gaps. If readiness or coverage says a workflow is blocked, say it needs office review instead of pretending it is complete. For mechanical questions, do not guess a diagnosis or frighten the customer: give practical low-risk guidance; tell them to park and stop driving only for serious symptoms such as failed brakes/steering, smoke/fire, fuel leak, overheating, oil-pressure warning, flashing check-engine light, or an undriveable vehicle. For a requested service appointment, use maintenance_schedule; WheelsonAuto schedules Monday through Saturday and never same-day unless the issue is urgent. For payment-how-to questions, direct customers to Payments > Make a payment in their WheelsonAuto app before offering office help. Never promise a charge, refund, autopay change, cancellation, removal, toll charge, saved-card action, password reset, receipt, payoff, or contract/e-sign send has happened unless an admin approved it. Return only JSON with fields: reply, intent, actionType, approvalRequired, needsHuman, canAutoSend, confidence, tone, reasons.'
+      content: 'You are Star AI, the built-in WheelsonAuto AI manager. Write concise, calm, natural replies that sound like a helpful human office assistant. Follow the ownerReplyGuidance unless it conflicts with a safety or approval rule. Use the platform context only, including customer, vehicle, VIN/tag, tracker, payment state, portal, documents, applications, service, tolls/claims, tasks, recent messages, launch readiness gaps, and iFleet coverage gaps. If readiness or coverage says a workflow is blocked, say it needs office review instead of pretending it is complete. Distinguish customer service from mechanical service: complaints, account issues, office visits, and customers who say they are no longer with WheelsonAuto use customer_service_review or customer_service_schedule and never create maintenance. A customer-service appointment does not require an assigned vehicle. For mechanical questions, do not guess a diagnosis or frighten the customer: give practical low-risk guidance; tell them to park and stop driving only for serious symptoms such as failed brakes/steering, smoke/fire, fuel leak, overheating, oil-pressure warning, flashing check-engine light, or an undriveable vehicle. For a requested mechanical service appointment, use maintenance_schedule; WheelsonAuto schedules Monday through Saturday and never same-day unless the issue is urgent. For payment-how-to questions, direct customers to Payments > Make a payment in their WheelsonAuto app before offering office help. Never promise a charge, refund, autopay change, cancellation, removal, toll charge, saved-card action, password reset, receipt, payoff, or contract/e-sign send has happened unless an admin approved it. Return only JSON with fields: reply, intent, actionType, approvalRequired, needsHuman, canAutoSend, confidence, tone, reasons.'
     },
     {
       role: 'user',
@@ -7329,6 +7452,7 @@ function prepareAiSafeLink(data, plan, context, payload = {}) {
     plan.reply = appendLinkToReply(plan.reply, 'Secure card setup link', setup.request.url);
     plan.summary = 'Secure card setup link ready for ' + (plan.customer || context.customerName || 'customer');
   }
+  plan = prepareStarCustomerCare(data, plan, context, payload);
   return prepareStarServiceAppointment(data, plan, context, payload);
 }
 function starPreparedAction(data, plan = {}, context = {}, payload = {}) {
@@ -7350,6 +7474,8 @@ function starPreparedAction(data, plan = {}, context = {}, payload = {}) {
     portal_login_help: 'Prepare portal login help',
     send_claim_link: 'Review toll/claim payment link',
     maintenance_schedule: 'Schedule service',
+    customer_service_schedule: 'Schedule customer service',
+    customer_service_review: 'Customer care review',
     human_review: 'Human review'
   };
   const amount = Number(related.amount || fields.amount || recurring.amount || recurring.weeklyAmount || 0);
@@ -7382,7 +7508,7 @@ function starPreparedAction(data, plan = {}, context = {}, payload = {}) {
     paymentLinkUrl: related.paymentLinkUrl || '',
     cardSetupRequestId: related.cardSetupRequestId || '',
     cardSetupUrl: related.cardSetupUrl || '',
-    providerSetupNeeded: actionType === 'reply' || actionType === 'maintenance_schedule' ? !publicMessagingStatus(data).smsDeliveryLive && !publicMessagingStatus(data).emailConfigured : false,
+    providerSetupNeeded: ['reply', 'maintenance_schedule', 'customer_service_schedule', 'customer_service_review'].includes(actionType) ? !publicMessagingStatus(data).smsDeliveryLive && !publicMessagingStatus(data).emailConfigured : false,
     adminGuardrail: requiresAdminApproval ? 'Star prepared this action only. An admin must approve it in the matching payment/customer workflow before anything sensitive happens.' : 'Safe reply/link draft prepared. Provider setup may still be required before it sends live.'
   };
   if (prepared.paymentLinkUrl) prepared.status = 'Payment link ready';
@@ -7400,14 +7526,14 @@ async function createAiMessageDraft(data, payload = {}, options = {}) {
   const existing = duplicateKey && data.messages.find(item => item.aiSourceMessageId === duplicateKey && /AI draft|AI action/i.test(String(item.direction || '')));
   if (existing && !options.forceNew) return { plan: existing.aiPlan || fallback, draft: existing, existing: true };
   let plan = await openAiReplyPlan(data, payload, context, fallback);
-  if (fallback.actionType === 'maintenance_schedule') {
+  if (['maintenance_schedule', 'customer_service_schedule', 'customer_service_review'].includes(fallback.actionType)) {
     plan = sanitizeAiPlan({
       ...plan,
       intent: fallback.intent,
-      actionType: 'maintenance_schedule',
+      actionType: fallback.actionType,
       approvalRequired: false,
-      needsHuman: false,
-      canAutoSend: true,
+      needsHuman: fallback.needsHuman,
+      canAutoSend: fallback.canAutoSend,
       tone: fallback.tone,
       related: { ...(fallback.related || {}), ...(plan.related || {}) },
       reasons: [...(plan.reasons || []), ...(fallback.reasons || [])].slice(0, 6)
@@ -9023,18 +9149,21 @@ function enrichLinkedProfiles(data) {
     return null;
   }
   const fields = ['customer', 'phone', 'email', 'vehicle', 'vehicleId', 'vin', 'licensePlate', 'plate', 'tempTag', 'tracker', 'amount', 'weeklyAmount', 'frequency', 'cloverCustomerId', 'cloverPaymentSource', 'cardLabel', 'cardLast4', 'cardSavedAt', 'paymentSetup'];
+  const assignmentEnded = row => !!String(row && (row.assignmentEndedAt || row.contractEndedAt || row.archivedAt) || '').trim()
+    || /history|ended|closed|returned|removed|archived/i.test(String([row && row.status, row && row.stage, row && row.endStatus].filter(Boolean).join(' ')));
+  const historySafeFields = ['customer', 'phone', 'email', 'amount', 'weeklyAmount', 'frequency', 'cloverCustomerId', 'cloverPaymentSource', 'cardLabel', 'cardLast4', 'cardSavedAt', 'paymentSetup'];
   let recurringFilled = 0, customerFilled = 0, contractFilled = 0;
   [...data.recurringPayments, ...data.integrations.clover.recurringPlanMembers].forEach(row => {
     const match = bestMatch(row);
-    if (match) recurringFilled += fillBlank(row, match, fields);
+    if (match) recurringFilled += fillBlank(row, match, assignmentEnded(row) ? historySafeFields : fields);
   });
   data.customers.forEach(row => {
     const match = bestMatch(row);
-    if (match) customerFilled += fillBlank(row, match, fields);
+    if (match) customerFilled += fillBlank(row, match, assignmentEnded(row) ? ['customer', 'phone', 'email'] : fields);
   });
   data.contracts.forEach(row => {
     const match = bestMatch(row);
-    if (match) contractFilled += fillBlank(row, match, ['phone', 'email', 'vehicleId', 'vin', 'licensePlate', 'plate', 'tempTag', 'tracker', 'cloverCustomerId']);
+    if (match) contractFilled += fillBlank(row, match, assignmentEnded(row) ? ['phone', 'email', 'cloverCustomerId'] : ['phone', 'email', 'vehicleId', 'vin', 'licensePlate', 'plate', 'tempTag', 'tracker', 'cloverCustomerId']);
   });
   if (recurringFilled || customerFilled || contractFilled || paymentClaimSync.changed || assignmentSync.vehicleAssignmentsSynced || assignmentSync.linkedRowsSynced || assignmentSync.serviceRowsSynced || assignmentSync.assignmentConflicts || onlineInventorySync.onlineInventoryLinked || onlineInventorySync.onlineInventoryUnavailable || onlineInventorySync.onlineInventoryRestored || !data.integrations.profileEnrichment) {
     data.integrations.profileEnrichment = {
@@ -9279,7 +9408,7 @@ async function mergeVehicleImport(data) {
     if (recurringMatch.email && !customerPatch.email) customerPatch.email = recurringMatch.email;
     if (customerIndex.has(customerKey)) {
       const savedCustomer = data.customers[customerIndex.get(customerKey)];
-      if (!importedRecordEndedForDifferentRenter(savedCustomer, currentVehicle, row.customer)) Object.assign(savedCustomer, customerPatch);
+      if (!savedCustomer.manuallyEditedAt && !importedRecordEndedForDifferentRenter(savedCustomer, currentVehicle, row.customer)) Object.assign(savedCustomer, customerPatch);
     }
     else {
       data.customers.push({ id: 'cus-sheet-' + String(row.rowNumber).padStart(3, '0'), phone: recurringMatch.phone || '', email: recurringMatch.email || '', ...customerPatch });
@@ -9293,7 +9422,7 @@ async function mergeVehicleImport(data) {
       if (currentVehicle) Object.assign(contractPatch, { vehicleId: currentVehicle.id, vin: currentVehicle.vin || row.vin || '', licensePlate: currentVehicle.plate || row.licensePlate || '', plate: currentVehicle.plate || row.licensePlate || '', tempTag: currentVehicle.tempTag || row.tempTag || '' });
       if (contractIndex.has(contractKey)) {
         const savedContract = data.contracts[contractIndex.get(contractKey)];
-        if (!importedRecordEndedForDifferentRenter(savedContract, currentVehicle, row.customer)) Object.assign(savedContract, contractPatch);
+        if (!savedContract.manuallyEditedAt && !importedRecordEndedForDifferentRenter(savedContract, currentVehicle, row.customer)) Object.assign(savedContract, contractPatch);
       }
       else {
         data.contracts.push({ id: 'WOA-SHEET-' + String(row.rowNumber).padStart(3, '0'), paidWeeks: 0, totalWeeks: 82, ...contractPatch });
@@ -29001,21 +29130,43 @@ const server = http.createServer(async (req, res) => {
           if (!customer || !rowVisibleToUserOrganization(customer, user)) throw Object.assign(new Error('Customer record was not found.'), { statusCode: 404 });
           assertResourceRevision(customer, payload);
           const customerName = String(customer.name || customer.customer || '').trim();
+          const customerNameKey = normKey(customerName);
           const accountId = String(customer.customerAccountId || '').trim();
-          const uniqueCustomerName = customerName && (data.customers || []).filter(row => normKey(row.name || row.customer) === normKey(customerName)).length === 1;
-          const selectedRentalId = String(customer.activeRentalFileId || '').trim();
-          const selectedVehicleId = String(customer.vehicleId || '').trim();
+          let selectedRentalId = String(customer.activeRentalFileId || '').trim();
+          let selectedVehicleId = String(customer.vehicleId || '').trim();
+          const candidateVehicleIds = new Set(selectedVehicleId ? [selectedVehicleId] : []);
+          (data.vehicles || []).filter(row => !/removed|retired|sold/i.test(String(row.status || '')) && customerNameKey && normKey(row.currentCustomer) === customerNameKey).forEach(row => candidateVehicleIds.add(String(row.id || '')));
+          [
+            [(data.rentalFiles || []), 'rental_file'],
+            [(data.recurringPayments || []), 'recurring_payment'],
+            [(data.contracts || []), 'customer_file'],
+            [(data.customers || []), 'customer']
+          ].forEach(([rows, source]) => rows.forEach(row => {
+            const candidate = activeAssignmentRecord(row, source);
+            if (!candidate || !candidate.vehicleId || normKey(row.customer || row.customerName || row.name) !== customerNameKey) return;
+            candidateVehicleIds.add(String(candidate.vehicleId));
+          }));
+          candidateVehicleIds.delete('');
+          if (!selectedVehicleId && candidateVehicleIds.size === 1) selectedVehicleId = [...candidateVehicleIds][0];
+          if (candidateVehicleIds.size > 1) throw Object.assign(new Error('More than one active vehicle is linked to this customer name. Resolve the assignment conflict before ending the contract.'), { statusCode: 409 });
+          const matchingActiveRentals = (data.rentalFiles || []).filter(row => rentalFiles.isActiveRentalFile(row)
+            && (String(row.customerId || '') === customerId
+              || accountId && String(row.customerAccountId || '') === accountId
+              || selectedVehicleId && String(row.vehicleId || '') === selectedVehicleId && normKey(row.customerName || row.customer) === customerNameKey));
+          if (!selectedRentalId && matchingActiveRentals.length === 1) selectedRentalId = String(matchingActiveRentals[0].id || '');
+          if (matchingActiveRentals.length > 1) throw Object.assign(new Error('This customer has more than one active Rental File. Resolve the duplicate before ending the contract.'), { statusCode: 409 });
+          const uniqueCustomerName = customerName && (data.customers || []).filter(row => normKey(row.name || row.customer) === customerNameKey).length === 1;
           const linkedCustomers = (data.customers || []).filter(row => String(row.id || '') === customerId
             || accountId && String(row.customerAccountId || '') === accountId
             || selectedRentalId && String(row.activeRentalFileId || '') === selectedRentalId
-            || selectedVehicleId && String(row.vehicleId || '') === selectedVehicleId && normKey(row.name || row.customer) === normKey(customerName));
+            || selectedVehicleId && String(row.vehicleId || '') === selectedVehicleId && normKey(row.name || row.customer) === customerNameKey);
           const linkedCustomerIds = new Set(linkedCustomers.map(row => String(row.id || '')).filter(Boolean));
           const linkedAccountIds = new Set(linkedCustomers.map(row => String(row.customerAccountId || '')).filter(Boolean));
           const exact = row => linkedCustomerIds.has(String(row.customerId || ''))
             || linkedAccountIds.has(String(row.customerAccountId || ''))
             || selectedRentalId && String(row.rentalFileId || row.activeRentalFileId || '') === selectedRentalId
-            || selectedVehicleId && String(row.vehicleId || '') === selectedVehicleId && normKey(row.customer || row.name || row.customerName) === normKey(customerName)
-            || uniqueCustomerName && normKey(row.customer || row.name || row.customerName) === normKey(customerName);
+            || selectedVehicleId && String(row.vehicleId || '') === selectedVehicleId && normKey(row.customer || row.name || row.customerName) === customerNameKey
+            || uniqueCustomerName && normKey(row.customer || row.name || row.customerName) === customerNameKey;
           const activeRentals = (data.rentalFiles || []).filter(row => rentalFiles.isActiveRentalFile(row) && exact(row));
           if (activeRentals.length > 1) throw Object.assign(new Error('This customer has more than one active Rental File. Resolve the duplicate before ending the contract.'), { statusCode: 409 });
           const endDate = new Date(endedTime).toISOString().slice(0, 10);
@@ -29029,27 +29180,30 @@ const server = http.createServer(async (req, res) => {
             }, user);
             returnedVehicle = result.vehicle && safeVehicleRecord(result.vehicle) || null;
           } else {
-            const linkedVehicles = (data.vehicles || []).filter(row => String(row.id || '') === String(customer.vehicleId || '') || uniqueCustomerName && normKey(row.currentCustomer) === normKey(customerName));
+            const linkedVehicles = (data.vehicles || []).filter(row => selectedVehicleId && String(row.id || '') === selectedVehicleId || uniqueCustomerName && normKey(row.currentCustomer) === customerNameKey);
             if (linkedVehicles.length > 1) throw Object.assign(new Error('More than one vehicle is linked to this customer. Resolve the assignment conflict before ending the contract.'), { statusCode: 409 });
             if (linkedVehicles[0]) {
               const vehicle = linkedVehicles[0];
               const now = new Date().toISOString();
-              Object.assign(vehicle, { previousCustomer: vehicle.currentCustomer || customerName, currentCustomer: '', activeRentalFileId: '', status: 'Ready', returnedAt: now, updatedAt: now });
+              Object.assign(vehicle, { previousCustomer: vehicle.currentCustomer || customerName, currentCustomer: '', activeRentalFileId: '', status: 'Ready', returnedAt: now, assignmentEndedAt: contractEndedAt, manuallyEditedAt: now, updatedAt: now });
               (data.onlineVehicles || []).filter(row => String(row.platformVehicleId || row.vehicleId || '') === String(vehicle.id || '')).forEach(row => Object.assign(row, { published: false, availability: 'Ready - publish after inspection', currentCustomer: '', updatedAt: now }));
               returnedVehicle = safeVehicleRecord(vehicle);
             }
           }
           const now = new Date().toISOString();
-          (data.recurringPayments || []).filter(exact).forEach(row => Object.assign(row, { status: 'Removed', autoChargeEnabled: false, autopayManagedBy: 'Stopped - customer contract ended', nextRun: '', endDate, endedAt: contractEndedAt, removedAt: now, updatedAt: now }));
-          (data.contracts || []).filter(exact).forEach(row => Object.assign(row, { status: 'Ended', endStatus: 'Ended', endDate, endedAt: contractEndedAt, updatedAt: now }));
+          (data.recurringPayments || []).filter(exact).forEach(row => Object.assign(row, { previousVehicleId: row.previousVehicleId || row.vehicleId || selectedVehicleId, previousVehicle: row.previousVehicle || row.vehicle || '', status: 'Removed', autoChargeEnabled: false, autopayManagedBy: 'Stopped - customer contract ended', nextRun: '', endDate, endedAt: contractEndedAt, assignmentEndedAt: contractEndedAt, manuallyEditedAt: now, removedAt: now, updatedAt: now }));
+          (data.contracts || []).filter(exact).forEach(row => Object.assign(row, { previousVehicleId: row.previousVehicleId || row.vehicleId || selectedVehicleId, previousVehicle: row.previousVehicle || row.vehicle || '', status: 'Ended', endStatus: 'Ended', endDate, endedAt: contractEndedAt, assignmentEndedAt: contractEndedAt, manuallyEditedAt: now, updatedAt: now }));
           (data.customerAccounts || []).filter(row => linkedAccountIds.has(String(row.id || '')) || linkedCustomerIds.has(String(row.customerId || ''))).forEach(row => Object.assign(row, { status: 'Disabled', disabledAt: now, disabledBy: user.name || user.username || 'Staff', portalStage: 'Contract ended', updatedAt: now }));
           const openClaimAmount = (data.claims || []).filter(row => exact(row) && !/paid|closed|resolved|dismissed|cancelled|removed/i.test(String(row.status || ''))).reduce((sum, row) => sum + Number(row.amount || 0), 0);
           const unpaidAmount = (data.payments || []).filter(row => exact(row) && /failed|declined|unpaid|past due/i.test(String(row.status || ''))).reduce((sum, row) => sum + Number(row.amount || 0), 0);
           linkedCustomers.forEach(record => Object.assign(record, {
+            previousVehicleId: record.previousVehicleId || record.vehicleId || selectedVehicleId,
+            previousVehicle: record.previousVehicle || record.vehicle || '',
             activeRentalFileId: '', vehicleId: '', vehicle: '', vin: '', licensePlate: '',
             status: 'History', stage: 'Contract ended', contractEndedAt, endDate,
             contractEndReason: cleanResourceText(payload.reason || 'Customer contract ended by staff.', 1200),
-            outstandingBalance: openClaimAmount + unpaidAmount, archivedAt: now, archivedBy: user.name || user.username || 'Staff', updatedAt: now
+            outstandingBalance: openClaimAmount + unpaidAmount, assignmentEndedAt: contractEndedAt, manuallyEditedAt: now,
+            archivedAt: now, archivedBy: user.name || user.username || 'Staff', updatedAt: now
           }));
           const returnedVehicleId = String(returnedVehicle && returnedVehicle.id || '').trim();
           const residualClaimsClosed = { rentalFiles: 0, recurringPayments: 0, contracts: 0, customers: 0 };
@@ -29062,26 +29216,26 @@ const server = http.createServer(async (req, res) => {
               const candidate = activeAssignmentRecord(row, 'recurring_payment');
               return candidate && candidate.vehicleId === returnedVehicleId;
             }).forEach(row => {
-              Object.assign(row, { status: 'Removed', autoChargeEnabled: false, autopayDisabled: true, autopayManagedBy: 'Stopped - vehicle returned', nextRun: '', endDate, endedAt: contractEndedAt, removedAt: now, updatedAt: now });
+              Object.assign(row, { previousVehicleId: row.previousVehicleId || row.vehicleId || returnedVehicleId, previousVehicle: row.previousVehicle || row.vehicle || '', status: 'Removed', autoChargeEnabled: false, autopayDisabled: true, autopayManagedBy: 'Stopped - vehicle returned', nextRun: '', endDate, endedAt: contractEndedAt, assignmentEndedAt: contractEndedAt, manuallyEditedAt: now, removedAt: now, updatedAt: now });
               residualClaimsClosed.recurringPayments += 1;
             });
             (data.contracts || []).filter(row => {
               const candidate = activeAssignmentRecord(row, 'customer_file');
               return candidate && candidate.vehicleId === returnedVehicleId;
             }).forEach(row => {
-              Object.assign(row, { status: 'Ended', endStatus: 'Ended - vehicle returned', endDate, endedAt: contractEndedAt, updatedAt: now });
+              Object.assign(row, { previousVehicleId: row.previousVehicleId || row.vehicleId || returnedVehicleId, previousVehicle: row.previousVehicle || row.vehicle || '', status: 'Ended', endStatus: 'Ended - vehicle returned', endDate, endedAt: contractEndedAt, assignmentEndedAt: contractEndedAt, manuallyEditedAt: now, updatedAt: now });
               residualClaimsClosed.contracts += 1;
             });
             (data.customers || []).filter(row => {
               const candidate = activeAssignmentRecord(row, 'customer');
               return candidate && candidate.vehicleId === returnedVehicleId;
             }).forEach(row => {
-              Object.assign(row, { activeRentalFileId: '', status: 'History', stage: 'Vehicle returned', contractEndedAt, endDate, archivedAt: row.archivedAt || now, archivedBy: row.archivedBy || user.name || user.username || 'Staff', updatedAt: now });
+              Object.assign(row, { previousVehicleId: row.previousVehicleId || row.vehicleId || returnedVehicleId, previousVehicle: row.previousVehicle || row.vehicle || '', activeRentalFileId: '', vehicleId: '', vehicle: '', vin: '', licensePlate: '', status: 'History', stage: 'Vehicle returned', contractEndedAt, endDate, assignmentEndedAt: contractEndedAt, manuallyEditedAt: now, archivedAt: row.archivedAt || now, archivedBy: row.archivedBy || user.name || user.username || 'Staff', updatedAt: now });
               residualClaimsClosed.customers += 1;
             });
             const vehicle = (data.vehicles || []).find(row => String(row.id || '') === returnedVehicleId);
             if (vehicle) {
-              Object.assign(vehicle, { previousCustomer: vehicle.currentCustomer || vehicle.previousCustomer || customerName, currentCustomer: '', activeRentalFileId: '', status: 'Ready', returnedAt: now, updatedAt: now, updatedBy: user.name || user.username || 'Staff' });
+              Object.assign(vehicle, { previousCustomer: vehicle.currentCustomer || vehicle.previousCustomer || customerName, currentCustomer: '', activeRentalFileId: '', status: 'Ready', returnedAt: now, assignmentEndedAt: contractEndedAt, manuallyEditedAt: now, updatedAt: now, updatedBy: user.name || user.username || 'Staff' });
               returnedVehicle = safeVehicleRecord(vehicle);
             }
             (data.onlineVehicles || []).filter(row => String(row.platformVehicleId || row.vehicleId || '') === returnedVehicleId).forEach(row => Object.assign(row, { published: false, availability: 'Ready - publish after inspection', currentCustomer: '', currentRentalFileId: '', updatedAt: now }));
@@ -33284,7 +33438,10 @@ module.exports = {
   applyRecurringCollectionPolicy,
   dashboardPriorityFeed,
   mechanicalMessageAssessment,
+  customerVisitAssessment,
   prepareStarServiceAppointment,
+  prepareStarCustomerCare,
+  repairStarCustomerServiceMisroutes,
   refreshLatestStripeCardBinding,
   cardSetupPlanReview,
   findRecurringRow,

@@ -45,16 +45,24 @@ function validCustomerName(customer: CustomerRecord) {
 
 export function canonicalCustomerRecords(rows: CustomerRecord[], vehicles: VehicleRecord[]) {
   const byName = new Map<string, CustomerRecord>();
+  const assignmentScore = (row: CustomerRecord, key: string, terminal: boolean) => {
+    if (terminal) return 0;
+    return Number(vehicles.some(vehicle =>
+      !/removed|retired|sold/i.test(vehicle.status || '')
+      && normalized(vehicle.currentCustomer) === key
+      && (!row.vehicleId || String(vehicle.id) === String(row.vehicleId))
+    ));
+  };
   rows.filter(validCustomerName).forEach(row => {
     const key = normalized(row.name);
     const current = byName.get(key);
     const terminal = /history|ended|closed|returned|removed|archived/i.test([row.status, row.stage, row.contractEndedAt, row.archivedAt].join(' '));
-    const assigned = vehicles.some(vehicle => !/removed|retired|sold/i.test(vehicle.status || '') && normalized(vehicle.currentCustomer) === key && (!row.vehicleId || String(vehicle.id) === String(row.vehicleId)));
-    const score = Number(assigned) * 100 + Number(!terminal && !!row.activeRentalFileId) * 40 + Number(terminal && !assigned) * 55 + Number(!!row.customerAccountId) * 20 + Number(!!row.phone) * 4 + Number(!!row.email) * 4 + (Date.parse(row.updatedAt || '') || 0) / 1e15;
+    const assigned = assignmentScore(row, key, terminal);
+    const score = assigned * 100 + Number(!terminal && !!row.activeRentalFileId) * 40 + Number(terminal && !assigned) * 55 + Number(!!row.customerAccountId) * 20 + Number(!!row.phone) * 4 + Number(!!row.email) * 4 + (Date.parse(row.updatedAt || '') || 0) / 1e15;
     if (!current) { byName.set(key, { ...row }); return; }
     const currentTerminal = /history|ended|closed|returned|removed|archived/i.test([current.status, current.stage, current.contractEndedAt, current.archivedAt].join(' '));
-    const currentAssigned = vehicles.some(vehicle => !/removed|retired|sold/i.test(vehicle.status || '') && normalized(vehicle.currentCustomer) === key && (!current.vehicleId || String(vehicle.id) === String(current.vehicleId)));
-    const currentScore = Number(currentAssigned) * 100 + Number(!currentTerminal && !!current.activeRentalFileId) * 40 + Number(currentTerminal && !currentAssigned) * 55 + Number(!!current.customerAccountId) * 20 + Number(!!current.phone) * 4 + Number(!!current.email) * 4 + (Date.parse(current.updatedAt || '') || 0) / 1e15;
+    const currentAssigned = assignmentScore(current, key, currentTerminal);
+    const currentScore = currentAssigned * 100 + Number(!currentTerminal && !!current.activeRentalFileId) * 40 + Number(currentTerminal && !currentAssigned) * 55 + Number(!!current.customerAccountId) * 20 + Number(!!current.phone) * 4 + Number(!!current.email) * 4 + (Date.parse(current.updatedAt || '') || 0) / 1e15;
     const preferred = score > currentScore ? row : current;
     const fallback = preferred === row ? current : row;
     const preferredTerminal = /history|ended|closed|returned|removed|archived/i.test([preferred.status, preferred.stage, preferred.contractEndedAt, preferred.archivedAt].join(' '));

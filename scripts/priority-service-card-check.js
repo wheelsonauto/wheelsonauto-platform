@@ -42,6 +42,8 @@ const dashboardData = {
   pickupAppointments: [{ id: 'pickup-today', customer: 'Pickup Customer', vehicle: '2020 Test Car', requestedPickupDate: today, requestedPickupTime: '1:00 PM', status: 'Confirmed' }],
   tasks: [
     { id: 'return-today', customer: 'Return Customer', vehicle: '2021 Test Car', type: 'Vehicle return', due: today, returnMethod: 'Customer drop-off', status: 'Scheduled' },
+    { id: 'customer-visit-today', customer: 'Office Visit Customer', type: 'Customer service appointment', visitType: 'Customer service', due: today, time: '10:00 AM', status: 'Appointment scheduled' },
+    { id: 'customer-complaint', customer: 'Complaint Customer', type: 'Customer care', title: 'Customer needs staff attention', due: today, status: 'Needs staff attention', notes: 'Customer says the account should already be closed.' },
     { id: 'done-task', title: 'Called customer', status: 'Done', doneAt: today }
   ],
   integrations: { clover: { recurringPlanMembers: [] } }
@@ -56,6 +58,9 @@ assert.deepStrictEqual(feed.overdueDues.map(row => row.id), ['late-toll']);
 assert.deepStrictEqual(feed.inspections.map(row => row.id), ['late-inspection']);
 assert.deepStrictEqual(feed.pickups.map(row => row.id), ['pickup-today']);
 assert.deepStrictEqual(feed.returns.map(row => row.id), ['return-today']);
+assert.deepStrictEqual(feed.customerAppointments.map(row => row.id), ['customer-visit-today']);
+assert(feed.customerCare.some(row => row.id === 'customer-complaint') && feed.customerCare.some(row => row.id === 'customer-visit-today'));
+assert.strictEqual(feed.customerAppointments[0].vehicle, '', 'A customer-service visit must not require an assigned vehicle.');
 assert(feed.completedToday.some(row => row.id === 'done-task') && feed.completedToday.some(row => row.id === 'completed-service'));
 assert.strictEqual(feed.summary.collectedAmount, 200);
 assert.deepStrictEqual(feed.todayCustomers.map(row => row.status), ['Failed twice', 'Failed once', 'Pending', 'Paid']);
@@ -90,6 +95,26 @@ assert.strictEqual(serviceData.maintenance.length, 1);
 assert.notStrictEqual(serviceData.maintenance[0].due, today, 'Nonurgent service must not book same-day.');
 assert.strictEqual(serviceData.maintenance[0].status, 'Appointment scheduled');
 assert.strictEqual(servicePlan.related.maintenanceId, serviceData.maintenance[0].id);
+
+const customerCareData = { tasks: [], maintenance: [] };
+const customerCarePlan = server.prepareStarCustomerCare(customerCareData, {
+  actionType: 'customer_service_schedule', customer: 'Office Customer', related: {}, reply: 'I can arrange that.'
+}, { customerName: 'Office Customer', organizationId: 'org-wheelsonauto', vehicleName: '' }, {
+  messageId: 'customer-care-message-1', body: 'I am coming Monday at 1:00 PM.'
+});
+assert.strictEqual(customerCareData.tasks.length, 1);
+assert.strictEqual(customerCareData.maintenance.length, 0, 'Customer service must never create a Fleet maintenance job.');
+assert.strictEqual(customerCareData.tasks[0].type, 'Customer service appointment');
+assert.strictEqual(customerCareData.tasks[0].vehicle, '');
+assert.strictEqual(customerCareData.tasks[0].time, '1:00 PM');
+assert.strictEqual(customerCarePlan.related.customerCareTaskId, customerCareData.tasks[0].id);
+assert.strictEqual(server.mechanicalMessageAssessment('I have a customer service complaint and I am not with you anymore.').mechanical, false);
+assert.strictEqual(server.customerVisitAssessment('I have a customer service complaint and I am not with you anymore.').needsAttention, true);
+
+const misrouteData = { maintenance: [{ id: 'bad-star-service', customer: 'Former Customer', issue: 'I am not a customer anymore. This is a customer service complaint.', status: 'Appointment scheduled', due: today, source: 'Star customer message scheduling', sourceMessageId: 'bad-source' }], tasks: [] };
+assert.strictEqual(server.repairStarCustomerServiceMisroutes(misrouteData), 1);
+assert.strictEqual(misrouteData.maintenance[0].status, 'Moved to customer care');
+assert.strictEqual(misrouteData.tasks[0].status, 'Needs staff attention');
 
 const recurring = {
   id: 'stripe-plan-1',

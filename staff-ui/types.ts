@@ -368,6 +368,7 @@ export type DashboardDueItem = {
 export type DashboardAppointmentItem = {
   id: string;
   customer: string;
+  customerId?: string;
   vehicle: string;
   vehicleId?: string;
   date: string;
@@ -375,6 +376,7 @@ export type DashboardAppointmentItem = {
   status: string;
   address?: string;
   method?: string;
+  detail?: string;
 };
 
 export type DashboardTransactionItem = {
@@ -401,7 +403,7 @@ export type DashboardCompletedItem = {
 export type DashboardPriorityFeed = {
   ok: boolean;
   today: string;
-  summary: { collectedAmount: number; collectedCount: number; dueCount: number; priorDueCount: number; failedOnceCount: number; failedTwiceCount: number; serviceNeededCount: number; overdueDuesCount: number; inspectionDueCount: number; lateInspectionCount: number; pickupsTodayCount: number; returnsTodayCount: number };
+  summary: { collectedAmount: number; collectedCount: number; dueCount: number; priorDueCount: number; failedOnceCount: number; failedTwiceCount: number; serviceNeededCount: number; overdueDuesCount: number; inspectionDueCount: number; lateInspectionCount: number; pickupsTodayCount: number; returnsTodayCount: number; customerAppointmentsTodayCount: number; customerCareCount: number };
   todayDue: DashboardPaymentItem[];
   priorDue: DashboardPaymentItem[];
   failedOnce: DashboardPaymentItem[];
@@ -412,6 +414,8 @@ export type DashboardPriorityFeed = {
   inspections: DashboardServiceItem[];
   pickups: DashboardAppointmentItem[];
   returns: DashboardAppointmentItem[];
+  customerAppointments: DashboardAppointmentItem[];
+  customerCare: DashboardAppointmentItem[];
   todayCustomers: DashboardPaymentItem[];
   transactions: DashboardTransactionItem[];
   transactionsToday: DashboardTransactionItem[];
