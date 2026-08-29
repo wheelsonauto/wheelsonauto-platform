@@ -212,7 +212,9 @@ requireText('The shared assignment rule must exclude pending intake', stateRepos
 requireText('Saved-card onboarding rows must not claim a fleet vehicle before handoff', activeAssignmentCandidate, 'row.onboardingSessionId && !row.pickupCompletedAt');
 [
   "const vehicleRetireMatch = /^\\/api\\/vehicles\\/([^/]+)\\/retire$/",
-  'Complete the return workflow before removing it from Fleet.',
+  'archiveVehicleAssignment(data, vehicleId',
+  'Vehicle archived and assignment ended',
+  'Payments, maintenance, contracts, and audit history preserved',
   "row.published = false",
   "row.availability = 'Removed from fleet'",
   'assertResourceRevision(vehicle, payload)'

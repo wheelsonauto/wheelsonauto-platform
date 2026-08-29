@@ -405,6 +405,127 @@ function endRentalFile(state, rentalFileId = '', payload = {}, actor = {}) {
   return { rentalFile, alreadyEnded: false, vehicle, customer };
 }
 
+function archiveVehicleAssignment(state, vehicleId = '', payload = {}, actor = {}) {
+  const exactVehicleId = text(vehicleId);
+  const vehicle = rows(state, 'vehicles').find(record => recordId(record) === exactVehicleId) || null;
+  if (!vehicle) {
+    const error = new Error('Vehicle record was not found.');
+    error.code = 'woa_vehicle_not_found';
+    error.statusCode = 404;
+    throw error;
+  }
+  const activeRentals = rows(state, 'rentalFiles').filter(record => isActiveRentalFile(record) && text(record.vehicleId) === exactVehicleId);
+  if (activeRentals.length > 1) {
+    const error = new Error('This vehicle has more than one active Rental File. Resolve the duplicate before archiving it.');
+    error.code = 'woa_vehicle_rental_conflict';
+    error.statusCode = 409;
+    throw error;
+  }
+  const endDate = text(payload.endDate || new Date().toISOString().slice(0, 10), 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(endDate)) throw new Error('Enter a valid archive date.');
+  const reason = text(payload.reason || 'Vehicle archived from Fleet by staff.', 1200);
+  const now = new Date().toISOString();
+  const originalRentalFileId = text(vehicle.activeRentalFileId);
+  const originalRecurringStatus = new Map(rows(state, 'recurringPayments').map(record => [record, text(record.status)]));
+  const originalContractStatus = new Map(rows(state, 'contracts').map(record => [record, text([record.status, record.endStatus].join(' '))]));
+  let endedRentalFile = null;
+  const linkedCustomers = [];
+
+  if (activeRentals[0]) {
+    const startingMileage = Number(activeRentals[0].startingMileage || 0);
+    const currentMileage = Number(vehicle.mileage || vehicle.odometer || startingMileage || 0);
+    const requestedMileage = payload.endingMileage === '' || payload.endingMileage == null ? currentMileage : Number(payload.endingMileage);
+    const endingMileage = Math.max(startingMileage, Number.isFinite(requestedMileage) ? Math.round(requestedMileage) : currentMileage);
+    const ended = endRentalFile(state, activeRentals[0].id, { endDate, endingMileage, vehicleStatus: 'Ready', reason }, actor);
+    endedRentalFile = ended.rentalFile;
+    Object.assign(endedRentalFile, { status: 'Ended - vehicle archived', lifecycle: 'Ended rental', endReason: reason, updatedAt: now });
+    if (ended.customer) linkedCustomers.push(ended.customer);
+  } else {
+    const exactCustomerId = text(vehicle.customerId);
+    const exactRentalFileId = text(vehicle.activeRentalFileId);
+    const directCustomers = rows(state, 'customers').filter(customer => (
+      (exactCustomerId && recordId(customer) === exactCustomerId)
+      || text(customer.vehicleId) === exactVehicleId
+      || (exactRentalFileId && text(customer.activeRentalFileId) === exactRentalFileId)
+    ));
+    linkedCustomers.push(...directCustomers);
+    if (!linkedCustomers.length && text(vehicle.currentCustomer)) {
+      const nameMatches = rows(state, 'customers').filter(customer => (
+        normalizedIdentity(customer.name || customer.customer) === normalizedIdentity(vehicle.currentCustomer)
+        && !INACTIVE_RENTAL_PATTERN.test(text([customer.status, customer.stage].join(' ')))
+      ));
+      if (nameMatches.length === 1) linkedCustomers.push(nameMatches[0]);
+      else if (nameMatches.length > 1) {
+        const error = new Error('More than one active customer matches this legacy vehicle assignment. Resolve the duplicate before archiving it.');
+        error.code = 'woa_vehicle_customer_conflict';
+        error.statusCode = 409;
+        throw error;
+      }
+    }
+  }
+
+  const linkedRentalFileIds = new Set([originalRentalFileId, text(activeRentals[0] && activeRentals[0].id), text(endedRentalFile && endedRentalFile.id)].filter(Boolean));
+  const linkedRecurringIds = new Set([
+    text(activeRentals[0] && activeRentals[0].recurringPaymentId),
+    ...linkedCustomers.map(customer => text(customer.recurringPaymentId))
+  ].filter(Boolean));
+  const linkedContractIds = new Set([
+    text(activeRentals[0] && activeRentals[0].contractId),
+    ...linkedCustomers.map(customer => text(customer.contractId))
+  ].filter(Boolean));
+  linkedCustomers.forEach(customer => Object.assign(customer, {
+    activeRentalFileId: '',
+    vehicleId: '',
+    vehicle: '',
+    vin: '',
+    licensePlate: '',
+    status: 'History',
+    stage: 'Vehicle archived',
+    endDate,
+    contractEndedAt: now,
+    contractEndReason: reason,
+    archivedAt: now,
+    archivedBy: text(actor.name || actor.username || actor.role || 'WheelsonAuto staff', 160),
+    updatedAt: now
+  }));
+
+  const exactRentalLink = record => linkedRentalFileIds.has(text(record.rentalFileId || record.activeRentalFileId));
+  const stoppedRecurring = rows(state, 'recurringPayments').filter(record => (
+    text(record.vehicleId) === exactVehicleId
+    || exactRentalLink(record)
+    || linkedRecurringIds.has(recordId(record))
+  ) && !/ended|returned|closed|cancelled|canceled|history|inactive|removed|stopped|disabled/i.test(originalRecurringStatus.get(record) || ''));
+  stoppedRecurring.forEach(record => Object.assign(record, {
+    status: 'Stopped - vehicle archived',
+    tone: 'neutral',
+    autoChargeEnabled: false,
+    autopayDisabled: true,
+    autopayManagedBy: 'Stopped - vehicle archived',
+    nextRun: 'Ended',
+    endDate,
+    endedAt: now,
+    removedAt: now,
+    updatedAt: now,
+    updatedBy: text(actor.name || actor.username || actor.role || 'WheelsonAuto staff', 160)
+  }));
+  const endedContracts = rows(state, 'contracts').filter(record => (
+    text(record.vehicleId) === exactVehicleId
+    || exactRentalLink(record)
+    || linkedContractIds.has(recordId(record))
+  ) && !INACTIVE_RENTAL_PATTERN.test(originalContractStatus.get(record) || ''));
+  endedContracts.forEach(record => Object.assign(record, {
+    status: 'Ended',
+    endStatus: 'Ended - vehicle archived',
+    endDate,
+    endedAt: now,
+    endMileage: Number(vehicle.mileage || vehicle.odometer || 0) || '',
+    endReason: reason,
+    updatedAt: now
+  }));
+  Object.assign(vehicle, { activeRentalFileId: '', currentCustomer: '', customerId: '', updatedAt: now });
+  return { vehicle, endedRentalFile, linkedCustomers, stoppedRecurring, endedContracts, endDate, endedAt: now, reason };
+}
+
 function completedPickupContext(state, appointment) {
   const application = rows(state, 'applications').find(record => recordId(record) === text(appointment.applicationId)) || null;
   const session = rows(state, 'onboardingSessions').find(record => recordId(record) === text(appointment.onboardingSessionId)) || null;
@@ -469,5 +590,6 @@ module.exports = {
   rentalForVehicleDate,
   validateState,
   endRentalFile,
+  archiveVehicleAssignment,
   summarize
 };

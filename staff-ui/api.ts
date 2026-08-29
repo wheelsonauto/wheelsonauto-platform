@@ -517,11 +517,11 @@ export async function removeVehiclePhoto(id: string, photoId: string, photoUrl: 
   return result;
 }
 
-export async function archiveVehicle(id: string, expectedUpdatedAt?: string): Promise<{ ok: boolean; record: VehicleRecord; alreadyRemoved?: boolean }> {
+export async function archiveVehicle(id: string, input: { expectedUpdatedAt?: string; endDate: string; endingMileage?: string | number; reason?: string }): Promise<{ ok: boolean; record: VehicleRecord; alreadyRemoved?: boolean }> {
   const response = await fetch(`/api/vehicles/${encodeURIComponent(id)}/retire`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify({ expectedUpdatedAt, confirmation: 'REMOVE_VEHICLE' })
+    body: JSON.stringify({ ...input, confirmation: 'REMOVE_VEHICLE' })
   });
   const result = await parseJson<{ ok: boolean; record: VehicleRecord; alreadyRemoved?: boolean }>(response);
   invalidateCachedPaths('/api/vehicles', '/api/applications/live-feed', '/api/app-notifications');
@@ -589,6 +589,11 @@ export type MaintenanceCompletionInput = {
   damageNotes?: string;
   mechanicSignoff: string;
   notes?: string;
+  createIfMissing?: boolean;
+  vehicleId?: string;
+  inspectionRecurrence?: 'one_time' | 'recurring';
+  inspectionIntervalValue?: number;
+  inspectionIntervalUnit?: 'days' | 'weeks' | 'months';
 };
 
 export async function completeMaintenance(id: string, input: MaintenanceCompletionInput): Promise<{ ok: boolean; job: MaintenanceRecord; vehicle: VehicleRecord; nextReminder?: MaintenanceRecord; version: string }> {

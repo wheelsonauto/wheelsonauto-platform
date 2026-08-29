@@ -161,6 +161,21 @@ export function FleetPage({ role, initialSection = '', onNavigate, onOpenRental 
   const activePhotos = useMemo(() => draft ? Array.from(new Set(draft.imageUrls || [])).map(url => ({ url, artifact: (draft.photoArtifacts || []).find(photo => photo.url === url && !photo.removedAt) })) : [], [draft]);
   const filterSwipe = useSwipeTabs(filters, filter, setFilter);
 
+  const applyMaintenanceCommit = (result: { job: MaintenanceRecord; vehicle?: VehicleRecord; nextReminder?: MaintenanceRecord }) => {
+    setJobs(current => {
+      const byId = new Map(current.map(job => [job.id, job]));
+      byId.set(result.job.id, result.job);
+      if (result.nextReminder) byId.set(result.nextReminder.id, result.nextReminder);
+      return [...byId.values()];
+    });
+    const committedVehicle = result.vehicle;
+    if (committedVehicle) {
+      setVehicles(current => current.map(vehicle => vehicle.id === committedVehicle.id ? { ...vehicle, ...committedVehicle } : vehicle));
+      setDraft(current => current?.id === committedVehicle.id ? { ...current, ...committedVehicle } : current);
+    }
+    void refresh(undefined, true);
+  };
+
   const closeDetail = () => {
     setDraft(null); setSelectedId(''); setCreating(false); setDetailTab('edit'); setPendingPhotos([]); setError(''); setNotice(''); setArchiveConfirmed(false); setReturnOpen(false); setReturnConfirmed(false);
   };
@@ -281,7 +296,10 @@ export function FleetPage({ role, initialSection = '', onNavigate, onOpenRental 
     if (!draft || !archiveConfirmed || saving) return;
     setSaving(true); setError(''); setNotice('');
     try {
-      await archiveVehicle(draft.id, draft.updatedAt); await refresh(undefined, true); closeDetail(); setFilter('history'); setNotice('Vehicle archived in History. Its records were preserved and its website listing was removed.');
+      const result = await archiveVehicle(draft.id, { expectedUpdatedAt: draft.updatedAt, endDate: todayKey(), endingMileage: draft.mileage, reason: 'Vehicle archived from Fleet by staff.' });
+      setVehicles(current => current.map(vehicle => vehicle.id === result.record.id ? result.record : vehicle));
+      closeDetail(); setFilter('history'); setNotice('Vehicle archived in History. Any active assignment and autopay ended; customer and business records remain saved.');
+      void refresh(undefined, true);
     } catch (requestError) { const message = (requestError as Error).message; await refresh(undefined, true); setError(message); }
     finally { setSaving(false); }
   };
@@ -319,7 +337,7 @@ export function FleetPage({ role, initialSection = '', onNavigate, onOpenRental 
 
         {!creating && detailTab === 'photos' ? <section className="transaction-history vehicle-photo-workspace"><header><div><span>Photos</span><strong>Website and staff gallery</strong></div>{canManage && !isArchived(draft) ? <label className="secondary-command compact"><Camera size={14} /> Upload photos<input hidden multiple type="file" accept="image/jpeg,image/png" onChange={uploadPhoto} /></label> : null}</header>{activePhotos.length ? <div className="vehicle-photo-grid">{activePhotos.map(photo => <figure key={photo.url}><img src={photo.url} alt={`${title(draft)} vehicle`} />{canManage && !isArchived(draft) ? <button type="button" className="danger-text-command" onClick={() => deletePhoto(photo.artifact?.id || '', photo.url)}><Trash2 size={13} /> Remove</button> : null}</figure>)}</div> : <div className="empty-state compact">No vehicle photos saved yet.</div>}</section> : null}
 
-        {!creating && detailTab === 'service' ? <Suspense fallback={<div className="workspace-loading"><span /><strong>Opening service...</strong></div>}><FleetServicePanel vehicle={draft} jobs={selectedJobs} archived={isArchived(draft)} onRefresh={() => refresh(undefined, true)} onNotice={setNotice} onError={setError} /></Suspense> : null}
+        {!creating && detailTab === 'service' ? <Suspense fallback={<div className="workspace-loading"><span /><strong>Opening service...</strong></div>}><FleetServicePanel vehicle={draft} jobs={selectedJobs} archived={isArchived(draft)} onRefresh={() => refresh(undefined, true)} onCommitted={applyMaintenanceCommit} onNotice={setNotice} onError={setError} /></Suspense> : null}
 
         {!creating && detailTab === 'edit' && canManage && !isArchived(draft) ? <section className="fleet-state-editor"><header><div><span>Fleet availability</span><strong>Online, in lot, prep, or service</strong></div><Globe2 size={19} /></header>{draft.currentCustomer || draft.activeRentalFileId ? <div className="inline-alert"><strong>{draft.currentCustomer || 'Active renter'} is assigned.</strong> Use the Renter tab to return or reassign it without losing customer history.</div> : <><label>Status<select value={fleetState} onChange={event => setFleetState(event.target.value as FleetState)}><option value="online">Online and available</option><option value="offline">Offline / in lot</option><option value="ready">Ready / in lot</option><option value="prep">Prep</option><option value="service">Service</option><option value="returned">Returned</option></select></label><small className="fleet-state-effect">Online publishes this car. Every other state immediately removes it from the public website.</small><button type="button" className="secondary-command" disabled={saving || String(draft.status || '').toLowerCase() === fleetState} onClick={saveFleetState}>{saving ? 'Updating...' : 'Update fleet state'}</button></>}</section> : null}
 
@@ -329,7 +347,7 @@ export function FleetPage({ role, initialSection = '', onNavigate, onOpenRental 
           {canManage && !isArchived(draft) ? <div className={draft.currentCustomer ? 'reassignment-controls' : ''}><div className="form-grid"><label>Exact customer<select value={assignmentCustomerId} onChange={event => { setAssignmentCustomerId(event.target.value); setAssignmentConfirmed(false); }}><option value="">Choose customer</option>{customers.filter(customer => !isHistoryCustomer(customer)).map(customer => <option key={customer.id} value={customer.id}>{[customer.name, customer.vehicle ? `Current: ${customer.vehicle}` : 'No vehicle', customer.phone || customer.email].filter(Boolean).join(' | ')}</option>)}</select></label><label>Reason<input value={assignmentReason} onChange={event => setAssignmentReason(event.target.value)} /></label></div><label className="sensitive-confirmation"><input type="checkbox" checked={assignmentConfirmed} onChange={event => setAssignmentConfirmed(event.target.checked)} /><span><strong>I confirmed the customer and exact vehicle.</strong><small>{draft.currentCustomer ? `Reassignment ends ${draft.currentCustomer}'s current vehicle contract and preserves it in History.` : 'A swap updates the connected Rental File, payments, and history.'}</small></span></label><button type="button" className="secondary-command" disabled={saving || !assignmentConfirmed || !assignmentCustomerId} onClick={assignVehicle}>{saving ? 'Saving assignment...' : draft.currentCustomer ? 'Reassign vehicle' : 'Assign vehicle'}</button></div> : !draft.currentCustomer ? <div className="empty-state compact">No renter is assigned.</div> : null}
         </section> : null}
 
-        {!creating && detailTab === 'history' ? <><section className="service-job-section"><header><strong>Maintenance history</strong><span>{completedJobs.length}</span></header>{completedJobs.length ? <div className="service-job-list">{completedJobs.map(job => <article key={job.id}><span className="status-line good" /><div><strong>{job.issue || job.type || 'Service'}</strong><small>{`Done ${dateTime(job.fixedAt || job.completedAt)}${job.mechanicSignoff ? ` · ${job.mechanicSignoff}` : ''}`}</small></div></article>)}</div> : <div className="empty-state compact">No completed maintenance is saved yet.</div>}</section>{canManage && !isArchived(draft) ? <section className="assignment-editor"><header><div><span>Vehicle history</span><strong>Archive, never erase</strong></div><Trash2 size={19} /></header><label className="sensitive-confirmation"><input type="checkbox" checked={archiveConfirmed} onChange={event => setArchiveConfirmed(event.target.checked)} /><span><strong>Move this vehicle to History.</strong><small>The car must be unassigned. Its maintenance, assignment, and audit records remain saved.</small></span></label><button type="button" className="danger-command" disabled={saving || !archiveConfirmed} onClick={archive}>Archive vehicle</button></section> : null}</> : null}
+        {!creating && detailTab === 'history' ? <><section className="service-job-section"><header><strong>Maintenance history</strong><span>{completedJobs.length}</span></header>{completedJobs.length ? <div className="service-job-list">{completedJobs.map(job => <article key={job.id}><span className="status-line good" /><div><strong>{job.issue || job.type || 'Service'}</strong><small>{`Done ${dateTime(job.fixedAt || job.completedAt)}${job.mechanicSignoff ? ` · ${job.mechanicSignoff}` : ''}`}</small></div></article>)}</div> : <div className="empty-state compact">No completed maintenance is saved yet.</div>}</section>{canManage && !isArchived(draft) ? <section className="assignment-editor"><header><div><span>Vehicle history</span><strong>Archive, never erase</strong></div><Trash2 size={19} /></header><label className="sensitive-confirmation"><input type="checkbox" checked={archiveConfirmed} onChange={event => setArchiveConfirmed(event.target.checked)} /><span><strong>Move this vehicle to History.</strong><small>If assigned, this ends the Rental File and autopay, moves the customer relationship to History, and preserves payments, contracts, maintenance, and audit records.</small></span></label><button type="button" className="danger-command" disabled={saving || !archiveConfirmed} onClick={archive}>{saving ? 'Archiving...' : 'Archive vehicle'}</button></section> : null}</> : null}
       </div>
       <footer className="detail-actions">{canManage && !isArchived(draft) && (creating || detailTab === 'edit') ? <button type="button" className="primary-command" disabled={saving || !draft.make?.trim() || !draft.model?.trim()} onClick={saveVehicle}>{saving ? 'Saving...' : creating ? 'Add vehicle' : 'Save vehicle'}</button> : null}</footer>
     </div>}</section>
