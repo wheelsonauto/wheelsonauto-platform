@@ -2079,6 +2079,10 @@ class PostgresStateRepository {
     this.lastRateLimitPruneAt = 0;
     this.pool = pgPool(options);
     this.schemaReady = null;
+    this.deferredSnapshotDelayMs = Math.max(500, Math.min(30000, Number(options.deferredSnapshotDelayMs || 2500)));
+    this.deferredSnapshotTimer = null;
+    this.pendingDeferredSnapshot = null;
+    this.deferredSnapshotWrite = Promise.resolve();
   }
 
   isTransactional() {
@@ -2087,6 +2091,33 @@ class PostgresStateRepository {
 
   async connect() {
     return connectPostgresClient(this.pool);
+  }
+
+  queueDeferredSnapshot(snapshot) {
+    this.pendingDeferredSnapshot = snapshot;
+    if (this.deferredSnapshotTimer) return;
+    this.deferredSnapshotTimer = setTimeout(() => {
+      this.deferredSnapshotTimer = null;
+      const pending = this.pendingDeferredSnapshot;
+      this.pendingDeferredSnapshot = null;
+      if (!pending) return;
+      this.deferredSnapshotWrite = this.deferredSnapshotWrite.then(async () => {
+        await this.pool.query(`INSERT INTO woa_state_snapshots (organization_id, version, checksum, reason, actor, state)
+          VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+          ON CONFLICT (organization_id, version) DO NOTHING`, [
+          this.organizationId, pending.version, pending.checksum, pending.reason, pending.actor, JSON.stringify(pending.state)
+        ]);
+        await this.pool.query(`DELETE FROM woa_state_snapshots
+          WHERE organization_id = $1 AND id IN (
+            SELECT id FROM woa_state_snapshots WHERE organization_id = $1 ORDER BY version DESC OFFSET $2
+          )`, [this.organizationId, this.snapshotLimit]);
+      }).catch(error => {
+        console.error('Deferred PostgreSQL recovery snapshot failed:', error && error.message || error);
+      }).finally(() => {
+        if (this.pendingDeferredSnapshot) this.queueDeferredSnapshot(this.pendingDeferredSnapshot);
+      });
+    }, this.deferredSnapshotDelayMs);
+    if (typeof this.deferredSnapshotTimer.unref === 'function') this.deferredSnapshotTimer.unref();
   }
 
   async ensureSchema() {
@@ -2888,6 +2919,7 @@ class PostgresStateRepository {
       let next = this.repair(clone(merged));
       const fastMessagingWrite = options.fastMessagingWrite === true;
       const projectionScope = options.projectionScope && typeof options.projectionScope === 'object' ? options.projectionScope : null;
+      const deferSnapshot = !options.recoveryEvent && projectionScope && projectionScope.deferSnapshot === true;
       if (fastMessagingWrite) {
         const scopedNext = clone(previous);
         FAST_MESSAGING_STATE_KEYS.forEach(key => {
@@ -2926,11 +2958,13 @@ class PostgresStateRepository {
         await this.syncRentalRelations(client, next, nextVersion);
         await this.syncActiveAssignmentIndex(client, next);
       }
-      await client.query(`INSERT INTO woa_state_snapshots (organization_id, version, checksum, reason, actor, state)
-        VALUES ($1, $2, $3, $4, $5, $6::jsonb)
-        ON CONFLICT (organization_id, version) DO NOTHING`, [
-        this.organizationId, nextVersion, nextChecksum, String(options.reason || 'state mutation').slice(0, 160), String(options.actor || '').slice(0, 160), JSON.stringify(next)
-      ]);
+      if (!deferSnapshot) {
+        await client.query(`INSERT INTO woa_state_snapshots (organization_id, version, checksum, reason, actor, state)
+          VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+          ON CONFLICT (organization_id, version) DO NOTHING`, [
+          this.organizationId, nextVersion, nextChecksum, String(options.reason || 'state mutation').slice(0, 160), String(options.actor || '').slice(0, 160), JSON.stringify(next)
+        ]);
+      }
       const recoveryHistoryEvent = options.recoveryEvent
         ? await this.appendRecoveryHistory(client, options.recoveryEvent, {
           previousVersion: existing.rowCount ? Number(existing.rows[0].version || 0) : 0,
@@ -2940,13 +2974,24 @@ class PostgresStateRepository {
           actor: String(options.actor || '')
         })
         : null;
-      await client.query(`DELETE FROM woa_state_snapshots
-        WHERE organization_id = $1 AND id IN (
-          SELECT id FROM woa_state_snapshots WHERE organization_id = $1 ORDER BY version DESC OFFSET $2
-        )`, [this.organizationId, this.snapshotLimit]);
+      if (!deferSnapshot) {
+        await client.query(`DELETE FROM woa_state_snapshots
+          WHERE organization_id = $1 AND id IN (
+            SELECT id FROM woa_state_snapshots WHERE organization_id = $1 ORDER BY version DESC OFFSET $2
+          )`, [this.organizationId, this.snapshotLimit]);
+      }
       const transactionEffects = await this.applyStateTransactionEffects(client, options);
       await client.query('COMMIT');
-      return { state: next, version: nextVersion, checksum: nextChecksum, transactionEffects, recoveryHistoryEvent };
+      if (deferSnapshot) {
+        this.queueDeferredSnapshot({
+          state: next,
+          version: nextVersion,
+          checksum: nextChecksum,
+          reason: String(options.reason || 'state mutation').slice(0, 160),
+          actor: String(options.actor || '').slice(0, 160)
+        });
+      }
+      return { state: next, version: nextVersion, checksum: nextChecksum, transactionEffects, recoveryHistoryEvent, snapshotDeferred: deferSnapshot };
     } catch (error) {
       await client.query('ROLLBACK').catch(() => {});
       throw error;

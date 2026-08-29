@@ -58,7 +58,28 @@ async function main() {
   assert.strictEqual(calls.filter(call => /INSERT INTO woa_identity_index/i.test(call.sql)).length, 2, 'Only the vehicle VIN and plate identities should be rewritten.');
   assert(calls.slice(1).every(call => call.values[3] === 'vehicle'), 'A scoped fleet write must not rebuild unrelated portal or payment identities.');
 
-  console.log('State repository SQL contract check passed: recovery history and scoped identity projections remain aligned.');
+  const snapshotCalls = [];
+  repository.snapshotLimit = 180;
+  repository.deferredSnapshotDelayMs = 1;
+  repository.deferredSnapshotTimer = null;
+  repository.pendingDeferredSnapshot = null;
+  repository.deferredSnapshotWrite = Promise.resolve();
+  repository.pool = {
+    async query(sql, values = []) {
+      snapshotCalls.push({ sql, values });
+      return { rows: [], rowCount: 1 };
+    }
+  };
+  repository.queueDeferredSnapshot({ state: { vehicles: [{ id: 'older' }] }, version: 80, checksum: 'older', reason: 'older fleet edit', actor: 'Owner' });
+  repository.queueDeferredSnapshot({ state: { vehicles: [{ id: 'latest' }] }, version: 81, checksum: 'latest', reason: 'latest fleet edit', actor: 'Owner' });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  await repository.deferredSnapshotWrite;
+  assert.strictEqual(snapshotCalls.length, 2, 'A deferred snapshot should insert the latest state and prune recovery history once.');
+  assert.match(snapshotCalls[0].sql, /INSERT INTO woa_state_snapshots/i, 'Deferred recovery writes must create a PostgreSQL snapshot.');
+  assert.strictEqual(snapshotCalls[0].values[1], 81, 'Rapid scoped changes must coalesce to the newest recovery version.');
+  assert.deepStrictEqual(JSON.parse(snapshotCalls[0].values[5]), { vehicles: [{ id: 'latest' }] }, 'The deferred snapshot must retain the exact latest canonical state.');
+
+  console.log('State repository SQL contract check passed: recovery history, scoped identities, and deferred fleet snapshots remain aligned.');
 }
 
 main().catch(error => {
