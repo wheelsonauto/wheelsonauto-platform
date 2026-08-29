@@ -2915,7 +2915,8 @@ class PostgresStateRepository {
       const existing = await client.query('SELECT state, version, checksum FROM woa_state WHERE organization_id = $1 FOR UPDATE', [this.organizationId]);
       if (existing.rowCount) assertChecksum(existing.rows[0].state, existing.rows[0].checksum, 'Current PostgreSQL state');
       const previous = existing.rowCount ? this.repair(clone(existing.rows[0].state)) : this.repair(await this.seed());
-      const merged = options.mergeState ? await options.mergeState(clone(previous)) : incomingState;
+      const previousVersion = existing.rowCount ? Number(existing.rows[0].version || 0) : 0;
+      const merged = options.mergeState ? await options.mergeState(clone(previous), previousVersion) : incomingState;
       let next = this.repair(clone(merged));
       const fastMessagingWrite = options.fastMessagingWrite === true;
       const projectionScope = options.projectionScope && typeof options.projectionScope === 'object' ? options.projectionScope : null;
@@ -2929,7 +2930,7 @@ class PostgresStateRepository {
         next = this.repair(scopedNext);
         assertFastMessagingStateChange(previous, next);
       }
-      const nextVersion = (existing.rowCount ? Number(existing.rows[0].version || 0) : 0) + 1;
+      const nextVersion = previousVersion + 1;
       const nextChecksum = checksum(next);
       await client.query(`INSERT INTO woa_state (organization_id, state, version, checksum, created_at, updated_at)
         VALUES ($1, $2::jsonb, $3, $4, now(), now())
