@@ -32,6 +32,7 @@ const dashboardData = {
     { id: 'scheduled', customer: 'Scheduled Customer', status: 'Appointment scheduled', due: today },
     { id: 'scheduled-upcoming', customer: 'Upcoming Customer', status: 'Appointment scheduled', due: shiftDay(2), appointmentTime: '10:00' },
     { id: 'complete', customer: 'Complete Customer', status: 'Completed', due: today },
+    { id: 'archived-duplicate', customer: 'Duplicate Customer', status: 'Duplicate', due: today },
     { id: 'needed', customer: 'Service Customer', status: 'Service needed', due: today },
     { id: 'urgent', customer: 'Urgent Customer', status: 'Urgent - staff contact now', due: today },
     { id: 'late-inspection', customer: 'Inspection Customer', vehicle: '2018 Test Car', type: 'Monthly inspection', status: 'Due', due: shiftDay(-15) },
@@ -73,6 +74,7 @@ assert.strictEqual(feed.transactions.find(row => row.id === 'legacy-incomplete')
 assert.strictEqual(feed.transactions.find(row => row.id === 'legacy-incomplete').cardLast4, '', 'Historical evidence must never borrow a customer’s current card.');
 assert(feed.maintenanceAppointments.some(row => row.id === 'scheduled'), 'Today’s scheduled service must appear in appointments.');
 assert(feed.maintenanceAppointments.some(row => row.id === 'scheduled-upcoming' && row.time === '10:00'), 'Upcoming service and its saved time must appear in the seven-day schedule.');
+assert(!feed.maintenanceAppointments.some(row => row.id === 'archived-duplicate'), 'Archived duplicate service rows must not reappear as live dashboard appointments.');
 assert(feed.overdueService.some(row => row.id === 'overdue-service') && feed.overdueService.some(row => row.id === 'late-inspection'), 'Prior-day incomplete service and inspections must appear as overdue.');
 assert(!feed.overdueService.some(row => row.id === 'ancient-bad-date' || row.id === 'completed-service'), 'Completed or implausibly stale service rows must not pollute the dashboard.');
 assert.strictEqual(feed.overdueBalances[0].id, 'late-toll', 'The dues panel must contain tolls, violations, tickets, fees, and other non-recurring balances only.');

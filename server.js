@@ -431,7 +431,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260829-form-truth-396';
+const ASSET_VERSION = 'platform-20260829-terminal-service-397';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -5076,7 +5076,7 @@ function dashboardPriorityFeed(data = {}, dateKeyValue = localDateKey()) {
       if (!dashboardMaintenanceVisible(data, row)) return false;
       const status = String(row && row.status || '').toLowerCase();
       if (/inspection|monthly/i.test(String([row && row.type, row && row.issue, row && row.title].filter(Boolean).join(' ')))) return false;
-      if (/complete|closed|fixed|done|cancel/.test(status)) return false;
+      if (/complete|closed|fixed|done|cancel|duplicate|archive|superseded/.test(status)) return false;
       if (/scheduled|appointment|confirmed/.test(status) && !/urgent|unsafe|do not drive|staff contact/.test(status)) return false;
       return /need|due|request|urgent|unsafe|do not drive|staff contact|open/.test(status)
         || (!!(row && (row.due || row.nextDue)) && String(row.due || row.nextDue) <= dateKeyValue);
@@ -5094,7 +5094,7 @@ function dashboardPriorityFeed(data = {}, dateKeyValue = localDateKey()) {
   const inspections = (data.maintenance || []).filter(row => {
     if (!dashboardMaintenanceVisible(data, row)) return false;
     if (!/inspection|monthly/i.test(String([row.type, row.issue, row.title].filter(Boolean).join(' ')))) return false;
-    if (/complete|closed|fixed|done|cancel/i.test(String(row.status || ''))) return false;
+    if (/complete|closed|fixed|done|cancel|duplicate|archive|superseded/i.test(String(row.status || ''))) return false;
     const due = dashboardRecordDate(row, ['due', 'nextDue']);
     return !!due && due <= dateKeyValue;
   }).map(row => {
@@ -5123,7 +5123,7 @@ function dashboardPriorityFeed(data = {}, dateKeyValue = localDateKey()) {
   }).sort((left, right) => Number(right.daysLate || 0) - Number(left.daysLate || 0) || String(left.due || '').localeCompare(String(right.due || '')));
   const maintenanceAppointments = (data.maintenance || []).filter(row => {
     if (!dashboardMaintenanceVisible(data, row)) return false;
-    if (/complete|closed|fixed|done|cancel/i.test(String(row.status || ''))) return false;
+    if (/complete|closed|fixed|done|cancel|duplicate|archive|superseded/i.test(String(row.status || ''))) return false;
     const date = dashboardRecordDate(row, ['appointmentDate', 'scheduledDate', 'due', 'nextDue', 'date']);
     const distance = dashboardDayDistance(dateKeyValue, date);
     return !!date && distance >= 0 && distance <= 7;
@@ -5135,7 +5135,7 @@ function dashboardPriorityFeed(data = {}, dateKeyValue = localDateKey()) {
   })).sort((left, right) => String(left.time || '').localeCompare(String(right.time || '')));
   const overdueService = (data.maintenance || []).filter(row => {
     if (!dashboardMaintenanceVisible(data, row)) return false;
-    if (/complete|closed|fixed|done|cancel/i.test(String(row.status || ''))) return false;
+    if (/complete|closed|fixed|done|cancel|duplicate|archive|superseded/i.test(String(row.status || ''))) return false;
     const due = dashboardRecordDate(row, ['appointmentDate', 'scheduledDate', 'due', 'nextDue', 'date']);
     return !!due && due < dateKeyValue && dashboardOperationalDueIsReasonable(due, dateKeyValue);
   }).map(row => {
