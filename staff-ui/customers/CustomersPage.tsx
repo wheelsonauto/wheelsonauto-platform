@@ -333,8 +333,11 @@ export function CustomersPage({ onNavigate, onOpenRental }: { onNavigate: (works
     if (!draft || working || !archiveConfirmed) { setError('Confirm the exact customer and contract end date.'); return; }
     setWorking(true); setError(''); setNotice('');
     try {
-      await archiveCustomer(draft.id, { expectedUpdatedAt: draft.updatedAt, contractEndedAt: new Date(archiveEndAt).toISOString(), reason: archiveReason });
-      await refresh(undefined, true); closeDetail(); setFilter('history'); setNotice('Customer moved to History. The vehicle returned to In lot and all payment history was preserved.');
+      const result = await archiveCustomer(draft.id, { expectedUpdatedAt: draft.updatedAt, contractEndedAt: new Date(archiveEndAt).toISOString(), reason: archiveReason });
+      const returnedVehicle = result.vehicle;
+      if (returnedVehicle) setVehicles(current => current.map(vehicle => vehicle.id === returnedVehicle.id ? { ...vehicle, ...returnedVehicle } : vehicle));
+      closeDetail(); setFilter('history'); setNotice('Customer moved to History. The vehicle returned to In lot and all payment history was preserved.');
+      void refresh(undefined, true);
     } catch (requestError) { setError((requestError as Error).message); await refresh(undefined, true); }
     finally { setWorking(false); }
   };

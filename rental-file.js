@@ -463,6 +463,12 @@ function archiveVehicleAssignment(state, vehicleId = '', payload = {}, actor = {
       }
     }
   }
+  rows(state, 'customers').filter(customer => (
+    text(customer.vehicleId) === exactVehicleId
+    && !INACTIVE_RENTAL_PATTERN.test(text([customer.status, customer.stage].join(' ')))
+  )).forEach(customer => {
+    if (!linkedCustomers.includes(customer)) linkedCustomers.push(customer);
+  });
 
   const linkedRentalFileIds = new Set([originalRentalFileId, text(activeRentals[0] && activeRentals[0].id), text(endedRentalFile && endedRentalFile.id)].filter(Boolean));
   const linkedRecurringIds = new Set([
